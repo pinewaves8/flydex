@@ -5,39 +5,68 @@ use std::time::{Duration, Instant};
 use tauri::{AppHandle, Emitter};
 
 use crate::types::codex::CodexEvent;
+use crate::types::codex_json::CodexJsonEvent;
+
+/// Codex 执行模式
+#[derive(Debug, Clone, Copy)]
+pub enum CodexExecMode {
+    /// 首轮执行：codex exec --json
+    Exec,
+    /// 恢复会话：codex exec resume --last --json
+    Resume,
+}
 
 /// Codex CLI 子进程管理器
 ///
-/// 通过 `codex exec` 命令执行用户指令，
-/// 流式读取 stdout/stderr 并通过 Tauri 事件推送到前端。
-///
-/// # 已知限制
-/// codex exec 在非 TTY 环境下（stdout 被 pipe）会使用全缓冲模式，
-/// 输出可能攒到进程结束才一次性刷新。这是 Node.js/codex 的行为，
-/// 非本程序 bug。后续阶段将改用 PTY（伪终端）启动以实现真正的流式输出。
+/// 通过 `codex exec` 或 `codex exec resume` 执行用户指令，
+/// 解析 JSONL 输出并通过 Tauri 事件推送到前端。
 pub struct CodexManager;
 
 impl CodexManager {
-    /// 执行一条 codex exec 命令
+    /// 执行一条 codex 命令
     ///
     /// # Arguments
-    /// * `app` - Tauri 应用句柄，用于发送事件
+    /// * `app` - Tauri 应用句柄
     /// * `command` - 用户指令文本
-    /// * `workdir` - 工作目录（可选，默认为当前目录）
+    /// * `workdir` - 工作目录（可选）
+    /// * `mode` - 执行模式（Exec 首轮 / Resume 恢复会话）
+    /// * `thread_id` - 恢复指定会话（可选，Resume 模式下不传则恢复最近一次）
     pub fn run_command(
         app: AppHandle,
         command: String,
         workdir: Option<String>,
+        mode: CodexExecMode,
+        thread_id: Option<String>,
     ) -> Result<(), String> {
-        // Windows 上 codex 是 .cmd 批处理文件，Rust Command::new("codex") 找不到，
-        // 需要通过 cmd /c 启动，让 cmd.exe 处理 PATH 和扩展名查找
+        // 构建命令参数
+        let mut args: Vec<String> = vec!["exec".to_string()];
+
+        match mode {
+            CodexExecMode::Exec => {
+                // codex exec --json <command>
+            }
+            CodexExecMode::Resume => {
+                // codex exec resume [thread_id] --json <command>
+                args.push("resume".to_string());
+                if let Some(tid) = &thread_id {
+                    args.push(tid.clone());
+                } else {
+                    args.push("--last".to_string());
+                }
+            }
+        }
+
+        args.push("--json".to_string());
+        args.push(command.clone());
+
+        // Windows 上通过 cmd /c 启动
         let mut cmd = if cfg!(windows) {
             let mut c = Command::new("cmd");
-            c.arg("/c").arg("codex").arg("exec").arg(&command);
+            c.arg("/c").arg("codex").args(&args);
             c
         } else {
             let mut c = Command::new("codex");
-            c.arg("exec").arg(&command);
+            c.args(&args);
             c
         };
 
@@ -45,7 +74,7 @@ impl CodexManager {
             cmd.current_dir(dir);
         }
 
-        cmd.stdin(Stdio::null()); // 关闭 stdin，防止 codex 阻塞等待输入
+        cmd.stdin(Stdio::null());
         cmd.stdout(Stdio::piped());
         cmd.stderr(Stdio::piped());
 
@@ -55,7 +84,7 @@ impl CodexManager {
 
         let pid = child.id();
 
-        // 立即推送进程启动事件，让前端知道进程在运行
+        // 推送进程启动事件
         app.emit("codex-output", CodexEvent::Started { pid })
             .map_err(|e| format!("Failed to emit started event: {}", e))?;
 
@@ -68,44 +97,47 @@ impl CodexManager {
             .take()
             .ok_or("Failed to capture codex stderr")?;
 
-        // 线程：读取 stdout 并推送事件（daemon 风格，不 join）
+        // 线程：读取 stdout（JSONL）并推送结构化事件
         let app_stdout = app.clone();
         std::thread::spawn(move || {
-            let mut reader = BufReader::new(stdout);
-            let mut line = String::new();
-            loop {
-                match reader.read_line(&mut line) {
-                    Ok(0) => break, // EOF
-                    Ok(_) => {
-                        let text = line.trim_end_matches('\n').trim_end_matches('\r').to_string();
-                        let _ = app_stdout.emit("codex-output", CodexEvent::Output { text });
-                        line.clear();
+            let reader = BufReader::new(stdout);
+            for line in reader.lines() {
+                if let Ok(line) = line {
+                    if line.trim().is_empty() {
+                        continue;
                     }
-                    Err(_) => break,
+                    match serde_json::from_str::<serde_json::Value>(&line) {
+                        Ok(json) => {
+                            let _ = app_stdout.emit("codex-output", CodexEvent::Json(json));
+                        }
+                        Err(_) => {
+                            let _ = app_stdout.emit(
+                                "codex-output",
+                                CodexEvent::Output { text: line },
+                            );
+                        }
+                    }
                 }
             }
         });
 
-        // 线程：读取 stderr 并推送事件（daemon 风格，不 join）
+        // 线程：读取 stderr（纯文本进度信息）
         let app_stderr = app.clone();
         std::thread::spawn(move || {
-            let mut reader = BufReader::new(stderr);
-            let mut line = String::new();
-            loop {
-                match reader.read_line(&mut line) {
-                    Ok(0) => break,
-                    Ok(_) => {
-                        let message = line.trim_end_matches('\n').trim_end_matches('\r').to_string();
-                        let _ = app_stderr.emit("codex-output", CodexEvent::Error { message });
-                        line.clear();
+            let reader = BufReader::new(stderr);
+            for line in reader.lines() {
+                if let Ok(line) = line {
+                    if !line.trim().is_empty() {
+                        let _ = app_stderr.emit(
+                            "codex-output",
+                            CodexEvent::Error { message: line },
+                        );
                     }
-                    Err(_) => break,
                 }
             }
         });
 
         // 轮询等待子进程结束，加 120 秒超时
-        // 用 try_wait 而非 wait，避免无限阻塞（codex 子进程可能持有 pipe 导致 wait 不返回）
         let start = Instant::now();
         let exit_code = loop {
             match child.try_wait() {
@@ -122,8 +154,7 @@ impl CodexManager {
             }
         };
 
-        // 关键：子进程已退出，立即推送 done 事件
-        // 不等待读取线程——codex 可能 spawn 孙进程持有 pipe，导致读取线程永远等不到 EOF
+        // 推送完成事件
         app.emit("codex-done", CodexEvent::Done { exit_code })
             .map_err(|e| format!("Failed to emit codex done event: {}", e))?;
 

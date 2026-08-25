@@ -1,0 +1,5 @@
+﻿{"type":"thread.started","thread_id":"01a03812-398c-7ad3-b276-edd5a25b4461"}
+{"type":"item.completed","item":{"id":"item_0","type":"error","message":"Model metadata for `MiniMax-M2.7-highspeed` not found. Defaulting to fallback metadata; this can degrade performance and cause issues."}}
+{"type":"turn.started"}
+{"type":"item.completed","item":{"id":"item_1","type":"agent_message","text":"你好！有什么我可以帮你的吗？"}}
+{"type":"turn.completed","usage":{"input_tokens":10315,"cached_input_tokens":10299,"cache_write_input_tokens":0,"output_tokens":77,"reasoning_output_tokens":68}}

@@ -4,6 +4,7 @@ export type CodexEvent =
   | { type: 'Started'; data: { pid: number } }
   | { type: 'Output'; data: { text: string } }
   | { type: 'Error'; data: { message: string } }
+  | { type: 'Json'; data: unknown }
   | { type: 'Done'; data: { exit_code: number } }
 
 export type CodexStatus = 'idle' | 'running' | 'done' | 'error'
@@ -11,5 +12,5 @@ export type CodexStatus = 'idle' | 'running' | 'done' | 'error'
 export interface CodexOutputLine {
   id: number
   text: string
-  kind: 'stdout' | 'stderr'
+  kind: 'stdout' | 'stderr' | 'json' | 'system'
 }
