@@ -4,6 +4,8 @@ use serde::{Deserialize, Serialize};
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(tag = "type", content = "data")]
 pub enum CodexEvent {
+    /// 进程已启动
+    Started { pid: u32 },
     /// stdout 输出一行
     Output { text: String },
     /// stderr 输出一行

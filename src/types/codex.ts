@@ -1,6 +1,7 @@
 // Codex 事件类型（与 Rust 端 CodexEvent 对应）
 
 export type CodexEvent =
+  | { type: 'Started'; data: { pid: number } }
   | { type: 'Output'; data: { text: string } }
   | { type: 'Error'; data: { message: string } }
   | { type: 'Done'; data: { exit_code: number } }

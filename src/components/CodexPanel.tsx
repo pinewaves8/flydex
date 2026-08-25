@@ -40,6 +40,7 @@ export function CodexPanel() {
   const handleRun = () => {
     if (!command.trim() || status === 'running') return
     run(command.trim(), workdir.trim() || undefined)
+    setCommand('')
   }
 
   const handleKeyDown = (e: React.KeyboardEvent) => {

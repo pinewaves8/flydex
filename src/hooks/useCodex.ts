@@ -17,14 +17,26 @@ export function useCodex() {
   const lineIdRef = useRef(0)
 
   // 组件挂载时监听事件，卸载时取消监听
+  // 注意：React 18 StrictMode 开发模式下 useEffect 会执行两次，
+  // 异步 listen 完成前清理函数就可能被调用，需要 cancelled 标志防止重复注册
   useEffect(() => {
+    let cancelled = false
     let outputUnlisten: UnlistenFn | null = null
     let doneUnlisten: UnlistenFn | null = null
 
     const setupListeners = async () => {
-      outputUnlisten = await listen<CodexEvent>('codex://output', (event) => {
+      const out = await listen<CodexEvent>('codex-output', (event) => {
         const payload = event.payload
-        if (payload.type === 'Output') {
+        if (payload.type === 'Started') {
+          setOutput((prev) => [
+            ...prev,
+            {
+              id: lineIdRef.current++,
+              text: `▸ Codex 已启动 (PID: ${payload.data.pid})，正在思考…请耐心等待`,
+              kind: 'stdout',
+            },
+          ])
+        } else if (payload.type === 'Output') {
           setOutput((prev) => [
             ...prev,
             { id: lineIdRef.current++, text: payload.data.text, kind: 'stdout' },
@@ -37,18 +49,28 @@ export function useCodex() {
         }
       })
 
-      doneUnlisten = await listen<CodexEvent>('codex://done', (event) => {
+      const done = await listen<CodexEvent>('codex-done', (event) => {
         const payload = event.payload
         if (payload.type === 'Done') {
           setExitCode(payload.data.exit_code)
           setStatus(payload.data.exit_code === 0 ? 'done' : 'error')
         }
       })
+
+      // 异步完成后检查是否已卸载（StrictMode 下第一次挂载会被取消）
+      if (cancelled) {
+        out()
+        done()
+        return
+      }
+      outputUnlisten = out
+      doneUnlisten = done
     }
 
     setupListeners()
 
     return () => {
+      cancelled = true
       outputUnlisten?.()
       doneUnlisten?.()
     }
@@ -63,6 +85,8 @@ export function useCodex() {
 
     try {
       await invoke('run_codex', { command, workdir: workdir ?? null })
+      // 兜底：invoke 返回说明 Rust 端已执行完毕，如果 done 事件丢失，强制更新状态
+      setStatus((prev) => (prev === 'running' ? 'done' : prev))
     } catch (err) {
       setOutput((prev) => [
         ...prev,
