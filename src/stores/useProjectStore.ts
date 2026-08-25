@@ -1,34 +1,113 @@
 import { create } from 'zustand'
-import { persist } from 'zustand/middleware'
 
-import type { Project, Session } from '@/types/project'
+import { projectService } from '@/services/projectService'
+import { sessionService } from '@/services/sessionService'
+import type { Project, SessionMeta } from '@/types/project'
 
 interface ProjectState {
   projects: Project[]
   currentProjectId: string | null
-  sessions: Session[]
+  sessions: SessionMeta[]
   currentSessionId: string | null
-  setCurrentProject: (id: string | null) => void
+  loading: boolean
+
+  // 项目
+  loadProjects: () => Promise<void>
+  createProject: (name: string, path: string) => Promise<Project>
+  deleteProject: (id: string) => Promise<void>
+  setCurrentProject: (id: string | null) => Promise<void>
+
+  // 会话
+  loadSessions: (projectId?: string) => Promise<void>
+  createSession: (title: string, workdir: string) => Promise<string>
+  deleteSession: (id: string) => Promise<void>
+  renameSession: (id: string, title: string) => Promise<void>
   setCurrentSession: (id: string | null) => void
-  addProject: (project: Project) => void
-  removeProject: (id: string) => void
-  addSession: (session: Session) => void
 }
 
-export const useProjectStore = create<ProjectState>()(
-  persist(
-    (set) => ({
-      projects: [],
-      currentProjectId: null,
-      sessions: [],
-      currentSessionId: null,
-      setCurrentProject: (id) => set({ currentProjectId: id }),
-      setCurrentSession: (id) => set({ currentSessionId: id }),
-      addProject: (project) => set((state) => ({ projects: [...state.projects, project] })),
-      removeProject: (id) =>
-        set((state) => ({ projects: state.projects.filter((p) => p.id !== id) })),
-      addSession: (session) => set((state) => ({ sessions: [...state.sessions, session] })),
-    }),
-    { name: 'flydex-projects' },
-  ),
-)
+export const useProjectStore = create<ProjectState>((set, get) => ({
+  projects: [],
+  currentProjectId: null,
+  sessions: [],
+  currentSessionId: null,
+  loading: false,
+
+  // ── 项目 ──
+
+  loadProjects: async () => {
+    set({ loading: true })
+    try {
+      const projects = await projectService.list()
+      set({ projects })
+      // 如果没有当前项目，自动选第一个
+      if (!get().currentProjectId && projects.length > 0) {
+        await get().setCurrentProject(projects[0].id)
+      } else if (get().currentProjectId) {
+        await get().loadSessions(get().currentProjectId!)
+      }
+    } finally {
+      set({ loading: false })
+    }
+  },
+
+  createProject: async (name, path) => {
+    const project = await projectService.create(name, path)
+    set((state) => ({ projects: [...state.projects, project] }))
+    return project
+  },
+
+  deleteProject: async (id) => {
+    await projectService.delete(id)
+    set((state) => ({
+      projects: state.projects.filter((p) => p.id !== id),
+      currentProjectId: state.currentProjectId === id ? null : state.currentProjectId,
+      sessions: state.currentProjectId === id ? [] : state.sessions,
+    }))
+  },
+
+  setCurrentProject: async (id) => {
+    set({ currentProjectId: id })
+    if (id) {
+      await get().loadSessions(id)
+    } else {
+      set({ sessions: [] })
+    }
+  },
+
+  // ── 会话 ──
+
+  loadSessions: async (projectId) => {
+    const pid = projectId ?? get().currentProjectId ?? undefined
+    const sessions = await sessionService.list(pid)
+    set({ sessions })
+  },
+
+  createSession: async (title, workdir) => {
+    const projectId = get().currentProjectId ?? 'default'
+    const session = await sessionService.create(projectId, title, workdir)
+    set((state) => ({
+      sessions: [session, ...state.sessions],
+      currentSessionId: session.id,
+    }))
+    return session.id
+  },
+
+  deleteSession: async (id) => {
+    await sessionService.delete(id)
+    set((state) => ({
+      sessions: state.sessions.filter((s) => s.id !== id),
+      currentSessionId: state.currentSessionId === id ? null : state.currentSessionId,
+    }))
+  },
+
+  renameSession: async (id, title) => {
+    await sessionService.rename(id, title)
+    set((state) => ({
+      sessions: state.sessions.map((s) => (s.id === id ? { ...s, title } : s)),
+    }))
+  },
+
+  setCurrentSession: (id) => {
+    set({ currentSessionId: id })
+  },
+}))

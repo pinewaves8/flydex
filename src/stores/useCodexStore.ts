@@ -19,6 +19,8 @@ interface CodexState {
   setThreadId: (id: string | null) => void
   setUsage: (usage: CodexUsage | null) => void
   reset: () => void
+  /** 加载会话数据（切换会话时用） */
+  loadSession: (data: { messages: CodexMessage[]; threadId: string | null }) => void
   nextLineId: () => number
   nextMessageId: () => number
 }
@@ -55,9 +57,19 @@ export const useCodexStore = create<CodexState>((set, get) => ({
       output: [],
       messages: [],
       exitCode: null,
+      threadId: null,
       usage: null,
       lineId: 0,
       messageId: 0,
+    }),
+  loadSession: (data) =>
+    set({
+      status: 'idle',
+      output: [],
+      messages: data.messages,
+      exitCode: null,
+      threadId: data.threadId,
+      usage: null,
     }),
   nextLineId: () => {
     const id = get().lineId

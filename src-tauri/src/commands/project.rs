@@ -1,0 +1,83 @@
+use tauri::AppHandle;
+
+use crate::models::project::Project;
+use crate::services::storage::Storage;
+
+/// 列出所有项目
+#[tauri::command]
+pub fn list_projects() -> Vec<Project> {
+    Storage::list_projects()
+}
+
+/// 创建项目
+#[tauri::command]
+pub fn create_project(name: String, path: String) -> Result<Project, String> {
+    let id = format!("proj_{}", uuid_simple());
+    let now = now_ms();
+    let project = Project {
+        id: id.clone(),
+        name,
+        path,
+        platform: current_platform(),
+        created_at: now,
+        updated_at: now,
+    };
+    Storage::upsert_project(project.clone()).map_err(|e| e.to_string())?;
+    Ok(project)
+}
+
+/// 更新项目
+#[tauri::command]
+pub fn update_project(project: Project) -> Result<(), String> {
+    let mut p = project;
+    p.updated_at = now_ms();
+    Storage::upsert_project(p).map_err(|e| e.to_string())
+}
+
+/// 删除项目
+#[tauri::command]
+pub fn delete_project(project_id: String) -> Result<(), String> {
+    Storage::delete_project(&project_id).map_err(|e| e.to_string())
+}
+
+// ── 工具函数 ──
+
+fn now_ms() -> i64 {
+    use std::time::{SystemTime, UNIX_EPOCH};
+    SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|d| d.as_millis() as i64)
+        .unwrap_or(0)
+}
+
+fn uuid_simple() -> String {
+    // 简单的唯一 ID：时间戳 + 随机数
+    use std::time::{SystemTime, UNIX_EPOCH};
+    let nanos = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|d| d.as_nanos())
+        .unwrap_or(0);
+    let rand: u64 = unsafe {
+        // 简单的伪随机
+        let mut x = nanos as u64;
+        x ^= x << 13;
+        x ^= x >> 7;
+        x ^= x << 17;
+        x
+    };
+    format!("{:x}{:x}", nanos, rand)
+}
+
+fn current_platform() -> String {
+    if cfg!(windows) {
+        "windows".to_string()
+    } else if cfg!(target_os = "macos") {
+        "macos".to_string()
+    } else {
+        "linux".to_string()
+    }
+}
+
+// 保留 AppHandle 参数以保持一致性（未来可能用于事件推送）
+#[allow(dead_code)]
+fn _app_handle_placeholder(_app: AppHandle) {}

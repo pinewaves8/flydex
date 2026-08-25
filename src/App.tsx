@@ -1,8 +1,10 @@
 import { FolderOpen, Settings, Terminal } from 'lucide-react'
+import { useEffect } from 'react'
 
 import { Sidebar } from '@/components/layout/Sidebar'
 import { TitleBar } from '@/components/layout/TitleBar'
 import { ChatPanel } from '@/features/codex'
+import { useProjectStore } from '@/stores/useProjectStore'
 import { useUIStore } from '@/stores/useUIStore'
 
 function PlaceholderView({
@@ -27,6 +29,12 @@ function PlaceholderView({
 
 function App() {
   const { currentView } = useUIStore()
+  const loadProjects = useProjectStore((s) => s.loadProjects)
+
+  // 应用启动时加载项目和会话列表
+  useEffect(() => {
+    loadProjects()
+  }, [loadProjects])
 
   return (
     <div className="flex h-screen w-screen flex-col bg-background text-foreground">
