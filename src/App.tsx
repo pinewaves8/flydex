@@ -1,9 +1,8 @@
-import { Terminal, FolderOpen, Settings, Sparkles } from 'lucide-react'
-import { useState } from 'react'
+import { FolderOpen, Settings, Sparkles } from 'lucide-react'
+
+import { CodexPanel } from '@/components/CodexPanel'
 
 function App() {
-  const [count, setCount] = useState(0)
-
   return (
     <div className="flex h-screen w-screen flex-col bg-background text-foreground">
       {/* Title Bar */}
@@ -11,6 +10,9 @@ function App() {
         <div className="flex items-center gap-2">
           <Sparkles className="h-4 w-4 text-primary" />
           <span className="text-sm font-semibold">Flydex</span>
+          <span className="ml-2 rounded bg-muted px-1.5 py-0.5 text-[10px] text-muted-foreground">
+            PoC · Codex Integration
+          </span>
         </div>
         <div className="flex items-center gap-2 text-xs text-muted-foreground">
           <span>v0.1.0</span>
@@ -38,24 +40,9 @@ function App() {
           </div>
         </aside>
 
-        {/* Content Area */}
-        <section className="flex flex-1 flex-col items-center justify-center gap-6 p-8">
-          <div className="flex flex-col items-center gap-3 text-center">
-            <div className="flex h-16 w-16 items-center justify-center rounded-2xl bg-primary/10">
-              <Terminal className="h-8 w-8 text-primary" />
-            </div>
-            <h1 className="text-2xl font-bold">Welcome to Flydex</h1>
-            <p className="max-w-md text-sm text-muted-foreground">
-              A cross-platform desktop AI coding agent. Open a project to get started.
-            </p>
-          </div>
-
-          <button
-            onClick={() => setCount((c) => c + 1)}
-            className="rounded-md bg-primary px-4 py-2 text-sm font-medium text-primary-foreground hover:bg-primary/90"
-          >
-            Test button (clicked {count} times)
-          </button>
+        {/* Content Area - Codex Exec Tester */}
+        <section className="flex flex-1 flex-col overflow-hidden">
+          <CodexPanel />
         </section>
       </main>
     </div>
