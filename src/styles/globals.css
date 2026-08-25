@@ -57,7 +57,10 @@
     @apply bg-background text-foreground;
     margin: 0;
     overflow: hidden;
-    font-family: system-ui, -apple-system, sans-serif;
+    font-family:
+      system-ui,
+      -apple-system,
+      sans-serif;
     -webkit-font-smoothing: antialiased;
     -moz-osx-font-smoothing: grayscale;
   }

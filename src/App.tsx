@@ -1,8 +1,8 @@
-import { useState } from "react";
-import { Terminal, FolderOpen, Settings, Sparkles } from "lucide-react";
+import { Terminal, FolderOpen, Settings, Sparkles } from 'lucide-react'
+import { useState } from 'react'
 
 function App() {
-  const [count, setCount] = useState(0);
+  const [count, setCount] = useState(0)
 
   return (
     <div className="flex h-screen w-screen flex-col bg-background text-foreground">
@@ -23,9 +23,7 @@ function App() {
         <aside className="flex w-56 flex-col border-r border-border bg-muted/30">
           <div className="flex items-center gap-2 border-b border-border px-3 py-2">
             <FolderOpen className="h-4 w-4 text-muted-foreground" />
-            <span className="text-xs font-medium text-muted-foreground">
-              Projects
-            </span>
+            <span className="text-xs font-medium text-muted-foreground">Projects</span>
           </div>
           <div className="flex-1 overflow-y-auto p-2">
             <div className="rounded-md px-2 py-1.5 text-sm text-muted-foreground">
@@ -48,8 +46,7 @@ function App() {
             </div>
             <h1 className="text-2xl font-bold">Welcome to Flydex</h1>
             <p className="max-w-md text-sm text-muted-foreground">
-              A cross-platform desktop AI coding agent. Open a project to get
-              started.
+              A cross-platform desktop AI coding agent. Open a project to get started.
             </p>
           </div>
 
@@ -62,7 +59,7 @@ function App() {
         </section>
       </main>
     </div>
-  );
+  )
 }
 
-export default App;
+export default App
