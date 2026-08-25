@@ -1,7 +1,0 @@
-﻿node.exe : Reading additional input from stdin...
-At C:\Users\peter woo\AppData\Roaming\npm\codex.ps1:24 char:5
-+     & "node$exe"  "$basedir/node_modules/@openai/codex/bin/codex.js"  ...
-+     ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
-    + CategoryInfo          : NotSpecified: (Reading additional input from stdin...:String) [], RemoteException
-    + FullyQualifiedErrorId : NativeCommandError
- 

@@ -38,3 +38,9 @@ codex/
 
 # OS
 Thumbs.db
+
+# Temp / debug files
+screenshot.png
+stdout.txt
+stderr.txt
+*.tmp
