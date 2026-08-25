@@ -1,48 +1,61 @@
-import { FolderOpen, Settings, Sparkles } from 'lucide-react'
+import { FolderOpen, Settings, Terminal } from 'lucide-react'
 
-import { CodexPanel } from '@/components/CodexPanel'
+import { Sidebar } from '@/components/layout/Sidebar'
+import { TitleBar } from '@/components/layout/TitleBar'
+import { ChatPanel } from '@/features/codex'
+import { useUIStore } from '@/stores/useUIStore'
+
+function PlaceholderView({
+  icon: Icon,
+  title,
+  description,
+}: {
+  icon: typeof Terminal
+  title: string
+  description: string
+}) {
+  return (
+    <div className="flex h-full items-center justify-center">
+      <div className="text-center">
+        <Icon className="mx-auto mb-3 h-12 w-12 text-muted-foreground/50" />
+        <h2 className="mb-1 text-lg font-medium text-foreground">{title}</h2>
+        <p className="text-sm text-muted-foreground">{description}</p>
+      </div>
+    </div>
+  )
+}
 
 function App() {
+  const { currentView } = useUIStore()
+
   return (
     <div className="flex h-screen w-screen flex-col bg-background text-foreground">
-      {/* Title Bar */}
-      <header className="flex h-10 items-center justify-between border-b border-border px-4">
-        <div className="flex items-center gap-2">
-          <Sparkles className="h-4 w-4 text-primary" />
-          <span className="text-sm font-semibold">Flydex</span>
-          <span className="ml-2 rounded bg-muted px-1.5 py-0.5 text-[10px] text-muted-foreground">
-            PoC · Codex Integration
-          </span>
-        </div>
-        <div className="flex items-center gap-2 text-xs text-muted-foreground">
-          <span>v0.1.0</span>
-        </div>
-      </header>
-
-      {/* Main Content */}
+      <TitleBar />
       <main className="flex flex-1 overflow-hidden">
-        {/* Sidebar */}
-        <aside className="flex w-56 flex-col border-r border-border bg-muted/30">
-          <div className="flex items-center gap-2 border-b border-border px-3 py-2">
-            <FolderOpen className="h-4 w-4 text-muted-foreground" />
-            <span className="text-xs font-medium text-muted-foreground">Projects</span>
-          </div>
-          <div className="flex-1 overflow-y-auto p-2">
-            <div className="rounded-md px-2 py-1.5 text-sm text-muted-foreground">
-              No projects yet
-            </div>
-          </div>
-          <div className="border-t border-border p-2">
-            <button className="flex w-full items-center gap-2 rounded-md px-2 py-1.5 text-sm text-muted-foreground hover:bg-accent hover:text-accent-foreground">
-              <Settings className="h-4 w-4" />
-              Settings
-            </button>
-          </div>
-        </aside>
-
-        {/* Content Area - Codex Exec Tester */}
+        <Sidebar />
         <section className="flex flex-1 flex-col overflow-hidden">
-          <CodexPanel />
+          {currentView === 'codex' && <ChatPanel />}
+          {currentView === 'projects' && (
+            <PlaceholderView
+              icon={FolderOpen}
+              title="Projects"
+              description="Project management coming soon"
+            />
+          )}
+          {currentView === 'terminal' && (
+            <PlaceholderView
+              icon={Terminal}
+              title="Terminal"
+              description="Integrated terminal coming soon"
+            />
+          )}
+          {currentView === 'settings' && (
+            <PlaceholderView
+              icon={Settings}
+              title="Settings"
+              description="Application settings coming soon"
+            />
+          )}
         </section>
       </main>
     </div>

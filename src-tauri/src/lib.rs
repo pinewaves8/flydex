@@ -1,8 +1,10 @@
 //! Flydex - Tauri application backend
 
 mod commands;
+mod models;
 mod services;
 mod types;
+mod utils;
 
 use commands::codex::run_codex;
 
