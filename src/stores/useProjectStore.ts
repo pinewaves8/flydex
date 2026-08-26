@@ -14,6 +14,7 @@ interface ProjectState {
   // 项目
   loadProjects: () => Promise<void>
   createProject: (name: string, path: string) => Promise<Project>
+  renameProject: (id: string, name: string) => Promise<void>
   deleteProject: (id: string) => Promise<void>
   setCurrentProject: (id: string | null) => Promise<void>
 
@@ -54,6 +55,16 @@ export const useProjectStore = create<ProjectState>((set, get) => ({
     const project = await projectService.create(name, path)
     set((state) => ({ projects: [...state.projects, project] }))
     return project
+  },
+
+  renameProject: async (id, name) => {
+    const project = get().projects.find((p) => p.id === id)
+    if (!project) return
+    const updated = { ...project, name, updatedAt: Date.now() }
+    await projectService.update(updated)
+    set((state) => ({
+      projects: state.projects.map((p) => (p.id === id ? updated : p)),
+    }))
   },
 
   deleteProject: async (id) => {

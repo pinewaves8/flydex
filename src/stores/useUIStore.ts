@@ -1,6 +1,6 @@
 import { create } from 'zustand'
 
-export type View = 'codex' | 'projects' | 'terminal' | 'settings'
+export type View = 'codex' | 'projects' | 'terminal' | 'git' | 'settings'
 
 interface UIState {
   sidebarCollapsed: boolean

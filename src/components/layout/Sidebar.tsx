@@ -1,4 +1,13 @@
-import { FolderOpen, Settings, Terminal, MessageSquare, Plus, Trash2, Pencil } from 'lucide-react'
+import {
+  FolderOpen,
+  Settings,
+  Terminal,
+  MessageSquare,
+  Plus,
+  Trash2,
+  Pencil,
+  GitBranch,
+} from 'lucide-react'
 import { useEffect, useRef, useState } from 'react'
 
 import { useProjectStore } from '@/stores/useProjectStore'
@@ -8,6 +17,7 @@ const NAV_ITEMS: { view: View; label: string; icon: typeof MessageSquare }[] = [
   { view: 'codex', label: 'Codex', icon: MessageSquare },
   { view: 'projects', label: 'Projects', icon: FolderOpen },
   { view: 'terminal', label: 'Terminal', icon: Terminal },
+  { view: 'git', label: 'Git', icon: GitBranch },
 ]
 
 /** 格式化相对时间 */

@@ -1,10 +1,12 @@
-import { FolderOpen, Settings } from 'lucide-react'
+import { Settings } from 'lucide-react'
 import type { Terminal as TerminalIcon } from 'lucide-react'
 import { useEffect } from 'react'
 
 import { Sidebar } from '@/components/layout/Sidebar'
 import { TitleBar } from '@/components/layout/TitleBar'
 import { ChatPanel } from '@/features/codex'
+import { GitPanel } from '@/features/git'
+import { ProjectsPanel } from '@/features/project'
 import { TerminalPanel } from '@/features/terminal'
 import { useProjectStore } from '@/stores/useProjectStore'
 import { useUIStore } from '@/stores/useUIStore'
@@ -45,14 +47,9 @@ function App() {
         <Sidebar />
         <section className="flex flex-1 flex-col overflow-hidden">
           {currentView === 'codex' && <ChatPanel />}
-          {currentView === 'projects' && (
-            <PlaceholderView
-              icon={FolderOpen}
-              title="Projects"
-              description="Project management coming soon"
-            />
-          )}
+          {currentView === 'projects' && <ProjectsPanel />}
           {currentView === 'terminal' && <TerminalPanel />}
+          {currentView === 'git' && <GitPanel />}
           {currentView === 'settings' && (
             <PlaceholderView
               icon={Settings}
