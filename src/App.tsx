@@ -1,9 +1,11 @@
-import { FolderOpen, Settings, Terminal } from 'lucide-react'
+import { FolderOpen, Settings } from 'lucide-react'
+import type { Terminal as TerminalIcon } from 'lucide-react'
 import { useEffect } from 'react'
 
 import { Sidebar } from '@/components/layout/Sidebar'
 import { TitleBar } from '@/components/layout/TitleBar'
 import { ChatPanel } from '@/features/codex'
+import { TerminalPanel } from '@/features/terminal'
 import { useProjectStore } from '@/stores/useProjectStore'
 import { useUIStore } from '@/stores/useUIStore'
 
@@ -12,7 +14,7 @@ function PlaceholderView({
   title,
   description,
 }: {
-  icon: typeof Terminal
+  icon: typeof TerminalIcon
   title: string
   description: string
 }) {
@@ -50,13 +52,7 @@ function App() {
               description="Project management coming soon"
             />
           )}
-          {currentView === 'terminal' && (
-            <PlaceholderView
-              icon={Terminal}
-              title="Terminal"
-              description="Integrated terminal coming soon"
-            />
-          )}
+          {currentView === 'terminal' && <TerminalPanel />}
           {currentView === 'settings' && (
             <PlaceholderView
               icon={Settings}

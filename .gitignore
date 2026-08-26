@@ -29,7 +29,7 @@ src-tauri/target
 src-tauri/gen
 
 # Codex reference source (not part of our project)
-codex/
+/codex/
 
 # Environment variables
 .env
