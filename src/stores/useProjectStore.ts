@@ -80,8 +80,15 @@ export const useProjectStore = create<ProjectState>((set, get) => ({
     set({ currentProjectId: id })
     if (id) {
       await get().loadSessions(id)
+      // 确保当前会话指向该项目下有效的会话：
+      // 切回原项目时保留其对话（指向第一个会话），无会话则清空
+      const sessions = get().sessions
+      const current = get().currentSessionId
+      if (!current || !sessions.some((s) => s.id === current)) {
+        set({ currentSessionId: sessions[0]?.id ?? null })
+      }
     } else {
-      set({ sessions: [] })
+      set({ sessions: [], currentSessionId: null })
     }
   },
 

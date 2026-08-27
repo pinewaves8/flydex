@@ -1,5 +1,7 @@
 import { Command, type Child } from '@tauri-apps/plugin-shell'
 
+import { useWorkspaceStore } from '@/stores/useWorkspaceStore'
+
 /**
  * 终端 Service
  *
@@ -90,24 +92,27 @@ class TerminalService {
     this.history.push(historyEntry)
     this.resetHistoryIndex()
 
-    // 处理 cd 命令（shell 插件每次执行是独立进程，cd 不持久）
-    const cdMatch = command.match(/^cd\s+(.+)$/i)
-    if (cdMatch) {
-      const target = cdMatch[1].trim()
+    // 处理 cd 命令（shell 插件每次执行是独立进程，cd 不持久，需自己维护 cwd）
+    // 支持: cd、cd..、cd ..、cd\、cd /、cd <path>、cd /d 盘符切换
+    if (
+      /^cd$/i.test(command.trim()) ||
+      /^cd\s+/i.test(command) ||
+      /^cd(\.\.?|[\\/])/i.test(command)
+    ) {
+      const target = command.replace(/^cd/i, '').trim()
+      // 无参数：显示当前目录（cmd 行为）
+      if (!target) {
+        callbacks.onStdout(`\r\n${this.cwd}\r\n`)
+        callbacks.onExit(0)
+        historyEntry.exitCode = 0
+        return
+      }
       try {
-        // 简单的路径处理
-        let newCwd = target
-        if (!/^[A-Za-z]:/.test(target) && !target.startsWith('\\\\')) {
-          newCwd = `${this.cwd}\\${target}`
-        }
-        // 规范化路径（简单处理 .. 和 .）
-        const parts = newCwd.split(/[\\/]/).filter(Boolean)
-        const normalized: string[] = []
-        for (const part of parts) {
-          if (part === '..') normalized.pop()
-          else if (part !== '.') normalized.push(part)
-        }
-        this.cwd = normalized.join('\\')
+        // 用 cmd 解析目标路径（处理 ..、\、相对/绝对、盘符切换），并验证存在
+        const resolved = await this.resolveCdPath(target)
+        this.cwd = resolved
+        // 遵循 codex：cd 即切换全局工作区（Codex/Git/Projects 同步跟随）
+        useWorkspaceStore.getState().setCwd(this.cwd)
         callbacks.onStdout(`\r\n`)
         callbacks.onExit(0)
         historyEntry.exitCode = 0
@@ -149,6 +154,12 @@ class TerminalService {
       historyEntry.exitCode = 1
       this.currentChild = null
     }
+  }
+
+  /** 解析 cd 目标路径（调 Rust 后端规范化 + 校验，绕开 shell 插件的引号转义问题） */
+  private async resolveCdPath(target: string): Promise<string> {
+    const { invoke } = await import('@tauri-apps/api/core')
+    return invoke<string>('resolve_dir', { path: target, cwd: this.cwd })
   }
 
   /** 中断当前运行的命令（Ctrl+C） */

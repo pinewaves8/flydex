@@ -61,3 +61,33 @@ export interface CommitResult {
   /** 提交信息 */
   message: string
 }
+
+/** Git 远端 */
+export interface GitRemote {
+  /** 远端名（如 origin） */
+  name: string
+  /** fetch URL */
+  url: string
+}
+
+/** 提交记录（历史列表项） */
+export interface GitCommit {
+  /** 完整 hash */
+  hash: string
+  /** 短 hash */
+  short_hash: string
+  /** 作者名 */
+  author: string
+  /** 提交时间（unix 秒） */
+  timestamp: number
+  /** 提交信息首行 */
+  summary: string
+}
+
+/** 同步操作结果（push/pull/fetch） */
+export interface GitSyncResult {
+  /** 是否成功 */
+  ok: boolean
+  /** 操作输出 */
+  message: string
+}

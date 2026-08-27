@@ -44,3 +44,7 @@ screenshot.png
 stdout.txt
 stderr.txt
 *.tmp
+
+# Temporary probe / test scratch
+test-rust/
+

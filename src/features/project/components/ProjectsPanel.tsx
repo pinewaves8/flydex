@@ -3,6 +3,7 @@ import { Folder, FolderOpen, Loader2, Plus, Trash2 } from 'lucide-react'
 import { useEffect, useRef, useState } from 'react'
 
 import { useProjectStore } from '@/stores/useProjectStore'
+import { useWorkspaceStore } from '@/stores/useWorkspaceStore'
 import type { Project } from '@/types/project'
 
 /** 相对时间 */
@@ -42,6 +43,7 @@ export function ProjectsPanel() {
   const [renamingId, setRenamingId] = useState<string | null>(null)
   const [renameValue, setRenameValue] = useState('')
   const renameInputRef = useRef<HTMLInputElement>(null)
+  const setWorkspaceCwd = useWorkspaceStore((s) => s.setCwd)
 
   useEffect(() => {
     loadProjects()
@@ -66,7 +68,10 @@ export function ProjectsPanel() {
     setCreating(true)
     try {
       const name = nameFromPath(dir)
-      await createProject(name, dir)
+      const created = await createProject(name, dir)
+      // 新建项目后立即设为当前项目，并同步全局工作目录（遵循 codex：cwd 唯一事实源）
+      await setCurrentProject(created.id)
+      setWorkspaceCwd(dir)
     } catch (e) {
       setError(String(e))
     } finally {
@@ -149,6 +154,8 @@ export function ProjectsPanel() {
                 onClick={() => {
                   if (isRenaming) return
                   setCurrentProject(project.id)
+                  // 遵循 codex：切换项目 = 切换全局工作目录
+                  setWorkspaceCwd(project.path)
                 }}
                 className={`group flex cursor-pointer items-center gap-3 rounded-md border border-border p-3 transition-colors ${
                   active

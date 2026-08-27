@@ -7,11 +7,17 @@ mod types;
 mod utils;
 
 use commands::codex::run_codex;
-use commands::git::{git_branches, git_checkout, git_commit, git_diff, git_diff_cached, git_stage_hunk, git_status, git_unstage_hunk};
+use commands::git::{
+    git_add_remote, git_branches, git_checkout, git_commit, git_create_branch, git_delete_branch,
+    git_diff, git_diff_cached, git_discard_changes, git_fetch, git_log, git_pull, git_push,
+    git_remotes, git_remove_remote, git_rename_branch, git_show, git_stage_all, git_stage_file,
+    git_stage_hunk, git_status, git_unstage_all, git_unstage_file, git_unstage_hunk,
+};
 use commands::project::{create_project, delete_project, list_projects, update_project};
 use commands::session::{
     create_session, delete_session, list_sessions, load_session, rename_session, save_session,
 };
+use commands::terminal::resolve_dir;
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
@@ -41,6 +47,28 @@ pub fn run() {
             git_stage_hunk,
             git_unstage_hunk,
             git_commit,
+            // git - 分支管理
+            git_create_branch,
+            git_rename_branch,
+            git_delete_branch,
+            // git - 远端与同步
+            git_remotes,
+            git_add_remote,
+            git_remove_remote,
+            git_fetch,
+            git_push,
+            git_pull,
+            // git - 暂存与放弃
+            git_stage_file,
+            git_unstage_file,
+            git_stage_all,
+            git_unstage_all,
+            git_discard_changes,
+            // git - 提交历史
+            git_log,
+            git_show,
+            // terminal
+            resolve_dir,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

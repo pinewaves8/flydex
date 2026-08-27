@@ -1,6 +1,13 @@
 import { invoke } from '@tauri-apps/api/core'
 
-import type { CommitResult, GitBranch, GitStatus } from '@/types/git'
+import type {
+  CommitResult,
+  GitBranch,
+  GitCommit,
+  GitRemote,
+  GitStatus,
+  GitSyncResult,
+} from '@/types/git'
 
 /**
  * Git 管理 Service
@@ -46,5 +53,107 @@ export const gitService = {
   /** 提交 */
   async commit(repo: string, message: string): Promise<CommitResult> {
     return invoke<CommitResult>('git_commit', { repo, message })
+  },
+
+  // ── 分支管理 ──
+
+  /** 创建分支 */
+  async createBranch(repo: string, name: string, base?: string): Promise<void> {
+    await invoke('git_create_branch', { repo, name, base: base ?? null })
+  },
+
+  /** 重命名分支 */
+  async renameBranch(repo: string, oldName: string, newName: string): Promise<void> {
+    await invoke('git_rename_branch', { repo, oldName, newName })
+  },
+
+  /** 删除分支 */
+  async deleteBranch(repo: string, name: string): Promise<void> {
+    await invoke('git_delete_branch', { repo, name })
+  },
+
+  // ── 远端与同步 ──
+
+  /** 获取远端列表 */
+  async remotes(repo: string): Promise<GitRemote[]> {
+    return invoke<GitRemote[]>('git_remotes', { repo })
+  },
+
+  /** 添加远端 */
+  async addRemote(repo: string, name: string, url: string): Promise<void> {
+    await invoke('git_add_remote', { repo, name, url })
+  },
+
+  /** 移除远端 */
+  async removeRemote(repo: string, name: string): Promise<void> {
+    await invoke('git_remove_remote', { repo, name })
+  },
+
+  /** 拉取远端更新 */
+  async fetch(repo: string, remote?: string): Promise<GitSyncResult> {
+    return invoke<GitSyncResult>('git_fetch', { repo, remote: remote ?? null })
+  },
+
+  /** 推送 */
+  async push(
+    repo: string,
+    remote?: string,
+    branch?: string,
+    force = false,
+  ): Promise<GitSyncResult> {
+    return invoke<GitSyncResult>('git_push', {
+      repo,
+      remote: remote ?? null,
+      branch: branch ?? null,
+      force,
+    })
+  },
+
+  /** 拉取并合并 */
+  async pull(repo: string, remote?: string, branch?: string): Promise<GitSyncResult> {
+    return invoke<GitSyncResult>('git_pull', {
+      repo,
+      remote: remote ?? null,
+      branch: branch ?? null,
+    })
+  },
+
+  // ── 暂存与放弃 ──
+
+  /** 暂存整个文件 */
+  async stageFile(repo: string, path: string): Promise<void> {
+    await invoke('git_stage_file', { repo, path })
+  },
+
+  /** 取消暂存整个文件 */
+  async unstageFile(repo: string, path: string): Promise<void> {
+    await invoke('git_unstage_file', { repo, path })
+  },
+
+  /** 暂存全部 */
+  async stageAll(repo: string): Promise<void> {
+    await invoke('git_stage_all', { repo })
+  },
+
+  /** 取消暂存全部 */
+  async unstageAll(repo: string): Promise<void> {
+    await invoke('git_unstage_all', { repo })
+  },
+
+  /** 放弃工作区改动（单文件或全部） */
+  async discardChanges(repo: string, path?: string): Promise<void> {
+    await invoke('git_discard_changes', { repo, path: path ?? null })
+  },
+
+  // ── 提交历史 ──
+
+  /** 提交历史列表 */
+  async log(repo: string, limit = 50): Promise<GitCommit[]> {
+    return invoke<GitCommit[]>('git_log', { repo, limit })
+  },
+
+  /** 查看提交详情 */
+  async show(repo: string, hash: string): Promise<string> {
+    return invoke<string>('git_show', { repo, hash })
   },
 }

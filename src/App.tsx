@@ -10,6 +10,7 @@ import { ProjectsPanel } from '@/features/project'
 import { TerminalPanel } from '@/features/terminal'
 import { useProjectStore } from '@/stores/useProjectStore'
 import { useUIStore } from '@/stores/useUIStore'
+import { useWorkspaceStore } from '@/stores/useWorkspaceStore'
 
 function PlaceholderView({
   icon: Icon,
@@ -37,7 +38,15 @@ function App() {
 
   // 应用启动时加载项目和会话列表
   useEffect(() => {
-    loadProjects()
+    ;(async () => {
+      await loadProjects()
+      // 首次启动（未手动设置过工作目录）时，跟随第一个项目作为全局工作目录
+      const hasSaved = localStorage.getItem('flydex.workspace.cwd')
+      if (!hasSaved) {
+        const first = useProjectStore.getState().projects[0]
+        if (first) useWorkspaceStore.getState().setCwd(first.path)
+      }
+    })()
   }, [loadProjects])
 
   return (

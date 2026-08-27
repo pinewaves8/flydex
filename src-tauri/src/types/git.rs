@@ -84,3 +84,36 @@ pub struct CommitResult {
     /// 提交信息
     pub message: String,
 }
+
+/// Git 远端
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct GitRemote {
+    /// 远端名（如 origin）
+    pub name: String,
+    /// fetch URL
+    pub url: String,
+}
+
+/// 提交记录（历史列表项）
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct GitCommit {
+    /// 完整 hash
+    pub hash: String,
+    /// 短 hash（7 位）
+    pub short_hash: String,
+    /// 作者名
+    pub author: String,
+    /// 提交时间（unix 秒）
+    pub timestamp: i64,
+    /// 提交信息首行
+    pub summary: String,
+}
+
+/// 同步操作结果（push/pull/fetch）
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct GitSyncResult {
+    /// 是否成功
+    pub ok: bool,
+    /// 操作输出（git 的 stdout/stderr 合并，用于展示）
+    pub message: String,
+}

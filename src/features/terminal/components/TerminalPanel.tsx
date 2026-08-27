@@ -5,6 +5,7 @@ import { FitAddon } from 'xterm-addon-fit'
 import 'xterm/css/xterm.css'
 
 import { terminalService } from '@/services/terminalService'
+import { useWorkspaceStore } from '@/stores/useWorkspaceStore'
 
 /** 计算字符串在终端中的显示宽度（中文等宽字符算 2 列） */
 function strWidth(s: string): number {
@@ -38,6 +39,12 @@ export function TerminalPanel() {
   const cursorIndexRef = useRef<number>(0)
   const handleInputRef = useRef<(data: string) => void>(() => {})
   const [isRunning, setIsRunning] = useState(false)
+  const workspaceCwd = useWorkspaceStore((s) => s.cwd)
+
+  // 全局工作目录变化时同步终端（遵循 codex：cwd 是唯一事实源）
+  useEffect(() => {
+    terminalService.setCwd(workspaceCwd)
+  }, [workspaceCwd])
 
   // 初始化 xterm
   useEffect(() => {

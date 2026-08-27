@@ -29,16 +29,19 @@ export function Markdown({ content }: MarkdownProps) {
         remarkPlugins={[remarkGfm]}
         rehypePlugins={[rehypeHighlight]}
         components={{
-          code({ node: _node, inline, className, children, ...props }) {
+          code({ node: _node, className, children, ...props }) {
             const match = /language-(\w+)/.exec(className || '')
-            if (inline) {
-              return (
-                <code className="rounded bg-muted px-1 py-0.5 font-mono text-xs" {...props}>
-                  {children}
-                </code>
-              )
+            // react-markdown v9 已移除 inline 属性，改为：
+            // 有语言标记（```lang）或含换行（多行）→ 代码块；否则 → 行内代码
+            const isMultiLine = extractText(children).includes('\n')
+            if (match || isMultiLine) {
+              return <CodeBlock language={match?.[1]}>{children}</CodeBlock>
             }
-            return <CodeBlock language={match?.[1]}>{children}</CodeBlock>
+            return (
+              <code className="rounded bg-muted px-1 py-0.5 font-mono text-xs" {...props}>
+                {children}
+              </code>
+            )
           },
           a({ children, href }) {
             return (

@@ -12,6 +12,7 @@ import { useEffect, useRef, useState } from 'react'
 
 import { useProjectStore } from '@/stores/useProjectStore'
 import { useUIStore, type View } from '@/stores/useUIStore'
+import { useWorkspaceStore } from '@/stores/useWorkspaceStore'
 
 const NAV_ITEMS: { view: View; label: string; icon: typeof MessageSquare }[] = [
   { view: 'codex', label: 'Codex', icon: MessageSquare },
@@ -76,7 +77,7 @@ export function Sidebar() {
   }
 
   const handleNewSession = async () => {
-    const workdir = 'C:\\llm\\flydex'
+    const workdir = useWorkspaceStore.getState().cwd
     await createSession('未命名会话', workdir)
     setCurrentView('codex')
   }

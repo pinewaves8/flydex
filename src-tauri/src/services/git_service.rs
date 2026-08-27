@@ -2,7 +2,8 @@ use std::io::Write;
 use std::process::{Command, Stdio};
 
 use crate::types::git::{
-    ChangeState, CommitResult, DiffHunk, FileChange, GitBranch, GitStatus,
+    ChangeState, CommitResult, DiffHunk, FileChange, GitBranch, GitCommit, GitRemote, GitStatus,
+    GitSyncResult,
 };
 
 /// 解析 unified diff 时的累积器（未暂存/工作区 diff）
@@ -574,5 +575,321 @@ impl GitService {
             hash,
             message: message.to_string(),
         })
+    }
+
+    // ── 分支管理 ──
+
+    /// 创建分支（默认不切换）
+    pub fn create_branch(repo: &str, name: &str, base: Option<&str>) -> Result<(), String> {
+        let name = name.trim();
+        if name.is_empty() {
+            return Err("branch name cannot be empty".to_string());
+        }
+        let mut args = vec!["branch", name];
+        if let Some(base) = base {
+            if !base.trim().is_empty() {
+                args.push(base.trim());
+            }
+        }
+        let (code, _, stderr) = Self::run_git(repo, &args, None);
+        if code != 0 {
+            return Err(stderr.trim().to_string());
+        }
+        Ok(())
+    }
+
+    /// 重命名分支
+    pub fn rename_branch(repo: &str, old_name: &str, new_name: &str) -> Result<(), String> {
+        let (code, _, stderr) = Self::run_git(
+            repo,
+            &["branch", "-m", old_name.trim(), new_name.trim()],
+            None,
+        );
+        if code != 0 {
+            return Err(stderr.trim().to_string());
+        }
+        Ok(())
+    }
+
+    /// 删除分支（安全删除 -d，未合并将失败）
+    pub fn delete_branch(repo: &str, name: &str) -> Result<(), String> {
+        let (code, _, stderr) = Self::run_git(repo, &["branch", "-d", name.trim()], None);
+        if code != 0 {
+            return Err(stderr.trim().to_string());
+        }
+        Ok(())
+    }
+
+    // ── 远端与同步 ──
+
+    /// 获取远端列表
+    pub fn remotes(repo: &str) -> Result<Vec<GitRemote>, String> {
+        let (code, stdout, stderr) = Self::run_git(repo, &["remote", "-v"], None);
+        if code != 0 {
+            return Err(stderr.trim().to_string());
+        }
+        let mut remotes: Vec<GitRemote> = Vec::new();
+        for line in stdout.lines() {
+            // 格式: origin  https://... (fetch)
+            let parts: Vec<&str> = line.split_whitespace().collect();
+            if parts.len() >= 2 && parts.last() == Some(&"(fetch)") {
+                let name = parts[0].to_string();
+                let url = parts[1].to_string();
+                if !remotes.iter().any(|r| r.name == name) {
+                    remotes.push(GitRemote { name, url });
+                }
+            }
+        }
+        Ok(remotes)
+    }
+
+    /// 添加远端
+    pub fn add_remote(repo: &str, name: &str, url: &str) -> Result<(), String> {
+        let (code, _, stderr) = Self::run_git(
+            repo,
+            &["remote", "add", name.trim(), url.trim()],
+            None,
+        );
+        if code != 0 {
+            return Err(stderr.trim().to_string());
+        }
+        Ok(())
+    }
+
+    /// 移除远端
+    pub fn remove_remote(repo: &str, name: &str) -> Result<(), String> {
+        let (code, _, stderr) = Self::run_git(repo, &["remote", "remove", name.trim()], None);
+        if code != 0 {
+            return Err(stderr.trim().to_string());
+        }
+        Ok(())
+    }
+
+    /// 拉取远端更新（fetch）
+    pub fn fetch(repo: &str, remote: Option<&str>) -> Result<GitSyncResult, String> {
+        let mut args = vec!["fetch"];
+        if let Some(r) = remote {
+            if !r.trim().is_empty() {
+                args.push(r.trim());
+            }
+        }
+        let (code, stdout, stderr) = Self::run_git(repo, &args, None);
+        let msg = if stdout.trim().is_empty() {
+            stderr.trim().to_string()
+        } else {
+            stdout.trim().to_string()
+        };
+        if code != 0 {
+            return Ok(GitSyncResult {
+                ok: false,
+                message: if msg.is_empty() {
+                    "fetch failed".to_string()
+                } else {
+                    msg
+                },
+            });
+        }
+        Ok(GitSyncResult {
+            ok: true,
+            message: if msg.is_empty() {
+                "已获取更新".to_string()
+            } else {
+                msg
+            },
+        })
+    }
+
+    /// 推送（push）
+    pub fn push(
+        repo: &str,
+        remote: Option<&str>,
+        branch: Option<&str>,
+        force: bool,
+    ) -> Result<GitSyncResult, String> {
+        let mut args = vec!["push"];
+        if force {
+            args.push("--force");
+        }
+        if let Some(r) = remote {
+            if !r.trim().is_empty() {
+                args.push(r.trim());
+            }
+        }
+        if let Some(b) = branch {
+            if !b.trim().is_empty() {
+                args.push(b.trim());
+            }
+        }
+        let (code, stdout, stderr) = Self::run_git(repo, &args, None);
+        let msg = if stdout.trim().is_empty() {
+            stderr.trim().to_string()
+        } else {
+            stdout.trim().to_string()
+        };
+        if code != 0 {
+            return Ok(GitSyncResult {
+                ok: false,
+                message: if msg.is_empty() {
+                    "push failed".to_string()
+                } else {
+                    msg
+                },
+            });
+        }
+        Ok(GitSyncResult {
+            ok: true,
+            message: if msg.is_empty() {
+                "推送成功".to_string()
+            } else {
+                msg
+            },
+        })
+    }
+
+    /// 拉取并合并（pull）
+    pub fn pull(
+        repo: &str,
+        remote: Option<&str>,
+        branch: Option<&str>,
+    ) -> Result<GitSyncResult, String> {
+        let mut args = vec!["pull"];
+        if let Some(r) = remote {
+            if !r.trim().is_empty() {
+                args.push(r.trim());
+            }
+        }
+        if let Some(b) = branch {
+            if !b.trim().is_empty() {
+                args.push(b.trim());
+            }
+        }
+        let (code, stdout, stderr) = Self::run_git(repo, &args, None);
+        let msg = if stdout.trim().is_empty() {
+            stderr.trim().to_string()
+        } else {
+            stdout.trim().to_string()
+        };
+        if code != 0 {
+            return Ok(GitSyncResult {
+                ok: false,
+                message: if msg.is_empty() {
+                    "pull failed".to_string()
+                } else {
+                    msg
+                },
+            });
+        }
+        Ok(GitSyncResult {
+            ok: true,
+            message: if msg.is_empty() {
+                "拉取成功".to_string()
+            } else {
+                msg
+            },
+        })
+    }
+
+    // ── 暂存与放弃 ──
+
+    /// 暂存整个文件
+    pub fn stage_file(repo: &str, path: &str) -> Result<(), String> {
+        let (code, _, stderr) = Self::run_git(repo, &["add", "--", path], None);
+        if code != 0 {
+            return Err(stderr.trim().to_string());
+        }
+        Ok(())
+    }
+
+    /// 取消暂存整个文件
+    pub fn unstage_file(repo: &str, path: &str) -> Result<(), String> {
+        let (code, _, stderr) = Self::run_git(repo, &["restore", "--staged", "--", path], None);
+        if code != 0 {
+            return Err(stderr.trim().to_string());
+        }
+        Ok(())
+    }
+
+    /// 暂存全部变更
+    pub fn stage_all(repo: &str) -> Result<(), String> {
+        let (code, _, stderr) = Self::run_git(repo, &["add", "-A"], None);
+        if code != 0 {
+            return Err(stderr.trim().to_string());
+        }
+        Ok(())
+    }
+
+    /// 取消暂存全部（保留工作区改动）
+    pub fn unstage_all(repo: &str) -> Result<(), String> {
+        let (code, _, stderr) = Self::run_git(repo, &["reset"], None);
+        if code != 0 {
+            return Err(stderr.trim().to_string());
+        }
+        Ok(())
+    }
+
+    /// 放弃工作区改动（restore，仅 tracked 文件；untracked 不删除）
+    pub fn discard_changes(repo: &str, path: Option<&str>) -> Result<(), String> {
+        let mut args = vec!["restore"];
+        match path {
+            Some(p) if !p.trim().is_empty() => {
+                args.push("--");
+                args.push(p.trim());
+            }
+            _ => {
+                args.push("--worktree");
+                args.push(".");
+            }
+        }
+        let (code, _, stderr) = Self::run_git(repo, &args, None);
+        if code != 0 {
+            return Err(stderr.trim().to_string());
+        }
+        Ok(())
+    }
+
+    // ── 提交历史 ──
+
+    /// 获取提交历史列表
+    pub fn log(repo: &str, limit: usize) -> Result<Vec<GitCommit>, String> {
+        let limit = if limit == 0 { 50 } else { limit.min(200) };
+        let fmt = "%H%x1f%h%x1f%an%x1f%at%x1f%s";
+        let n_arg = format!("-n {}", limit);
+        let fmt_arg = format!("--pretty=format:{}", fmt);
+        let args = vec![
+            "log",
+            n_arg.as_str(),
+            fmt_arg.as_str(),
+        ];
+        let (code, stdout, stderr) = Self::run_git(repo, &args, None);
+        if code != 0 {
+            return Err(stderr.trim().to_string());
+        }
+        let mut commits = Vec::new();
+        for line in stdout.lines() {
+            let fields: Vec<&str> = line.split('\x1f').collect();
+            if fields.len() >= 5 {
+                commits.push(GitCommit {
+                    hash: fields[0].to_string(),
+                    short_hash: fields[1].to_string(),
+                    author: fields[2].to_string(),
+                    timestamp: fields[3].parse().unwrap_or(0),
+                    summary: fields[4].to_string(),
+                });
+            }
+        }
+        Ok(commits)
+    }
+
+    /// 查看某次提交的完整 diff
+    pub fn show(repo: &str, hash: &str) -> Result<String, String> {
+        let (code, stdout, stderr) = Self::run_git(
+            repo,
+            &["show", "--no-color", "--stat", hash],
+            None,
+        );
+        if code != 0 {
+            return Err(stderr.trim().to_string());
+        }
+        Ok(stdout)
     }
 }

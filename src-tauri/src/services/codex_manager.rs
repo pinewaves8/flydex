@@ -57,6 +57,11 @@ impl CodexManager {
         }
 
         args.push("--json".to_string());
+        // 使用 danger-full-access 沙箱：以真实用户权限运行，
+        // 使 AI 能完成 git 写操作（.git 写入在 Windows 沙箱隔离用户下不可行）。
+        // 安全兜底由 flydex 的 GUI 审批机制提供（后续迭代）。
+        args.push("--sandbox".to_string());
+        args.push("danger-full-access".to_string());
         args.push(command.clone());
 
         // Windows 上通过 cmd /c 启动

@@ -10,6 +10,7 @@ import {
   ChevronDown,
   ChevronRight,
   Clock,
+  FolderOpen,
 } from 'lucide-react'
 import { useEffect, useRef, useState } from 'react'
 
@@ -19,6 +20,7 @@ import { Markdown } from '@/components/ui/Markdown'
 import { sessionService } from '@/services/sessionService'
 import { useCodexStore } from '@/stores/useCodexStore'
 import { useProjectStore } from '@/stores/useProjectStore'
+import { useWorkspaceStore } from '@/stores/useWorkspaceStore'
 import type { CodexStatus } from '@/types/codex'
 import type { CodexMessage } from '@/types/codexJson'
 
@@ -136,7 +138,6 @@ export function ChatPanel() {
   const { status, output, messages, exitCode, threadId, usage, run, clear, newSession } =
     useCodexSession()
   const [command, setCommand] = useState('')
-  const [workdir, setWorkdir] = useState('')
   const messagesRef = useRef<HTMLDivElement>(null)
   const saveTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
 
@@ -146,9 +147,12 @@ export function ChatPanel() {
   const sessions = useProjectStore((s) => s.sessions)
   const loadSession = useCodexStore((s) => s.loadSession)
   const setCurrentSession = useProjectStore((s) => s.setCurrentSession)
+  const workspaceCwd = useWorkspaceStore((s) => s.cwd)
 
   // 当前会话标题
   const currentSessionTitle = sessions.find((s) => s.id === currentSessionId)?.title ?? ''
+  // 当前会话绑定的工作目录（遵循 codex：会话绑定创建时的 cwd）
+  const currentSessionWorkdir = sessions.find((s) => s.id === currentSessionId)?.workdir ?? ''
 
   // 切换会话时加载会话数据
   useEffect(() => {
@@ -199,11 +203,11 @@ export function ChatPanel() {
     const cmd = command.trim()
     setCommand('')
 
-    // 如果没有当前会话，自动创建一个
+    // 如果没有当前会话，自动创建一个（绑定全局工作目录）
     let sessionId = currentSessionId
     if (!sessionId) {
       const title = cmd.length > 30 ? cmd.slice(0, 30) + '…' : cmd
-      sessionId = await createSession(title, workdir.trim() || 'C:\\llm\\flydex')
+      sessionId = await createSession(title, workspaceCwd)
       setCurrentSession(sessionId)
     } else if (currentSessionTitle === '未命名会话' || currentSessionTitle === '') {
       // 发送第一条消息时自动重命名
@@ -211,7 +215,8 @@ export function ChatPanel() {
       await renameSession(sessionId, title)
     }
 
-    run(cmd, workdir.trim() || undefined)
+    // 遵循 codex：resume 会话用会话绑定的 cwd，新会话用全局 cwd
+    run(cmd, currentSessionWorkdir || workspaceCwd)
   }
 
   const handleKeyDown = (e: React.KeyboardEvent) => {
@@ -313,14 +318,19 @@ export function ChatPanel() {
 
       {/* 输入区域 */}
       <div className="border-t border-border p-3">
-        <div className="mb-2 flex gap-2">
-          <input
-            type="text"
-            value={workdir}
-            onChange={(e) => setWorkdir(e.target.value)}
-            placeholder="Working directory (optional)"
-            className="flex-1 rounded border border-input bg-background px-2 py-1 text-xs text-foreground placeholder:text-muted-foreground focus:outline-none focus:ring-1 focus:ring-ring"
-          />
+        <div className="mb-2 flex items-center gap-1.5">
+          <FolderOpen className="h-3 w-3 shrink-0 text-muted-foreground" />
+          <span
+            className="truncate font-mono text-[11px] text-muted-foreground"
+            title={currentSessionWorkdir || workspaceCwd}
+          >
+            {currentSessionWorkdir || workspaceCwd}
+          </span>
+          {currentSessionWorkdir && currentSessionWorkdir !== workspaceCwd && (
+            <span className="shrink-0 text-[10px] text-muted-foreground/60">
+              （会话目录，非当前工作目录）
+            </span>
+          )}
         </div>
         <div className="flex gap-2">
           <textarea
