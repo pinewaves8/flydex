@@ -37,10 +37,36 @@ pub async fn run_codex(
     .map_err(|e| format!("Task join error: {}", e))?
 }
 
-/// 审批响应：向运行中的 codex 写入 y/n
+/// 审批响应：向运行中的 codex 写入 y/n，并记录审批历史
 #[command]
-pub fn approve_codex(run_id: String, approve: bool) -> Result<(), String> {
-    CodexManager::approve(&run_id, approve)
+pub fn approve_codex(
+    run_id: String,
+    approve: bool,
+    command: Option<String>,
+) -> Result<(), String> {
+    // 写入审批响应
+    CodexManager::approve(&run_id, approve)?;
+    // 记录审批历史（command 由前端从 approval_request item 传入）
+    if let Some(cmd) = command {
+        let record = crate::services::security::ApprovalRecord {
+            id: format!(
+                "ap-{}",
+                std::time::SystemTime::now()
+                    .duration_since(std::time::UNIX_EPOCH)
+                    .map(|d| d.as_millis())
+                    .unwrap_or(0)
+            ),
+            timestamp: std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .map(|d| d.as_secs() as i64)
+                .unwrap_or(0),
+            command: cmd,
+            approved: approve,
+            run_id,
+        };
+        let _ = crate::services::security::SecurityService::add_history(record);
+    }
+    Ok(())
 }
 
 /// 停止运行中的 codex

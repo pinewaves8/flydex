@@ -29,9 +29,13 @@ export async function runCodex(
   return runId
 }
 
-/** 审批响应：向运行中的 codex 写入 y/n */
-export async function approveCodex(runId: string, approve: boolean): Promise<void> {
-  await invoke('approve_codex', { runId, approve })
+/** 审批响应：向运行中的 codex 写入 y/n（command 用于记录审批历史） */
+export async function approveCodex(
+  runId: string,
+  approve: boolean,
+  command?: string,
+): Promise<void> {
+  await invoke('approve_codex', { runId, approve, command: command ?? null })
 }
 
 /** 停止运行中的 codex */

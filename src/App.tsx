@@ -1,5 +1,3 @@
-import { Settings } from 'lucide-react'
-import type { Terminal as TerminalIcon } from 'lucide-react'
 import { useEffect } from 'react'
 
 import { Sidebar } from '@/components/layout/Sidebar'
@@ -7,30 +5,11 @@ import { TitleBar } from '@/components/layout/TitleBar'
 import { ChatPanel } from '@/features/codex'
 import { GitPanel } from '@/features/git'
 import { ProjectsPanel } from '@/features/project'
+import { SettingsPanel } from '@/features/security/SettingsPanel'
 import { TerminalPanel } from '@/features/terminal'
 import { useProjectStore } from '@/stores/useProjectStore'
 import { useUIStore } from '@/stores/useUIStore'
 import { useWorkspaceStore } from '@/stores/useWorkspaceStore'
-
-function PlaceholderView({
-  icon: Icon,
-  title,
-  description,
-}: {
-  icon: typeof TerminalIcon
-  title: string
-  description: string
-}) {
-  return (
-    <div className="flex h-full items-center justify-center">
-      <div className="text-center">
-        <Icon className="mx-auto mb-3 h-12 w-12 text-muted-foreground/50" />
-        <h2 className="mb-1 text-lg font-medium text-foreground">{title}</h2>
-        <p className="text-sm text-muted-foreground">{description}</p>
-      </div>
-    </div>
-  )
-}
 
 function App() {
   const { currentView } = useUIStore()
@@ -59,13 +38,7 @@ function App() {
           {currentView === 'projects' && <ProjectsPanel />}
           {currentView === 'terminal' && <TerminalPanel />}
           {currentView === 'git' && <GitPanel />}
-          {currentView === 'settings' && (
-            <PlaceholderView
-              icon={Settings}
-              title="Settings"
-              description="Application settings coming soon"
-            />
-          )}
+          {currentView === 'settings' && <SettingsPanel />}
         </section>
       </main>
     </div>

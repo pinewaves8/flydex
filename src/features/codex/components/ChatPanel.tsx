@@ -22,9 +22,11 @@ import { Markdown } from '@/components/ui/Markdown'
 import { sessionService } from '@/services/sessionService'
 import { useCodexStore } from '@/stores/useCodexStore'
 import { useProjectStore } from '@/stores/useProjectStore'
+import { useSecurityStore } from '@/stores/useSecurityStore'
 import { useWorkspaceStore } from '@/stores/useWorkspaceStore'
 import type { CodexStatus } from '@/types/codex'
 import type { CodexMessage } from '@/types/codexJson'
+import { approvalLabel } from '@/types/security'
 
 const STATUS_CONFIG: Record<CodexStatus, { label: string; icon: React.ReactNode; color: string }> =
   {
@@ -170,6 +172,7 @@ export function ChatPanel() {
   const setCurrentSession = useProjectStore((s) => s.setCurrentSession)
   const workspaceCwd = useWorkspaceStore((s) => s.cwd)
   const streaming = useCodexStore((s) => s.streaming)
+  const securityConfig = useSecurityStore((s) => s.config)
 
   // 打字机推进：逐字追加显示（16ms/次，每次 3 字符）
   useEffect(() => {
@@ -393,9 +396,14 @@ export function ChatPanel() {
       <div className="border-t border-border p-3">
         {approval && (
           <div className="mb-2 rounded border border-amber-500/40 bg-amber-500/10 p-3">
-            <div className="flex items-center gap-1.5 text-xs font-medium text-amber-300">
-              <ShieldAlert className="h-3.5 w-3.5" />
-              需要审批
+            <div className="flex items-center justify-between">
+              <div className="flex items-center gap-1.5 text-xs font-medium text-amber-300">
+                <ShieldAlert className="h-3.5 w-3.5" />
+                需要审批
+              </div>
+              <span className="text-[10px] text-amber-300/60">
+                策略：{approvalLabel(securityConfig?.approval_policy ?? 'on-request')}
+              </span>
             </div>
             <pre className="mt-1.5 max-h-32 overflow-auto whitespace-pre-wrap rounded bg-black/30 p-2 font-mono text-xs text-amber-200">
               {approval.command || approval.description || '未知操作'}

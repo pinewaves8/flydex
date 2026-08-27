@@ -6,6 +6,7 @@ use std::time::Duration;
 
 use tauri::{AppHandle, Emitter};
 
+use crate::services::security::SecurityService;
 use crate::types::codex::CodexEvent;
 
 /// Codex 执行模式
@@ -73,6 +74,32 @@ fn clean_line(raw: &str) -> String {
 pub struct CodexManager;
 
 impl CodexManager {
+    /// 预配置 git safe.directory
+    ///
+    /// workspace-write 沙箱下，AI 执行 git 命令会因目录所有权检查报
+    /// "detected dubious ownership"，导致 git 操作失败。这里在启动 codex 前
+    /// 用真实用户权限预先信任工作目录（与 codex 沙箱无关，属于 git 客户端层面）。
+    fn ensure_git_safe_directory(workdir: Option<&str>) {
+        let add = |path: &str| {
+            let _ = std::process::Command::new("git")
+                .args(["config", "--global", "--add", "safe.directory", path])
+                .status();
+        };
+        if let Some(dir) = workdir {
+            let dir = dir.trim();
+            if !dir.is_empty() {
+                // 先移除旧条目避免累积，再添加
+                let _ = std::process::Command::new("git")
+                    .args(["config", "--global", "--unset-all", "safe.directory", dir])
+                    .status();
+                add(dir);
+                return;
+            }
+        }
+        // 无明确 workdir 时兜底信任所有目录
+        add("*");
+    }
+
     /// 执行一条 codex 命令（阻塞到进程结束，输出流式推送）
     ///
     /// # Arguments
@@ -104,20 +131,14 @@ impl CodexManager {
             }
         }
         args.push("--json".to_string());
-        // danger-full-access：以真实用户权限运行，使 AI 能完成 git 写操作，
-        // 且无沙箱隔离用户的属主问题（workspace-write 会产生 dubious ownership）。
-        // 安全兜底由前端的实时命令看板 + 停止按钮 + 审批事件处理提供。
-        // 注意：`codex exec resume` 子命令不支持 `--sandbox`，需用等效的
-        // `--dangerously-bypass-approvals-and-sandbox`（跳过确认 + 无沙箱）。
-        match mode {
-            CodexExecMode::Exec => {
-                args.push("--sandbox".to_string());
-                args.push("danger-full-access".to_string());
-            }
-            CodexExecMode::Resume => {
-                args.push("--dangerously-bypass-approvals-and-sandbox".to_string());
-            }
-        }
+        // 从安全配置读取沙箱模式与审批策略，统一用 `-c` 覆盖（exec 与 resume 均支持）。
+        // 沙箱：read-only / workspace-write / danger-full-access（真实用户权限，AI 可完成 git 写操作）
+        // 审批：untrusted / on-request / never（模型按需请求时触发 approval_request 事件 → 前端审批卡）
+        let sec = SecurityService::load();
+        args.push("-c".to_string());
+        args.push(format!("sandbox_mode=\"{}\"", sec.sandbox_mode.as_codex()));
+        args.push("-c".to_string());
+        args.push(format!("approval_policy=\"{}\"", sec.approval_policy.as_codex()));
         args.push(command.clone());
 
         // 创建伪终端
@@ -145,6 +166,9 @@ impl CodexManager {
         if let Some(dir) = &workdir {
             cb.cwd(dir);
         }
+
+        // 预配置 git safe.directory，避免 workspace-write 下 AI 的 git 操作失败
+        Self::ensure_git_safe_directory(workdir.as_deref());
 
         let child = pair
             .slave

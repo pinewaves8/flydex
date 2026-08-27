@@ -3,6 +3,7 @@ import { useCallback, useEffect } from 'react'
 
 import { approveCodex, runCodex, stopCodex } from '@/services/codex'
 import { useCodexStore, type CodexApproval } from '@/stores/useCodexStore'
+import { useSecurityStore } from '@/stores/useSecurityStore'
 import type { CodexEvent } from '@/types/codex'
 import type { CodexJsonEvent, CodexItem } from '@/types/codexJson'
 
@@ -221,12 +222,15 @@ export function useCodexSession() {
     const approvalItem = store.approval
     if (!runId || !approvalItem) return
     try {
-      await approveCodex(runId, approve)
+      const cmd = approvalItem.command || approvalItem.description || ''
+      await approveCodex(runId, approve, cmd)
       store.setApproval(null)
       store.appendMessage({
         kind: 'system',
         content: approve ? '▸ 已允许该操作' : '▸ 已拒绝该操作',
       })
+      // 刷新安全设置里的审批历史
+      void useSecurityStore.getState().load()
     } catch (err) {
       store.appendOutput({ text: `审批写入失败: ${String(err)}`, kind: 'stderr' })
     }

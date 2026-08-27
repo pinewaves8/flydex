@@ -14,6 +14,9 @@ use commands::git::{
     git_stage_hunk, git_status, git_unstage_all, git_unstage_file, git_unstage_hunk,
 };
 use commands::project::{create_project, delete_project, list_projects, update_project};
+use commands::security::{
+    clear_approval_history, get_security, record_approval, set_approval_policy, set_sandbox_mode,
+};
 use commands::session::{
     create_session, delete_session, list_sessions, load_session, rename_session, save_session,
 };
@@ -40,6 +43,12 @@ pub fn run() {
             save_session,
             delete_session,
             rename_session,
+            // security
+            get_security,
+            set_sandbox_mode,
+            set_approval_policy,
+            record_approval,
+            clear_approval_history,
             // git
             git_status,
             git_branches,
