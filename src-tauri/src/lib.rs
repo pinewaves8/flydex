@@ -6,7 +6,7 @@ mod services;
 mod types;
 mod utils;
 
-use commands::codex::run_codex;
+use commands::codex::{approve_codex, run_codex, stop_codex};
 use commands::git::{
     git_add_remote, git_branches, git_checkout, git_commit, git_create_branch, git_delete_branch,
     git_diff, git_diff_cached, git_discard_changes, git_fetch, git_log, git_pull, git_push,
@@ -26,6 +26,8 @@ pub fn run() {
         .plugin(tauri_plugin_dialog::init())
         .invoke_handler(tauri::generate_handler![
             run_codex,
+            approve_codex,
+            stop_codex,
             // project
             list_projects,
             create_project,

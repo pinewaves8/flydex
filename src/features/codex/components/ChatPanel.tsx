@@ -11,6 +11,8 @@ import {
   ChevronRight,
   Clock,
   FolderOpen,
+  Square,
+  ShieldAlert,
 } from 'lucide-react'
 import { useEffect, useRef, useState } from 'react'
 
@@ -46,6 +48,9 @@ const STATUS_CONFIG: Record<CodexStatus, { label: string; icon: React.ReactNode;
 
 function MessageCard({ message }: { message: CodexMessage }) {
   const [expanded, setExpanded] = useState(true)
+  // 打字机流式状态：若该消息正在逐字显示，用已渲染文本
+  const streaming = useCodexStore((s) => s.streaming)
+  const isStreaming = streaming?.id === message.id
 
   const kindStyles: Record<string, string> = {
     agent: 'border-l-2 border-green-500 bg-green-500/5 pl-3',
@@ -103,7 +108,7 @@ function MessageCard({ message }: { message: CodexMessage }) {
         {expanded && (
           <div className="space-y-1">
             <div className="text-sm text-foreground">{message.content}</div>
-            {message.toolArgs && (
+            {message.toolArgs != null && (
               <pre className="overflow-x-auto rounded bg-black/30 p-2 text-xs text-muted-foreground">
                 {JSON.stringify(message.toolArgs, null, 2)}
               </pre>
@@ -126,7 +131,9 @@ function MessageCard({ message }: { message: CodexMessage }) {
         </span>
       </div>
       {message.kind === 'agent' ? (
-        <Markdown content={message.content} />
+        <Markdown
+          content={isStreaming ? streaming.full.slice(0, streaming.shown) : message.content}
+        />
       ) : (
         <div className="whitespace-pre-wrap text-sm text-red-300">{message.content}</div>
       )}
@@ -135,11 +142,25 @@ function MessageCard({ message }: { message: CodexMessage }) {
 }
 
 export function ChatPanel() {
-  const { status, output, messages, exitCode, threadId, usage, run, clear, newSession } =
-    useCodexSession()
+  const {
+    status,
+    output,
+    messages,
+    exitCode,
+    threadId,
+    usage,
+    runningCommands,
+    approval,
+    run,
+    stop,
+    respondApproval,
+    clear,
+    newSession,
+  } = useCodexSession()
   const [command, setCommand] = useState('')
   const messagesRef = useRef<HTMLDivElement>(null)
   const saveTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
+  const inputRef = useRef<HTMLTextAreaElement>(null)
 
   const currentSessionId = useProjectStore((s) => s.currentSessionId)
   const createSession = useProjectStore((s) => s.createSession)
@@ -148,6 +169,20 @@ export function ChatPanel() {
   const loadSession = useCodexStore((s) => s.loadSession)
   const setCurrentSession = useProjectStore((s) => s.setCurrentSession)
   const workspaceCwd = useWorkspaceStore((s) => s.cwd)
+  const streaming = useCodexStore((s) => s.streaming)
+
+  // 打字机推进：逐字追加显示（16ms/次，每次 3 字符）
+  useEffect(() => {
+    if (!streaming) return
+    if (streaming.shown >= streaming.full.length) {
+      useCodexStore.getState().setStreaming(null)
+      return
+    }
+    const timer = setTimeout(() => {
+      useCodexStore.getState().advanceStream(3)
+    }, 16)
+    return () => clearTimeout(timer)
+  }, [streaming])
 
   // 当前会话标题
   const currentSessionTitle = sessions.find((s) => s.id === currentSessionId)?.title ?? ''
@@ -191,17 +226,26 @@ export function ChatPanel() {
     }
   }, [messages, currentSessionId])
 
-  // 自动滚动到底部
+  // 自动滚动到底部（消息变化或打字机推进时）
   useEffect(() => {
     if (messagesRef.current) {
       messagesRef.current.scrollTop = messagesRef.current.scrollHeight
     }
-  }, [messages])
+  }, [messages, streaming?.shown])
+
+  // 运行结束时把焦点还给输入框（便于连续对话）
+  useEffect(() => {
+    if (status === 'done' || status === 'error') {
+      inputRef.current?.focus()
+    }
+  }, [status])
 
   const handleRun = async () => {
     if (!command.trim() || status === 'running') return
     const cmd = command.trim()
     setCommand('')
+    // 发送后保持焦点在输入框，便于继续输入下一条
+    requestAnimationFrame(() => inputRef.current?.focus())
 
     // 如果没有当前会话，自动创建一个（绑定全局工作目录）
     let sessionId = currentSessionId
@@ -247,6 +291,16 @@ export function ChatPanel() {
           )}
         </div>
         <div className="flex items-center gap-1">
+          {status === 'running' && (
+            <button
+              onClick={stop}
+              className="flex items-center gap-1 rounded bg-red-600/15 px-2 py-1 text-xs text-red-400 hover:bg-red-600/25"
+              title="Stop current run"
+            >
+              <Square className="h-3 w-3" />
+              Stop
+            </button>
+          )}
           <button
             onClick={newSession}
             disabled={status === 'running'}
@@ -266,6 +320,25 @@ export function ChatPanel() {
           </button>
         </div>
       </div>
+
+      {/* 实时命令看板 */}
+      {runningCommands.length > 0 && (
+        <div className="border-b border-border bg-muted/20 px-4 py-2">
+          <div className="mb-1 text-[10px] uppercase tracking-wide text-muted-foreground">
+            Running commands
+          </div>
+          <div className="space-y-1">
+            {runningCommands.map((c) => (
+              <div key={c.id} className="flex items-center gap-2 font-mono text-xs text-blue-300">
+                <Loader2 className="h-3 w-3 shrink-0 animate-spin" />
+                <span className="truncate" title={c.command}>
+                  {c.command}
+                </span>
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
 
       {/* 消息区域 */}
       <div ref={messagesRef} className="flex-1 overflow-y-auto p-4">
@@ -318,6 +391,31 @@ export function ChatPanel() {
 
       {/* 输入区域 */}
       <div className="border-t border-border p-3">
+        {approval && (
+          <div className="mb-2 rounded border border-amber-500/40 bg-amber-500/10 p-3">
+            <div className="flex items-center gap-1.5 text-xs font-medium text-amber-300">
+              <ShieldAlert className="h-3.5 w-3.5" />
+              需要审批
+            </div>
+            <pre className="mt-1.5 max-h-32 overflow-auto whitespace-pre-wrap rounded bg-black/30 p-2 font-mono text-xs text-amber-200">
+              {approval.command || approval.description || '未知操作'}
+            </pre>
+            <div className="mt-2 flex gap-2">
+              <button
+                onClick={() => respondApproval(true)}
+                className="rounded bg-green-600 px-3 py-1 text-xs font-medium text-white hover:bg-green-500"
+              >
+                允许
+              </button>
+              <button
+                onClick={() => respondApproval(false)}
+                className="rounded bg-red-600 px-3 py-1 text-xs font-medium text-white hover:bg-red-500"
+              >
+                拒绝
+              </button>
+            </div>
+          </div>
+        )}
         <div className="mb-2 flex items-center gap-1.5">
           <FolderOpen className="h-3 w-3 shrink-0 text-muted-foreground" />
           <span
@@ -334,17 +432,19 @@ export function ChatPanel() {
         </div>
         <div className="flex gap-2">
           <textarea
+            ref={inputRef}
             value={command}
             onChange={(e) => setCommand(e.target.value)}
             onKeyDown={handleKeyDown}
             placeholder={
-              threadId
-                ? 'Continue conversation... (Enter to send, Shift+Enter for newline)'
-                : 'Enter your message... (Enter to send, Shift+Enter for newline)'
+              status === 'running'
+                ? 'Waiting for response... (type your next message)'
+                : threadId
+                  ? 'Continue conversation... (Enter to send, Shift+Enter for newline)'
+                  : 'Enter your message... (Enter to send, Shift+Enter for newline)'
             }
-            disabled={status === 'running'}
             rows={2}
-            className="flex-1 resize-none rounded border border-input bg-background px-3 py-2 text-sm text-foreground placeholder:text-muted-foreground focus:outline-none focus:ring-1 focus:ring-ring disabled:opacity-50"
+            className="flex-1 resize-none rounded border border-input bg-background px-3 py-2 text-sm text-foreground placeholder:text-muted-foreground focus:outline-none focus:ring-1 focus:ring-ring"
           />
           <button
             onClick={handleRun}

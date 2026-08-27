@@ -21,6 +21,8 @@ tokio = { version = "1", features = ["full"] }
 thiserror = "1"
 dirs = "5"
 tauri-plugin-dialog = "2.7.2"
+# PTY 伪终端：给 codex 挂 TTY 强制流式输出（Windows conpty / macOS & Linux pty）
+portable-pty = "0.8"
 
 [features]
 default = ["custom-protocol"]

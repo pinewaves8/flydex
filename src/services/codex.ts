@@ -15,12 +15,26 @@ export async function runCodex(
     workdir?: string
     mode?: CodexExecMode
     threadId?: string
+    runId?: string
   },
-): Promise<void> {
+): Promise<string> {
+  const runId = options?.runId ?? crypto.randomUUID()
   await invoke('run_codex', {
     command,
     workdir: options?.workdir ?? null,
     mode: options?.mode ?? null,
     threadId: options?.threadId ?? null,
+    runId,
   })
+  return runId
+}
+
+/** 审批响应：向运行中的 codex 写入 y/n */
+export async function approveCodex(runId: string, approve: boolean): Promise<void> {
+  await invoke('approve_codex', { runId, approve })
+}
+
+/** 停止运行中的 codex */
+export async function stopCodex(runId: string): Promise<void> {
+  await invoke('stop_codex', { runId })
 }

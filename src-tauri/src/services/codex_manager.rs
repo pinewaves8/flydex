@@ -1,11 +1,12 @@
-use std::io::{BufRead, BufReader};
-use std::process::{Command, Stdio};
-use std::time::{Duration, Instant};
+use portable_pty::{native_pty_system, Child, CommandBuilder, PtySize};
+use std::collections::HashMap;
+use std::io::{BufRead, BufReader, Write};
+use std::sync::{Arc, Mutex, OnceLock};
+use std::time::Duration;
 
 use tauri::{AppHandle, Emitter};
 
 use crate::types::codex::CodexEvent;
-use crate::types::codex_json::CodexJsonEvent;
 
 /// Codex 执行模式
 #[derive(Debug, Clone, Copy)]
@@ -16,37 +17,84 @@ pub enum CodexExecMode {
     Resume,
 }
 
-/// Codex CLI 子进程管理器
+/// 运行中的 codex 进程句柄（供审批写入与停止）
+pub struct ActiveCodex {
+    /// 伪终端 master 写端（写 "y\n" / "n\n" 响应审批）
+    pub writer: Box<dyn Write + Send>,
+    /// 子进程句柄（用于停止/超时 kill）
+    pub child: Arc<Mutex<Box<dyn Child + Send + Sync>>>,
+}
+
+/// 全局运行中 codex 注册表（run_id -> ActiveCodex）
+static ACTIVE: OnceLock<Mutex<HashMap<String, ActiveCodex>>> = OnceLock::new();
+
+fn active() -> &'static Mutex<HashMap<String, ActiveCodex>> {
+    ACTIVE.get_or_init(|| Mutex::new(HashMap::new()))
+}
+
+/// 清理 conpty/ANSI 控制序列，恢复纯文本
 ///
-/// 通过 `codex exec` 或 `codex exec resume` 执行用户指令，
-/// 解析 JSONL 输出并通过 Tauri 事件推送到前端。
+/// 处理：OSC 窗口标题（ESC ] ... BEL）、CSI（ESC [ ... 字母）、CR。
+fn clean_line(raw: &str) -> String {
+    let mut out = String::with_capacity(raw.len());
+    let mut chars = raw.chars();
+    while let Some(c) = chars.next() {
+        match c {
+            '\u{1b}' => match chars.next() {
+                Some(']') => {
+                    // OSC 序列：跳到 BEL（内容可能含字母，如路径 C:\...）
+                    for n in chars.by_ref() {
+                        if n == '\u{7}' {
+                            break;
+                        }
+                    }
+                }
+                Some('[') => {
+                    // CSI 序列：跳到终止字母
+                    for n in chars.by_ref() {
+                        if n.is_ascii_alphabetic() {
+                            break;
+                        }
+                    }
+                }
+                _ => {}
+            },
+            '\r' => {}
+            c => out.push(c),
+        }
+    }
+    out
+}
+
+/// Codex CLI 子进程管理器（PTY 伪终端流式）
+///
+/// 通过 portable-pty 给 codex 挂 TTY，强制行缓冲流式输出；
+/// 解析 JSONL 事件推送到前端；支持审批（写 stdin）与停止（kill）。
 pub struct CodexManager;
 
 impl CodexManager {
-    /// 执行一条 codex 命令
+    /// 执行一条 codex 命令（阻塞到进程结束，输出流式推送）
     ///
     /// # Arguments
     /// * `app` - Tauri 应用句柄
     /// * `command` - 用户指令文本
     /// * `workdir` - 工作目录（可选）
     /// * `mode` - 执行模式（Exec 首轮 / Resume 恢复会话）
-    /// * `thread_id` - 恢复指定会话（可选，Resume 模式下不传则恢复最近一次）
+    /// * `thread_id` - 恢复指定会话（可选）
+    /// * `run_id` - 本次运行的唯一标识（审批/停止用）
     pub fn run_command(
         app: AppHandle,
         command: String,
         workdir: Option<String>,
         mode: CodexExecMode,
         thread_id: Option<String>,
+        run_id: String,
     ) -> Result<(), String> {
-        // 构建命令参数
+        // 构建 codex 参数
         let mut args: Vec<String> = vec!["exec".to_string()];
-
         match mode {
-            CodexExecMode::Exec => {
-                // codex exec --json <command>
-            }
+            CodexExecMode::Exec => {}
             CodexExecMode::Resume => {
-                // codex exec resume [thread_id] --json <command>
                 args.push("resume".to_string());
                 if let Some(tid) = &thread_id {
                     args.push(tid.clone());
@@ -55,107 +103,128 @@ impl CodexManager {
                 }
             }
         }
-
         args.push("--json".to_string());
-        // 使用 danger-full-access 沙箱：以真实用户权限运行，
-        // 使 AI 能完成 git 写操作（.git 写入在 Windows 沙箱隔离用户下不可行）。
-        // 安全兜底由 flydex 的 GUI 审批机制提供（后续迭代）。
-        args.push("--sandbox".to_string());
-        args.push("danger-full-access".to_string());
+        // danger-full-access：以真实用户权限运行，使 AI 能完成 git 写操作，
+        // 且无沙箱隔离用户的属主问题（workspace-write 会产生 dubious ownership）。
+        // 安全兜底由前端的实时命令看板 + 停止按钮 + 审批事件处理提供。
+        // 注意：`codex exec resume` 子命令不支持 `--sandbox`，需用等效的
+        // `--dangerously-bypass-approvals-and-sandbox`（跳过确认 + 无沙箱）。
+        match mode {
+            CodexExecMode::Exec => {
+                args.push("--sandbox".to_string());
+                args.push("danger-full-access".to_string());
+            }
+            CodexExecMode::Resume => {
+                args.push("--dangerously-bypass-approvals-and-sandbox".to_string());
+            }
+        }
         args.push(command.clone());
 
-        // Windows 上通过 cmd /c 启动
-        let mut cmd = if cfg!(windows) {
-            let mut c = Command::new("cmd");
-            c.arg("/c").arg("codex").args(&args);
+        // 创建伪终端
+        let pty_system = native_pty_system();
+        let pair = pty_system
+            .openpty(PtySize {
+                rows: 40,
+                cols: 160,
+                pixel_width: 0,
+                pixel_height: 0,
+            })
+            .map_err(|e| format!("Failed to open pty: {}", e))?;
+
+        // Windows 上通过 cmd /c 启动（codex 是 .cmd 批处理）
+        let mut cb = if cfg!(windows) {
+            let mut c = CommandBuilder::new("cmd.exe");
+            c.args(["/c", "codex"]);
             c
         } else {
-            let mut c = Command::new("codex");
-            c.args(&args);
-            c
+            CommandBuilder::new("codex")
         };
-
+        for a in &args {
+            cb.arg(a);
+        }
         if let Some(dir) = &workdir {
-            cmd.current_dir(dir);
+            cb.cwd(dir);
         }
 
-        cmd.stdin(Stdio::null());
-        cmd.stdout(Stdio::piped());
-        cmd.stderr(Stdio::piped());
+        let child = pair
+            .slave
+            .spawn_command(cb)
+            .map_err(|e| format!("Failed to spawn codex: {}", e))?;
+        drop(pair.slave);
 
-        let mut child = cmd
-            .spawn()
-            .map_err(|e| format!("Failed to spawn codex process: {}", e))?;
+        let pid = child.process_id().unwrap_or(0);
+        let child = Arc::new(Mutex::new(child));
 
-        let pid = child.id();
+        let reader = pair
+            .master
+            .try_clone_reader()
+            .map_err(|e| format!("Failed to clone pty reader: {}", e))?;
+        let writer = pair
+            .master
+            .take_writer()
+            .map_err(|e| format!("Failed to take pty writer: {}", e))?;
 
-        // 推送进程启动事件
+        // 注册运行句柄
+        active().lock().unwrap().insert(
+            run_id.clone(),
+            ActiveCodex {
+                writer,
+                child: child.clone(),
+            },
+        );
+
         app.emit("codex-output", CodexEvent::Started { pid })
             .map_err(|e| format!("Failed to emit started event: {}", e))?;
 
-        let stdout = child
-            .stdout
-            .take()
-            .ok_or("Failed to capture codex stdout")?;
-        let stderr = child
-            .stderr
-            .take()
-            .ok_or("Failed to capture codex stderr")?;
-
-        // 线程：读取 stdout（JSONL）并推送结构化事件
-        let app_stdout = app.clone();
-        std::thread::spawn(move || {
-            let reader = BufReader::new(stdout);
-            for line in reader.lines() {
-                if let Ok(line) = line {
-                    if line.trim().is_empty() {
-                        continue;
-                    }
-                    match serde_json::from_str::<serde_json::Value>(&line) {
-                        Ok(json) => {
-                            let _ = app_stdout.emit("codex-output", CodexEvent::Json(json));
+        // 读线程：阻塞读 master（TTY 行缓冲 → 流式），过滤控制序列，解析 JSONL
+        let app_reader = app.clone();
+        let reader_thread = std::thread::spawn(move || {
+            let mut reader = BufReader::new(reader);
+            let mut line = String::new();
+            loop {
+                line.clear();
+                match reader.read_line(&mut line) {
+                    Ok(0) => break, // EOF（writer 释放/进程退出）
+                    Ok(_) => {
+                        let clean = clean_line(&line);
+                        if clean.trim().is_empty() {
+                            continue;
                         }
-                        Err(_) => {
-                            let _ = app_stdout.emit(
-                                "codex-output",
-                                CodexEvent::Output { text: line },
-                            );
+                        match serde_json::from_str::<serde_json::Value>(&clean) {
+                            Ok(json) => {
+                                let _ = app_reader.emit("codex-output", CodexEvent::Json(json));
+                            }
+                            Err(_) => {
+                                let _ = app_reader.emit("codex-output", CodexEvent::Output { text: clean });
+                            }
                         }
                     }
+                    Err(_) => break,
                 }
             }
         });
 
-        // 线程：读取 stderr（纯文本进度信息）
-        let app_stderr = app.clone();
-        std::thread::spawn(move || {
-            let reader = BufReader::new(stderr);
-            for line in reader.lines() {
-                if let Ok(line) = line {
-                    if !line.trim().is_empty() {
-                        let _ = app_stderr.emit(
-                            "codex-output",
-                            CodexEvent::Error { message: line },
-                        );
-                    }
-                }
-            }
-        });
-
-        // 轮询等待子进程结束，加 120 秒超时
-        let start = Instant::now();
+        // 主流程：轮询子进程退出（带 120s 超时兜底）
+        let start = std::time::Instant::now();
         let exit_code = loop {
-            match child.try_wait() {
-                Ok(Some(status)) => break status.code().unwrap_or(-1),
+            let mut guard = child.lock().unwrap();
+            match guard.try_wait() {
+                Ok(Some(status)) => {
+                    break if status.success() { 0 } else { status.exit_code() as i32 };
+                }
                 Ok(None) => {
+                    drop(guard);
                     if start.elapsed() > Duration::from_secs(120) {
-                        let _ = child.kill();
-                        let _ = child.wait();
+                        let mut g = child.lock().unwrap();
+                        let _ = g.kill();
                         break -1;
                     }
                     std::thread::sleep(Duration::from_millis(200));
                 }
-                Err(e) => return Err(format!("Failed to wait for codex process: {}", e)),
+                Err(_) => {
+                    drop(guard);
+                    break -1;
+                }
             }
         };
 
@@ -163,6 +232,36 @@ impl CodexManager {
         app.emit("codex-done", CodexEvent::Done { exit_code })
             .map_err(|e| format!("Failed to emit codex done event: {}", e))?;
 
+        // 从注册表移除（drop writer → master EOF → 读线程退出）
+        active().lock().unwrap().remove(&run_id);
+
+        // 等待读线程收尾
+        let _ = reader_thread.join();
+
         Ok(())
+    }
+
+    /// 审批响应：向运行中的 codex 写入 y/n
+    pub fn approve(run_id: &str, approve: bool) -> Result<(), String> {
+        let mut map = active().lock().unwrap();
+        let entry = map
+            .get_mut(run_id)
+            .ok_or_else(|| format!("No active codex for run_id: {}", run_id))?;
+        let resp = if approve { "y\n" } else { "n\n" };
+        entry
+            .writer
+            .write_all(resp.as_bytes())
+            .and_then(|_| entry.writer.flush())
+            .map_err(|e| format!("Failed to write approval: {}", e))
+    }
+
+    /// 停止运行中的 codex（kill 进程树）
+    pub fn stop(run_id: &str) -> Result<(), String> {
+        let mut map = active().lock().unwrap();
+        let entry = map
+            .get_mut(run_id)
+            .ok_or_else(|| format!("No active codex for run_id: {}", run_id))?;
+        let mut guard = entry.child.lock().unwrap();
+        guard.kill().map_err(|e| format!("Failed to kill codex: {}", e))
     }
 }

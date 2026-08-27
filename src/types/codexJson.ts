@@ -3,6 +3,7 @@
 export type CodexJsonEvent =
   | { type: 'thread.started'; thread_id: string }
   | { type: 'turn.started' }
+  | { type: 'item.started'; item: CodexItem }
   | { type: 'item.completed'; item: CodexItem }
   | { type: 'turn.completed'; usage?: CodexUsage }
 
@@ -23,7 +24,14 @@ export type CodexItem =
       command?: string
       description?: string
     }
-  | { id?: string; type: string; [key: string]: unknown }
+  | {
+      id?: string
+      type: 'command_execution'
+      command?: string
+      status?: 'in_progress' | 'completed'
+      aggregated_output?: string
+      exit_code?: number | null
+    }
 
 /** token 使用统计 */
 export interface CodexUsage {
