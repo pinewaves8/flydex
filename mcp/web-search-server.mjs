@@ -99,7 +99,7 @@ const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
  * 模型常把用户意图译成修饰词，这里生成精简版作为候选查询。
  */
 const NOISE_EN =
-  /\b(graduate|graduates|alumni|alumnus|student|students|undergraduate|information|info|profile|background|about|related|details|bio|career|achievements?|accomplishments?|research|interests?|homepage|website|page|results?|introduction|describe|tell|find|lookup)\b/gi;
+  /\b(graduate|graduates|alumni|alumnus|student|students|undergraduate|university|universities|college|colleges|information|info|profile|background|about|related|details|bio|career|achievements?|accomplishments?|research|interests?|homepage|website|page|results?|introduction|describe|tell|find|lookup)\b/gi;
 const NOISE_CN =
   /毕业生|校友|学生|信息|资料|背景|相关|人物|简介|成就|荣誉|经历|详情|搜索|结果|介绍|查找|查询|告诉/g;
 
@@ -152,17 +152,26 @@ async function fetchBing(query, count, mkt) {
 
 /** 抓取并解析 cn.bing 搜索结果（原查询 + 精简候选查询合并，按链接去重） */
 export async function bingSearch(query, count = MAX_RESULTS) {
-  const candidates = [query.trim()];
+  // 精简候选优先（更精准，如 "Jingtian Wu Cornell"），原始长查询排后
+  // 经验：bing 对带修饰词的长查询常返回"同名干扰"（如景甜），清洗后的核心查询才命中真人；
+  // 若原始查询在前，合并后 slice 会把精准结果截断掉。
   const simplified = simplifyQuery(query);
-  if (simplified) candidates.push(simplified);
+  const candidates = [];
+  if (simplified && simplified !== query.trim()) candidates.push(simplified);
+  candidates.push(query.trim());
 
   const unique = new Map();
-  for (const q of candidates) {
+  for (const q of [...new Set(candidates)]) {
     let results = [];
-    try {
-      results = await fetchBing(q, count, detectMkt(q));
-    } catch {
-      continue; // 单次失败不阻塞其他候选
+    // 单候选失败/空结果重试一次；候选之间加延迟避免 bing 对连续请求限流/降级
+    for (let attempt = 0; attempt < 2; attempt++) {
+      try {
+        results = await fetchBing(q, count, detectMkt(q));
+        if (results.length) break;
+      } catch {
+        // retry
+      }
+      await sleep(400);
     }
     for (const r of results) {
       if (!unique.has(r.link)) unique.set(r.link, r);
