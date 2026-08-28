@@ -95,6 +95,17 @@ export function useCodexSession() {
             toolName: item.name,
             toolArgs: item.arguments,
           })
+        } else if (item.type === 'mcp_tool_call') {
+          // MCP 工具调用：简洁展示（server·tool + 参数），不暴露巨大的 result JSON
+          const toolName = item.server && item.tool ? `${item.server} · ${item.tool}` : 'MCP tool'
+          const failed = item.status === 'failed'
+          const errMsg = item.error?.message ? `：${item.error.message}` : ''
+          store.appendMessage({
+            kind: 'tool',
+            content: `调用工具: ${toolName}${failed ? `（失败${errMsg}）` : '（完成）'}`,
+            toolName,
+            toolArgs: item.arguments,
+          })
         } else if (item.type === 'command_execution') {
           handleCommandItem(item)
         } else if (item.type === 'approval_request') {

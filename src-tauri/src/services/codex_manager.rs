@@ -272,31 +272,55 @@ impl CodexManager {
         let turn_done_reader = turn_done.clone();
         let reader_thread = std::thread::spawn(move || {
             let mut reader = BufReader::new(reader);
+            // 累积解析：PTY 按终端宽度（160 列）会把长 JSON（如 mcp_tool_call 的大结果）
+            // wrap 拆成多物理行。codex --json 的 JSON 一律以 `{` 开头，因此以该特征判断：
+            // 新行以 `{` 开头 → 上一段累积已完整 → 尝试解析并 emit；否则为 wrap 延续/普通文本，累积。
+            let mut pending = String::new();
             let mut line = String::new();
+            // 处理一段累积缓冲：尝试作为 JSON（去掉 wrap 换行）解析，失败则按普通文本输出
+            let mut emit_pending = |buf: &str| {
+                if buf.is_empty() {
+                    return;
+                }
+                let compact: String = buf.chars().filter(|&c| c != '\n').collect();
+                match serde_json::from_str::<serde_json::Value>(&compact) {
+                    Ok(json) => {
+                        if json.get("type").and_then(|v| v.as_str()) == Some("turn.completed") {
+                            turn_done_reader.store(true, std::sync::atomic::Ordering::Relaxed);
+                        }
+                        let _ = app_reader.emit("codex-output", CodexEvent::Json(json));
+                    }
+                    Err(_) => {
+                        let _ = app_reader
+                            .emit("codex-output", CodexEvent::Output { text: buf.to_string() });
+                    }
+                }
+            };
             loop {
                 line.clear();
                 match reader.read_line(&mut line) {
                     Ok(0) => break, // EOF（writer 释放/进程退出）
                     Ok(_) => {
                         let clean = clean_line(&line);
-                        if clean.trim().is_empty() {
+                        let trimmed = clean.trim();
+                        if trimmed.is_empty() {
                             continue;
                         }
-                        match serde_json::from_str::<serde_json::Value>(&clean) {
-                            Ok(json) => {
-                                if json.get("type").and_then(|v| v.as_str()) == Some("turn.completed") {
-                                    turn_done_reader.store(true, std::sync::atomic::Ordering::Relaxed);
-                                }
-                                let _ = app_reader.emit("codex-output", CodexEvent::Json(json));
-                            }
-                            Err(_) => {
-                                let _ = app_reader.emit("codex-output", CodexEvent::Output { text: clean });
-                            }
+                        if trimmed.starts_with('{') {
+                            // 新 JSON 起点：先解析并清空已有累积
+                            emit_pending(&pending);
+                            pending.clear();
+                        } else if !pending.is_empty() {
+                            // wrap 延续或普通文本段：保留换行追加
+                            pending.push('\n');
                         }
+                        pending.push_str(trimmed);
                     }
                     Err(_) => break,
                 }
             }
+            // 进程退出时若有残留累积，原样输出避免吞数据
+            emit_pending(&pending);
         });
 
         // 主流程：轮询子进程退出（带超时兜底）

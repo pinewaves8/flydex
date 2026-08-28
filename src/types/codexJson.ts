@@ -20,6 +20,16 @@ export type CodexItem =
     }
   | {
       id: string
+      type: 'mcp_tool_call'
+      server?: string
+      tool?: string
+      arguments?: unknown
+      result?: unknown
+      status?: 'in_progress' | 'completed' | 'failed'
+      error?: { message?: string } | null
+    }
+  | {
+      id: string
       type: 'approval_request'
       command?: string
       description?: string
