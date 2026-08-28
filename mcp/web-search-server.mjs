@@ -15,23 +15,33 @@ const MAX_RESULTS = 8;
 const WEB_SEARCH_TOOL = {
   name: 'web_search',
   description:
-    '在互联网上搜索关键词（使用 Bing 中国），返回标题、链接和摘要列表。' +
+    '在互联网上搜索关键词（使用 Bing），返回标题、链接和摘要列表。' +
     '用于查询人物背景、新闻、最新动态、技术资料、事实核查等需要联网信息的场景。' +
-    '搜索后请基于返回的摘要进行综合分析，不要声称未包含在结果中的信息。',
+    '搜索后请基于返回的摘要进行综合分析，不要声称未包含在结果中的信息。\n' +
+    '【关键词建议】保持简洁：人名/主体 + 1~2 个关键限定即可，例如 "Jingtian Wu Cornell" 或 "吴景天 康奈尔"。' +
+    '搜索人物时优先使用其最可能的名字拼写（英文名往往比中文名更易命中英文内容）；' +
+    '不要堆叠过多修饰词（如"毕业生/alumni/获奖"等会让结果过度收窄）。' +
+    '若无理想结果，可换用更宽泛或不同语言的同义关键词重试。',
   inputSchema: {
     type: 'object',
     properties: {
-      query: { type: 'string', description: '搜索关键词（支持中文）' },
+      query: { type: 'string', description: '搜索关键词（支持中文与英文）' },
       count: { type: 'number', description: '返回结果数量，默认 8，最大 10' },
     },
     required: ['query'],
   },
 };
 
+/** 检测查询语言：含 CJK 字符用中文版，否则用英文版（人名/英文查询效果差异巨大） */
+function detectMkt(query) {
+  return /[\u4e00-\u9fff\u3400-\u4dbf]/.test(query) ? 'zh-CN' : 'en-US';
+}
+
 /** 抓取并解析 cn.bing 搜索结果 */
 export async function bingSearch(query, count = MAX_RESULTS) {
+  const mkt = detectMkt(query);
   const url =
-    'https://cn.bing.com/search?q=' + encodeURIComponent(query) + '&count=' + count + '&mkt=zh-CN';
+    'https://cn.bing.com/search?q=' + encodeURIComponent(query) + '&count=' + count + '&mkt=' + mkt;
   const res = await fetch(url, {
     headers: {
       'User-Agent':
