@@ -37,16 +37,60 @@ function detectMkt(query) {
   return /[\u4e00-\u9fff\u3400-\u4dbf]/.test(query) ? 'zh-CN' : 'en-US';
 }
 
-/** 抓取并解析 cn.bing 搜索结果 */
-export async function bingSearch(query, count = MAX_RESULTS) {
-  const mkt = detectMkt(query);
+const UA =
+  'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0 Safari/537.36';
+
+// cookie 会话缓存（进程内）：bing 对匿名请求会 bot 降级（结果被大幅过滤/错乱），
+// 带真实会话 cookie（MUID 等）后返回正常结果，如 "Jingtian Wu Cornell" 能命中个人主页。
+let sessionCookie = null;
+
+/** 获取并缓存 bing 会话 cookie（首次访问首页拿 MUID），失败返回空串（无 cookie 兜底） */
+async function ensureCookie() {
+  if (sessionCookie != null) return sessionCookie;
+  try {
+    const res = await fetch('https://cn.bing.com/', {
+      headers: { 'User-Agent': UA, 'Accept-Language': 'zh-CN,zh;q=0.9,en;q=0.8' },
+      redirect: 'follow',
+    });
+    const setCookies = res.headers.getSetCookie ? res.headers.getSetCookie() : [];
+    sessionCookie = setCookies.map((c) => c.split(';')[0]).join('; ');
+  } catch {
+    sessionCookie = '';
+  }
+  return sessionCookie;
+}
+
+/**
+ * 清洗搜索关键词中的"噪音词"。
+ * 经验：bing 对简洁关键词命中远好于长修饰词（"Jingtian Wu Cornell" 命中个人主页，
+ * 而 "Jingtian Wu Cornell graduate" 会被带到"景甜/竞天律所"等错误实体）。
+ * 模型常把用户意图译成修饰词，这里生成精简版作为候选查询。
+ */
+const NOISE_EN =
+  /\b(graduate|graduates|alumni|alumnus|student|students|undergraduate|information|info|profile|background|about|related|details|bio|career|achievements?|accomplishments?|research|interests?|homepage|website|page|results?|introduction|describe|tell|find|lookup)\b/gi;
+const NOISE_CN =
+  /毕业生|校友|学生|信息|资料|背景|相关|人物|简介|成就|荣誉|经历|详情|搜索|结果|介绍|查找|查询|告诉/g;
+
+/** 生成精简候选查询（去噪音词、压缩空白） */
+export function simplifyQuery(query) {
+  const simplified = query
+    .replace(NOISE_EN, ' ')
+    .replace(NOISE_CN, ' ')
+    .replace(/\s+/g, ' ')
+    .trim();
+  return simplified && simplified !== query.trim() ? simplified : null;
+}
+
+/** 单次抓取并解析 cn.bing 搜索结果 */
+async function fetchBing(query, count, mkt) {
+  const cookie = await ensureCookie();
   const url =
     'https://cn.bing.com/search?q=' + encodeURIComponent(query) + '&count=' + count + '&mkt=' + mkt;
   const res = await fetch(url, {
     headers: {
-      'User-Agent':
-        'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0 Safari/537.36',
+      'User-Agent': UA,
       'Accept-Language': 'zh-CN,zh;q=0.9,en;q=0.8',
+      ...(cookie ? { Cookie: cookie } : {}),
     },
     redirect: 'follow',
   });
@@ -72,6 +116,27 @@ export async function bingSearch(query, count = MAX_RESULTS) {
     }
   }
   return results;
+}
+
+/** 抓取并解析 cn.bing 搜索结果（原查询 + 精简候选查询合并，按链接去重） */
+export async function bingSearch(query, count = MAX_RESULTS) {
+  const candidates = [query.trim()];
+  const simplified = simplifyQuery(query);
+  if (simplified) candidates.push(simplified);
+
+  const unique = new Map();
+  for (const q of candidates) {
+    let results = [];
+    try {
+      results = await fetchBing(q, count, detectMkt(q));
+    } catch {
+      continue; // 单次失败不阻塞其他候选
+    }
+    for (const r of results) {
+      if (!unique.has(r.link)) unique.set(r.link, r);
+    }
+  }
+  return [...unique.values()].slice(0, count);
 }
 
 /** 去除 HTML 标签与实体 */
