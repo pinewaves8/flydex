@@ -15,7 +15,7 @@ const MAX_RESULTS = 8;
 const WEB_SEARCH_TOOL = {
   name: 'web_search',
   description:
-    '在互联网上搜索关键词（使用 Bing），返回标题、链接和摘要列表。' +
+    '在互联网上搜索关键词，返回标题、链接和摘要列表（中文查询走百度、英文查询走 Bing，自动适配）。' +
     '用于查询人物背景、新闻、最新动态、技术资料、事实核查等需要联网信息的场景。\n' +
     '【事实纪律】只有出现在搜索结果中的信息才可作为事实陈述；' +
     '搜索结果未覆盖的信息，必须如实写"未找到公开信息"，严禁推测、编造或补全具体细节（如学校名称、日期、头衔、数字、奖项等）。' +
@@ -65,6 +65,27 @@ async function ensureCookie() {
   }
   return sessionCookie;
 }
+
+// 百度会话 cookie（BAIDUID 等）：百度对匿名/高频请求易触发安全验证，带 cookie 更稳定
+let baiduCookie = null;
+
+/** 获取并缓存百度会话 cookie，失败返回空串 */
+async function ensureBaiduCookie() {
+  if (baiduCookie != null) return baiduCookie;
+  try {
+    const res = await fetch('https://www.baidu.com/', {
+      headers: { 'User-Agent': UA, 'Accept-Language': 'zh-CN,zh;q=0.9' },
+      redirect: 'follow',
+    });
+    const setCookies = res.headers.getSetCookie ? res.headers.getSetCookie() : [];
+    baiduCookie = setCookies.map((c) => c.split(';')[0]).join('; ');
+  } catch {
+    baiduCookie = '';
+  }
+  return baiduCookie;
+}
+
+const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
 /**
  * 清洗搜索关键词中的"噪音词"。
@@ -145,6 +166,64 @@ export async function bingSearch(query, count = MAX_RESULTS) {
   return [...unique.values()].slice(0, count);
 }
 
+/**
+ * 百度搜索（中文人名 / 中文站点 / 中文新闻收录远好于 bing）：
+ * 例如"吴景天 康奈尔"能命中"长沙晚报专访（长郡中学国际部）"与"百度百科·国际象棋运动员吴景天"，
+ * 而 bing 中文版对具体中文人名几乎全部返回"吴姓"等无关结果。
+ * 返回标题 + 跳转链接（标题已含足够信息供模型分析）。
+ */
+export async function baiduSearch(query, count = MAX_RESULTS) {
+  const cookie = await ensureBaiduCookie();
+  const url = 'https://www.baidu.com/s?wd=' + encodeURIComponent(query) + '&rn=' + Math.min(count, 10);
+  const res = await fetch(url, {
+    headers: {
+      'User-Agent': UA,
+      'Accept-Language': 'zh-CN,zh;q=0.9',
+      ...(cookie ? { Cookie: cookie } : {}),
+    },
+    redirect: 'follow',
+  });
+  if (!res.ok) throw new Error(`百度搜索请求失败: HTTP ${res.status}`);
+  const html = await res.text();
+  if (html.includes('wappass') || html.includes('百度安全验证')) {
+    throw new Error('百度触发安全验证');
+  }
+  const results = [];
+  // 百度结果块：<h3 class="t ..."><a href="...">标题</a></h3>
+  const re = /<h3[^>]*class="[^"]*"[^>]*>[\s\S]*?<a[^>]*href="([^"]+)"[^>]*>([\s\S]*?)<\/a>[\s\S]*?<\/h3>/g;
+  let m;
+  while ((m = re.exec(html)) !== null && results.length < count) {
+    const title = stripHtml(m[2]);
+    if (title) results.push({ title, link: m[1], snippet: '' });
+  }
+  if (!results.length) throw new Error('百度未返回结果（可能页面结构变化）');
+  return results;
+}
+
+/** 智能分发：含中文 → 百度（中文人名/站点收录好）；纯英文 → bing（英文学术/人物好） */
+export async function smartSearch(query, count = MAX_RESULTS) {
+  const hasCJK = /[\u4e00-\u9fff\u3400-\u4dbf]/.test(query);
+  if (hasCJK) {
+    // 百度偶发限流/验证，失败后短暂等待重试一次，仍失败再降级 bing
+    for (let attempt = 0; ; attempt++) {
+      try {
+        return await baiduSearch(query, count);
+      } catch (err) {
+        if (attempt === 0) {
+          await sleep(800);
+        } else {
+          try {
+            return await bingSearch(query, count);
+          } catch {
+            throw err;
+          }
+        }
+      }
+    }
+  }
+  return await bingSearch(query, count);
+}
+
 /** 去除 HTML 标签与实体 */
 export function stripHtml(s) {
   return s
@@ -159,7 +238,7 @@ export function stripHtml(s) {
 }
 
 /** 将结果格式化为文本 */
-export function formatResults(query, results) {
+export function formatResults(query, results, source = 'Bing 中国') {
   if (!results.length) {
     return `搜索"${query}"没有找到结果。请尝试更换关键词。`;
   }
@@ -170,7 +249,7 @@ export function formatResults(query, results) {
     if (r.snippet) lines.push(`   摘要: ${r.snippet}`);
     lines.push('');
   });
-  lines.push(`（共 ${results.length} 条结果，来源: Bing 中国）`);
+  lines.push(`（共 ${results.length} 条结果，来源: ${source}）`);
   return lines.join('\n');
 }
 
@@ -207,8 +286,9 @@ async function handleMessage(msg) {
           const query = (args && args.query) || '';
           if (!query.trim()) throw new Error('query 不能为空');
           const count = Math.min(Math.max(Number(args?.count) || MAX_RESULTS, 1), 10);
-          const results = await bingSearch(query, count);
-          const text = formatResults(query, results);
+          const hasCJK = /[\u4e00-\u9fff\u3400-\u4dbf]/.test(query);
+          const results = await smartSearch(query, count);
+          const text = formatResults(query, results, hasCJK ? '百度' : 'Bing 中国');
           respond(id, { content: [{ type: 'text', text }] });
         } catch (err) {
           respond(id, {
