@@ -21,7 +21,8 @@ pub enum CodexExecMode {
 /// 运行中的 codex 进程句柄（供审批写入与停止）
 pub struct ActiveCodex {
     /// 伪终端 master 写端（写 "y\n" / "n\n" 响应审批）
-    pub writer: Box<dyn Write + Send>,
+    /// Option：本轮完成后 take() 关闭 stdin（EOF），让 codex 立即退出而非空等
+    pub writer: Option<Box<dyn Write + Send>>,
     /// 子进程句柄（用于停止/超时 kill）
     pub child: Arc<Mutex<Box<dyn Child + Send + Sync>>>,
 }
@@ -100,6 +101,63 @@ impl CodexManager {
         add("*");
     }
 
+    /// 生成模型相关 `-c` 覆盖参数
+    ///
+    /// 从 ~/.flydex/models.json 读取当前模型 + 供应商配置，用 `-c` 在运行时覆盖，
+    /// 不修改 ~/.codex/config.toml。优先级：会话级模型 > 全局默认模型。
+    /// 推理强度为 none 时不传（使用模型默认）。
+    fn model_args(session_model: Option<&str>) -> Vec<String> {
+        use crate::services::model::ModelService;
+        let cfg = ModelService::load();
+        // 会话级覆盖：仅当会话指定且存在于模型列表时采用
+        let model_id = session_model
+            .filter(|m| cfg.find_model(m).is_some())
+            .unwrap_or(cfg.current_model.as_str());
+        let Some(model) = cfg.find_model(model_id) else {
+            return Vec::new();
+        };
+        let Some(provider) = cfg.find_provider(&model.provider) else {
+            return Vec::new();
+        };
+        let mut args = Vec::new();
+        // 重要：所有 -c 参数值都**不加引号**。Windows 下 flydex 通过 cmd /c 启动 codex，
+        // 带内嵌双引号（如 -c model="x"）会被 cmd 重新解析并破坏（unexpected argument）。
+        // codex 的 -c 片段解析能接受无引号的裸值。
+        args.push("-c".to_string());
+        args.push(format!("model={}", model.id));
+        args.push("-c".to_string());
+        args.push(format!("model_provider={}", provider.id));
+        // name 必须非空；含中文的 name（如"阿里云 Qwen"、"Ollama（本地）"）在 cmd /c 下
+        // 会解析失败，因此非 ASCII 名称回退为纯 ASCII 的 provider id。
+        let safe_name = if provider.name.is_ascii() {
+            provider.name.clone()
+        } else {
+            provider.id.clone()
+        };
+        args.push("-c".to_string());
+        args.push(format!(
+            "model_providers.{}.name={}",
+            provider.id, safe_name
+        ));
+        args.push("-c".to_string());
+        args.push(format!(
+            "model_providers.{}.base_url={}",
+            provider.id, provider.base_url
+        ));
+        if !provider.api_key.trim().is_empty() {
+            args.push("-c".to_string());
+            args.push(format!(
+                "model_providers.{}.experimental_bearer_token={}",
+                provider.id, provider.api_key
+            ));
+        }
+        if cfg.reasoning_effort != "none" && !cfg.reasoning_effort.is_empty() {
+            args.push("-c".to_string());
+            args.push(format!("model_reasoning_effort={}", cfg.reasoning_effort));
+        }
+        args
+    }
+
     /// 执行一条 codex 命令（阻塞到进程结束，输出流式推送）
     ///
     /// # Arguments
@@ -109,6 +167,7 @@ impl CodexManager {
     /// * `mode` - 执行模式（Exec 首轮 / Resume 恢复会话）
     /// * `thread_id` - 恢复指定会话（可选）
     /// * `run_id` - 本次运行的唯一标识（审批/停止用）
+    /// * `session_model` - 会话级模型覆盖（可选，None 用全局默认）
     pub fn run_command(
         app: AppHandle,
         command: String,
@@ -116,6 +175,7 @@ impl CodexManager {
         mode: CodexExecMode,
         thread_id: Option<String>,
         run_id: String,
+        session_model: Option<String>,
     ) -> Result<(), String> {
         // 构建 codex 参数
         let mut args: Vec<String> = vec!["exec".to_string()];
@@ -135,10 +195,13 @@ impl CodexManager {
         // 沙箱：read-only / workspace-write / danger-full-access（真实用户权限，AI 可完成 git 写操作）
         // 审批：untrusted / on-request / never（模型按需请求时触发 approval_request 事件 → 前端审批卡）
         let sec = SecurityService::load();
+        // 所有 -c 值一律不加引号（cmd /c 重新解析会破坏内嵌引号），含连字符的值也可安全裸传
         args.push("-c".to_string());
-        args.push(format!("sandbox_mode=\"{}\"", sec.sandbox_mode.as_codex()));
+        args.push(format!("sandbox_mode={}", sec.sandbox_mode.as_codex()));
         args.push("-c".to_string());
-        args.push(format!("approval_policy=\"{}\"", sec.approval_policy.as_codex()));
+        args.push(format!("approval_policy={}", sec.approval_policy.as_codex()));
+        // 模型参数：会话级覆盖 > 全局默认
+        args.extend(Self::model_args(session_model.as_deref()));
         args.push(command.clone());
 
         // 创建伪终端
@@ -166,6 +229,8 @@ impl CodexManager {
         if let Some(dir) = &workdir {
             cb.cwd(dir);
         }
+        // 调试日志：打印实际传给 codex 的完整命令行，便于排查 cmd /c 参数解析问题
+        eprintln!("[codex] full command: codex {}", args.join(" "));
 
         // 预配置 git safe.directory，避免 workspace-write 下 AI 的 git 操作失败
         Self::ensure_git_safe_directory(workdir.as_deref());
@@ -192,7 +257,7 @@ impl CodexManager {
         active().lock().unwrap().insert(
             run_id.clone(),
             ActiveCodex {
-                writer,
+                writer: Some(writer),
                 child: child.clone(),
             },
         );
@@ -201,7 +266,10 @@ impl CodexManager {
             .map_err(|e| format!("Failed to emit started event: {}", e))?;
 
         // 读线程：阻塞读 master（TTY 行缓冲 → 流式），过滤控制序列，解析 JSONL
+        // turn_done：解析到 turn.completed 后置位，主线程据此关闭 stdin 让 codex 尽快退出
+        let turn_done = Arc::new(std::sync::atomic::AtomicBool::new(false));
         let app_reader = app.clone();
+        let turn_done_reader = turn_done.clone();
         let reader_thread = std::thread::spawn(move || {
             let mut reader = BufReader::new(reader);
             let mut line = String::new();
@@ -216,6 +284,9 @@ impl CodexManager {
                         }
                         match serde_json::from_str::<serde_json::Value>(&clean) {
                             Ok(json) => {
+                                if json.get("type").and_then(|v| v.as_str()) == Some("turn.completed") {
+                                    turn_done_reader.store(true, std::sync::atomic::Ordering::Relaxed);
+                                }
                                 let _ = app_reader.emit("codex-output", CodexEvent::Json(json));
                             }
                             Err(_) => {
@@ -228,8 +299,12 @@ impl CodexManager {
             }
         });
 
-        // 主流程：轮询子进程退出（带 120s 超时兜底）
+        // 主流程：轮询子进程退出（带超时兜底）
+        // 超时设为 600s：本地 ollama 大模型（如 qwen2.5-coder:latest 4.7GB）冷加载 +
+        // 生成首 token 可能需 2~5 分钟；120s 会误杀导致 exit -1。云端模型通常数十秒内完成。
+        const CODEX_TIMEOUT: Duration = Duration::from_secs(600);
         let start = std::time::Instant::now();
+        let mut done_sent = false;
         let exit_code = loop {
             let mut guard = child.lock().unwrap();
             match guard.try_wait() {
@@ -238,7 +313,15 @@ impl CodexManager {
                 }
                 Ok(None) => {
                     drop(guard);
-                    if start.elapsed() > Duration::from_secs(120) {
+                    // 本轮已结束（turn.completed）→ 立即推送 done，让前端快速结束 "Running…"。
+                    // 注意：不能 kill 进程，否则 codex 来不及把会话持久化到本地，
+                    // 下一轮 resume 会丢失上下文（用户告诉过名字/背景，第二轮回不上来）。
+                    // 保持 stdin 打开，让 codex 自然收尾退出（实测 ~16s 内）。
+                    if turn_done.load(std::sync::atomic::Ordering::Relaxed) && !done_sent {
+                        done_sent = true;
+                        let _ = app.emit("codex-done", CodexEvent::Done { exit_code: 0 });
+                    }
+                    if start.elapsed() > CODEX_TIMEOUT {
                         let mut g = child.lock().unwrap();
                         let _ = g.kill();
                         break -1;
@@ -252,9 +335,11 @@ impl CodexManager {
             }
         };
 
-        // 推送完成事件
-        app.emit("codex-done", CodexEvent::Done { exit_code })
-            .map_err(|e| format!("Failed to emit codex done event: {}", e))?;
+        // 推送完成事件（若 turn.completed 已提前推送过，则不重复）
+        if !done_sent {
+            app.emit("codex-done", CodexEvent::Done { exit_code })
+                .map_err(|e| format!("Failed to emit codex done event: {}", e))?;
+        }
 
         // 从注册表移除（drop writer → master EOF → 读线程退出）
         active().lock().unwrap().remove(&run_id);
@@ -272,10 +357,13 @@ impl CodexManager {
             .get_mut(run_id)
             .ok_or_else(|| format!("No active codex for run_id: {}", run_id))?;
         let resp = if approve { "y\n" } else { "n\n" };
-        entry
+        let writer = entry
             .writer
+            .as_mut()
+            .ok_or_else(|| format!("No active writer for run_id: {}", run_id))?;
+        writer
             .write_all(resp.as_bytes())
-            .and_then(|_| entry.writer.flush())
+            .and_then(|_| writer.flush())
             .map_err(|e| format!("Failed to write approval: {}", e))
     }
 

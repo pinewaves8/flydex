@@ -21,6 +21,7 @@ pub fn create_session(
     project_id: String,
     title: String,
     workdir: String,
+    model: Option<String>,
 ) -> Result<Session, String> {
     let id = format!("sess_{}", uuid_simple());
     let now = now_ms();
@@ -30,6 +31,7 @@ pub fn create_session(
         title,
         workdir,
         thread_id: None,
+        model,
         messages: Vec::new(),
         created_at: now,
         updated_at: now,

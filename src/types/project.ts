@@ -21,6 +21,8 @@ export interface Session {
   title: string
   workdir: string
   threadId: string | null
+  /** 会话级模型覆盖（null 用全局默认） */
+  model: string | null
   messages: CodexMessage[]
   createdAt: number
   updatedAt: number
@@ -32,6 +34,8 @@ export interface SessionMeta {
   projectId: string
   title: string
   workdir: string
+  /** 会话级模型覆盖 */
+  model?: string | null
   createdAt: number
   updatedAt: number
 }

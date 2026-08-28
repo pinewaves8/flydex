@@ -13,6 +13,10 @@ use commands::git::{
     git_remotes, git_remove_remote, git_rename_branch, git_show, git_stage_all, git_stage_file,
     git_stage_hunk, git_status, git_unstage_all, git_unstage_file, git_unstage_hunk,
 };
+use commands::model::{
+    delete_model, delete_provider, get_models, set_current_model, set_reasoning_effort,
+    test_model, test_model_connection, upsert_model, upsert_provider,
+};
 use commands::project::{create_project, delete_project, list_projects, update_project};
 use commands::security::{
     clear_approval_history, get_security, record_approval, set_approval_policy, set_sandbox_mode,
@@ -49,6 +53,16 @@ pub fn run() {
             set_approval_policy,
             record_approval,
             clear_approval_history,
+            // model
+            get_models,
+            set_current_model,
+            set_reasoning_effort,
+            upsert_provider,
+            delete_provider,
+            upsert_model,
+            delete_model,
+            test_model_connection,
+            test_model,
             // git
             git_status,
             git_branches,

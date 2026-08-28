@@ -42,6 +42,8 @@ interface CodexState {
   /** 已处理的 codex item id（事件级幂等去重，防监听器泄漏导致重复消息） */
   processedItemIds: string[]
   lineId: number
+  /** 本轮开始时间戳（用于显示每轮耗时） */
+  runStartedAt: number | null
   setStatus: (status: CodexStatus) => void
   appendOutput: (line: Omit<CodexOutputLine, 'id'>) => void
   appendMessage: (message: Omit<CodexMessage, 'id' | 'timestamp'>) => string
@@ -51,6 +53,7 @@ interface CodexState {
   setThreadId: (id: string | null) => void
   setUsage: (usage: CodexUsage | null) => void
   setPendingRunId: (id: string | null) => void
+  setRunStartedAt: (ts: number | null) => void
   upsertRunningCommand: (cmd: CodexRunningCommand) => void
   removeRunningCommand: (id: string) => void
   setRunningCommands: (cmds: CodexRunningCommand[]) => void
@@ -75,6 +78,7 @@ export const useCodexStore = create<CodexState>((set, get) => ({
   streaming: null,
   processedItemIds: [],
   lineId: 0,
+  runStartedAt: null,
   setStatus: (status) => set({ status }),
   appendOutput: (line) =>
     set((state) => ({
@@ -93,6 +97,7 @@ export const useCodexStore = create<CodexState>((set, get) => ({
   setThreadId: (id) => set({ threadId: id }),
   setUsage: (usage) => set({ usage }),
   setPendingRunId: (id) => set({ pendingRunId: id }),
+  setRunStartedAt: (ts) => set({ runStartedAt: ts }),
   upsertRunningCommand: (cmd) =>
     set((state) => {
       const exists = state.runningCommands.some((c) => c.id === cmd.id)
@@ -138,6 +143,7 @@ export const useCodexStore = create<CodexState>((set, get) => ({
       streaming: null,
       processedItemIds: [],
       lineId: 0,
+      runStartedAt: null,
     }),
   loadSession: (data) =>
     set({
@@ -152,5 +158,6 @@ export const useCodexStore = create<CodexState>((set, get) => ({
       approval: null,
       streaming: null,
       processedItemIds: [],
+      runStartedAt: null,
     }),
 }))

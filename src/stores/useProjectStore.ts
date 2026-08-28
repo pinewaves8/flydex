@@ -20,10 +20,12 @@ interface ProjectState {
 
   // 会话
   loadSessions: (projectId?: string) => Promise<void>
-  createSession: (title: string, workdir: string) => Promise<string>
+  createSession: (title: string, workdir: string, model?: string | null) => Promise<string>
   deleteSession: (id: string) => Promise<void>
   renameSession: (id: string, title: string) => Promise<void>
   setCurrentSession: (id: string | null) => void
+  /** 更新会话的模型覆盖并持久化 */
+  setSessionModel: (id: string, model: string | null) => Promise<void>
 }
 
 export const useProjectStore = create<ProjectState>((set, get) => ({
@@ -100,9 +102,9 @@ export const useProjectStore = create<ProjectState>((set, get) => ({
     set({ sessions })
   },
 
-  createSession: async (title, workdir) => {
+  createSession: async (title, workdir, model) => {
     const projectId = get().currentProjectId ?? 'default'
-    const session = await sessionService.create(projectId, title, workdir)
+    const session = await sessionService.create(projectId, title, workdir, model)
     set((state) => ({
       sessions: [session, ...state.sessions],
       currentSessionId: session.id,
@@ -127,5 +129,16 @@ export const useProjectStore = create<ProjectState>((set, get) => ({
 
   setCurrentSession: (id) => {
     set({ currentSessionId: id })
+  },
+
+  setSessionModel: async (id, model) => {
+    // 从完整会话加载后更新 model 字段再保存
+    const loaded = await sessionService.load(id)
+    if (!loaded) return
+    const updated = { ...loaded, model, updatedAt: Date.now() }
+    await sessionService.save(updated)
+    set((state) => ({
+      sessions: state.sessions.map((s) => (s.id === id ? { ...s, model } : s)),
+    }))
   },
 }))

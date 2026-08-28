@@ -11,7 +11,7 @@ export function TitleBar() {
   const openFolder = useWorkspaceStore((s) => s.openFolder)
   const securityConfig = useSecurityStore((s) => s.config)
   const loadSecurity = useSecurityStore((s) => s.load)
-  const setCurrentView = useUIStore((s) => s.setCurrentView)
+  const openSettings = useUIStore((s) => s.openSettings)
 
   // 启动时加载安全配置（顶部状态栏显示）
   useEffect(() => {
@@ -47,7 +47,7 @@ export function TitleBar() {
         {/* 安全状态指示器 */}
         {securityConfig && (
           <button
-            onClick={() => setCurrentView('settings')}
+            onClick={() => openSettings('security')}
             className={`flex items-center gap-1.5 rounded-md border px-2.5 py-1 text-xs transition-colors ${
               isHighRisk
                 ? 'border-amber-500/50 bg-amber-500/10 text-amber-400 hover:bg-amber-500/20'

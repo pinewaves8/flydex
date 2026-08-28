@@ -19,8 +19,13 @@ export const sessionService = {
   },
 
   /** 创建会话 */
-  async create(projectId: string, title: string, workdir: string): Promise<Session> {
-    return invoke<Session>('create_session', { projectId, title, workdir })
+  async create(
+    projectId: string,
+    title: string,
+    workdir: string,
+    model?: string | null,
+  ): Promise<Session> {
+    return invoke<Session>('create_session', { projectId, title, workdir, model: model ?? null })
   },
 
   /** 保存会话（全量覆盖） */

@@ -80,8 +80,11 @@ export function useCodexSession() {
           const msgId = store.appendMessage({ kind: 'agent', content: item.text })
           store.setStreaming({ id: msgId, full: item.text, shown: 0 })
         } else if (item.type === 'error') {
-          // 过滤第三方模型的元数据缺失警告（无害）
-          if (item.message.startsWith('Model metadata for')) {
+          // 过滤第三方模型的无害提示：元数据缺失警告、跨模型 resume 提示（不影响功能）
+          if (
+            item.message.startsWith('Model metadata for') ||
+            item.message.startsWith('This session was recorded with model')
+          ) {
             return
           }
           store.appendMessage({ kind: 'error', content: item.message })
@@ -112,7 +115,12 @@ export function useCodexSession() {
         if (event.usage) {
           store.setUsage(event.usage)
           const tokens = event.usage.output_tokens ?? 0
-          store.appendOutput({ text: `▸ 本轮完成，输出 ${tokens} tokens`, kind: 'system' })
+          const startedAt = store.runStartedAt
+          const elapsed = startedAt != null ? ((Date.now() - startedAt) / 1000).toFixed(1) : null
+          store.appendOutput({
+            text: `▸ 本轮完成，输出 ${tokens} tokens${elapsed != null ? `，耗时 ${elapsed}s` : ''}`,
+            kind: 'system',
+          })
         }
       }
     }
@@ -168,7 +176,7 @@ export function useCodexSession() {
   }, []) // 空依赖，只在挂载时执行一次
 
   // 发送指令
-  const run = useCallback(async (command: string, workdir?: string) => {
+  const run = useCallback(async (command: string, workdir?: string, model?: string | null) => {
     const store = useCodexStore.getState()
     const mode = store.threadId ? 'resume' : 'exec'
     const runId = crypto.randomUUID()
@@ -177,6 +185,7 @@ export function useCodexSession() {
     store.setExitCode(null)
     store.setUsage(null)
     store.setPendingRunId(runId)
+    store.setRunStartedAt(Date.now())
     store.setApproval(null)
     store.setRunningCommands([])
     store.setStreaming(null)
@@ -184,7 +193,13 @@ export function useCodexSession() {
     store.clearProcessedItems()
 
     try {
-      await runCodex(command, { workdir, mode, threadId: store.threadId ?? undefined, runId })
+      await runCodex(command, {
+        workdir,
+        mode,
+        threadId: store.threadId ?? undefined,
+        runId,
+        model: model ?? null,
+      })
       // 兜底：如果 done 事件丢失，强制更新状态
       if (useCodexStore.getState().status === 'running') {
         useCodexStore.getState().setStatus('done')

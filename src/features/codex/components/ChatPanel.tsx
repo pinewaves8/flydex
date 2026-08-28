@@ -21,6 +21,7 @@ import { useCodexSession } from '../hooks/useCodexSession'
 import { Markdown } from '@/components/ui/Markdown'
 import { sessionService } from '@/services/sessionService'
 import { useCodexStore } from '@/stores/useCodexStore'
+import { useModelStore } from '@/stores/useModelStore'
 import { useProjectStore } from '@/stores/useProjectStore'
 import { useSecurityStore } from '@/stores/useSecurityStore'
 import { useWorkspaceStore } from '@/stores/useWorkspaceStore'
@@ -168,11 +169,14 @@ export function ChatPanel() {
   const createSession = useProjectStore((s) => s.createSession)
   const renameSession = useProjectStore((s) => s.renameSession)
   const sessions = useProjectStore((s) => s.sessions)
+  const setSessionModel = useProjectStore((s) => s.setSessionModel)
   const loadSession = useCodexStore((s) => s.loadSession)
   const setCurrentSession = useProjectStore((s) => s.setCurrentSession)
   const workspaceCwd = useWorkspaceStore((s) => s.cwd)
   const streaming = useCodexStore((s) => s.streaming)
   const securityConfig = useSecurityStore((s) => s.config)
+  const modelConfig = useModelStore((s) => s.config)
+  const loadModels = useModelStore((s) => s.load)
 
   // 打字机推进：逐字追加显示（16ms/次，每次 3 字符）
   useEffect(() => {
@@ -191,6 +195,13 @@ export function ChatPanel() {
   const currentSessionTitle = sessions.find((s) => s.id === currentSessionId)?.title ?? ''
   // 当前会话绑定的工作目录（遵循 codex：会话绑定创建时的 cwd）
   const currentSessionWorkdir = sessions.find((s) => s.id === currentSessionId)?.workdir ?? ''
+  // 会话级模型覆盖（null 表示用全局默认）
+  const currentSessionModel = sessions.find((s) => s.id === currentSessionId)?.model ?? null
+
+  // 挂载时加载模型配置（全局默认模型）
+  useEffect(() => {
+    void loadModels()
+  }, [loadModels])
 
   // 切换会话时加载会话数据
   useEffect(() => {
@@ -262,8 +273,21 @@ export function ChatPanel() {
       await renameSession(sessionId, title)
     }
 
-    // 遵循 codex：resume 会话用会话绑定的 cwd，新会话用全局 cwd
-    run(cmd, currentSessionWorkdir || workspaceCwd)
+    // 遵循 codex：resume 会话用会话绑定的 cwd，新会话用全局 cwd；模型用会话级覆盖（无则全局默认）
+    run(cmd, currentSessionWorkdir || workspaceCwd, currentSessionModel)
+  }
+
+  // 切换会话模型覆盖。模型与会话 thread 绑定：若会话已有历史 thread，自动新建（清 threadId），
+  // 避免跨模型 resume 触发 codex 的模型不一致警告（也符合 codex"模型绑定会话"语义）
+  const handleModelChange = async (modelId: string) => {
+    if (!currentSessionId) {
+      return
+    }
+    await setSessionModel(currentSessionId, modelId === '__global__' ? null : modelId)
+    if (useCodexStore.getState().threadId) {
+      useCodexStore.getState().reset()
+      useCodexStore.getState().setThreadId(null)
+    }
   }
 
   const handleKeyDown = (e: React.KeyboardEvent) => {
@@ -282,6 +306,23 @@ export function ChatPanel() {
         <div className="flex items-center gap-2">
           <Terminal className="h-4 w-4 text-primary" />
           <span className="text-sm font-medium">Codex Chat</span>
+          {/* 会话级模型覆盖 */}
+          <select
+            value={currentSessionModel ?? '__global__'}
+            onChange={(e) => void handleModelChange(e.target.value)}
+            disabled={status === 'running'}
+            title="会话模型覆盖（切换仅对当前会话生效）"
+            className="max-w-[180px] truncate rounded border border-border bg-background px-1.5 py-0.5 text-[10px] text-muted-foreground outline-none hover:border-primary/50 disabled:opacity-50"
+          >
+            <option value="__global__">
+              {modelConfig ? `全局：${modelConfig.current_model}` : '全局默认'}
+            </option>
+            {modelConfig?.models.map((m) => (
+              <option key={m.id} value={m.id}>
+                {m.id}
+              </option>
+            ))}
+          </select>
           <span className={`flex items-center gap-1 text-xs ${statusCfg.color}`}>
             {statusCfg.icon}
             {statusCfg.label}
