@@ -22,6 +22,21 @@ fn config_path() -> Result<PathBuf, String> {
     Ok(home.join(".codex").join("config.toml"))
 }
 
+/// 解析单个 TOML 值（toml::Value::from_str 解析整个文档，不能直接解析裸值，
+/// 因此包装成 `__v = <raw>` 行再解析）
+fn parse_single_value(raw: &str) -> Option<toml::Value> {
+    format!("__v = {}", raw)
+        .parse::<toml::Value>()
+        .ok()
+        .and_then(|mut v| {
+            if let toml::Value::Table(t) = &mut v {
+                t.remove("__v")
+            } else {
+                None
+            }
+        })
+}
+
 /// 解析 [mcp_servers.xxx] 段内的 key = value 行
 fn parse_block(name: String, lines: &[String]) -> McpServer {
     let mut s = McpServer {
@@ -38,7 +53,7 @@ fn parse_block(name: String, lines: &[String]) -> McpServer {
         let Some(idx) = line.find('=') else { continue };
         let key = line[..idx].trim();
         let raw = line[idx + 1..].trim();
-        let Ok(val) = raw.parse::<toml::Value>() else { continue };
+        let Some(val) = parse_single_value(raw) else { continue };
         match key {
             "command" => {
                 if let toml::Value::String(v) = val {
@@ -300,5 +315,36 @@ pub fn test_server(server: &McpServer) -> Result<String, String> {
                 Ok(format!("启动成功：{} 保持运行，可作为 MCP server", cmd))
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn parse_command_line() {
+        let s = parse_block(
+            "web-search".into(),
+            &[
+                "command = \"node\"".to_string(),
+                "default_tools_approval_mode = \"never\"".to_string(),
+            ],
+        );
+        assert_eq!(s.command.as_deref(), Some("node"));
+        assert_eq!(s.approval_mode.as_deref(), Some("never"));
+    }
+
+    #[test]
+    fn list_real_config() {
+        let servers = list_servers().unwrap();
+        for sv in &servers {
+            eprintln!(
+                "mcp[{}] transport={} command={:?} args={:?} url={:?}",
+                sv.name, sv.transport, sv.command, sv.args, sv.url
+            );
+        }
+        let ws = servers.iter().find(|x| x.name == "web-search");
+        assert!(ws.is_some(), "web-search not found");
     }
 }
