@@ -24,6 +24,9 @@ export interface CodexStreaming {
   shown: number
 }
 
+/** 计划模式开关的 localStorage key（跨重启保持开关状态） */
+const PLAN_MODE_KEY = 'flydex.planMode'
+
 interface CodexState {
   status: CodexStatus
   output: CodexOutputLine[]
@@ -95,8 +98,21 @@ export const useCodexStore = create<CodexState>((set, get) => ({
   runWorkdir: null,
   seenFileChanges: [],
   baselineFileChanges: [],
-  planMode: false,
-  setPlanMode: (v) => set({ planMode: v }),
+  planMode: (() => {
+    try {
+      return localStorage.getItem(PLAN_MODE_KEY) === '1'
+    } catch {
+      return false
+    }
+  })(),
+  setPlanMode: (v) => {
+    try {
+      localStorage.setItem(PLAN_MODE_KEY, v ? '1' : '0')
+    } catch {
+      // localStorage 不可用时仅内存态
+    }
+    set({ planMode: v })
+  },
   setStatus: (status) => set({ status }),
   appendOutput: (line) =>
     set((state) => ({
@@ -175,7 +191,6 @@ export const useCodexStore = create<CodexState>((set, get) => ({
       runWorkdir: null,
       seenFileChanges: [],
       baselineFileChanges: [],
-      planMode: false,
     }),
   loadSession: (data) =>
     set({
@@ -194,6 +209,5 @@ export const useCodexStore = create<CodexState>((set, get) => ({
       runWorkdir: null,
       seenFileChanges: [],
       baselineFileChanges: [],
-      planMode: false,
     }),
 }))
