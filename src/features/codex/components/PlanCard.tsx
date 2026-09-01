@@ -3,16 +3,34 @@ import { useState } from 'react'
 
 import type { CodexMessage } from '@/types/codexJson'
 
-/** 解析计划文本 → 步骤数组（编号 / 列表行；无列表结构时整段作为一步） */
+/** 解析计划文本 → 步骤数组
+ *
+ * 只识别**顶层编号步骤**（如 `1.` / `1)` / `1、`），忽略：
+ * - markdown 分隔线（`---`、`***`、`===`）
+ * - 加粗子标题 / 子列表详情（`**目标**`、缩进的 `- **涉及文件**` 等）
+ * 无编号结构时整段作为一步兜底。
+ */
 export function parsePlanSteps(content: string): string[] {
   const lines = content
     .split('\n')
-    .map((l) => l.trim())
+    .map((l) => l.replace(/\r$/, '').trim())
     .filter(Boolean)
   const steps: string[] = []
   for (const line of lines) {
-    const m = line.match(/^(?:\d+[.、)]|[-*•])\s*(.+)/)
-    if (m) steps.push(m[1])
+    // 忽略 markdown 分隔线
+    if (/^[-*_=]{3,}$/.test(line)) continue
+    // 顶层编号步骤
+    const num = line.match(/^\d+[.、)]\s*(.+)/)
+    if (num) {
+      steps.push(num[1])
+      continue
+    }
+    // 无编号步骤时的普通列表项兜底（仅当还没有任何步骤）
+    if (steps.length === 0) {
+      const dash = line.match(/^[-*•]\s*(.+)/)
+      if (dash) steps.push(dash[1])
+    }
+    // 其余行（子项说明、加粗标题等）忽略
   }
   return steps.length > 0 ? steps : [content]
 }

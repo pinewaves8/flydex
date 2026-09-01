@@ -56,6 +56,7 @@ interface CodexState {
   setStatus: (status: CodexStatus) => void
   appendOutput: (line: Omit<CodexOutputLine, 'id'>) => void
   appendMessage: (message: Omit<CodexMessage, 'id' | 'timestamp'>) => string
+  updateMessageKind: (id: string, kind: CodexMessage['kind']) => void
   markItemProcessed: (id: string) => boolean
   clearProcessedItems: () => void
   setExitCode: (code: number | null) => void
@@ -110,6 +111,10 @@ export const useCodexStore = create<CodexState>((set, get) => ({
     }))
     return id
   },
+  updateMessageKind: (id, kind) =>
+    set((state) => ({
+      messages: state.messages.map((m) => (m.id === id ? { ...m, kind } : m)),
+    })),
   setExitCode: (code) => set({ exitCode: code }),
   setThreadId: (id) => set({ threadId: id }),
   setUsage: (usage) => set({ usage }),

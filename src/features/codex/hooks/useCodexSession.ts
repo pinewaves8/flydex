@@ -31,6 +31,9 @@ export function useCodexSession() {
     let cancelled = false
     let outputUnlisten: UnlistenFn | null = null
     let doneUnlisten: UnlistenFn | null = null
+    // 计划模式下模型可能在 turn 内多次输出 agent_message（探索说明 → 正式计划）。
+    // 记录本轮最后一个 agent_message id，turn 结束时将其转换为计划卡片。
+    let lastPlanMsgId: string | null = null
 
     /** 解析待执行/正在执行的命令（codex 的 command_execution item） */
     const handleCommandItem = (item: CodexItem) => {
@@ -97,6 +100,9 @@ export function useCodexSession() {
           text: `▸ 会话已创建 (ID: ${event.thread_id.slice(0, 8)}…)`,
           kind: 'system',
         })
+      } else if (event.type === 'turn.started') {
+        // 新的一轮：重置计划消息追踪（计划模式下每轮独立）
+        lastPlanMsgId = null
       } else if (event.type === 'item.started') {
         // item.started 可能带 tool 或 command 信息
         const item = event.item as CodexItem
@@ -111,8 +117,10 @@ export function useCodexSession() {
         if (item.type === 'agent_message') {
           const st = useCodexStore.getState()
           if (st.planMode) {
-            // 计划模式：本轮输出为分步计划，存入计划卡片（完整展示，不流式打字机）
-            store.appendMessage({ kind: 'plan', content: item.text })
+            // 计划模式：模型可能先输出探索/思考说明再输出正式计划。
+            // 全部按 agent 消息暂存（不流式），turn 结束时最后一个转成计划卡片。
+            const msgId = store.appendMessage({ kind: 'agent', content: item.text })
+            lastPlanMsgId = msgId
             store.setStreaming(null)
             return
           }
@@ -176,6 +184,11 @@ export function useCodexSession() {
       } else if (event.type === 'turn.completed') {
         // 本轮结束，强制完成打字机（避免残留流式状态）
         store.setStreaming(null)
+        // 计划模式：把本轮最后一个 agent_message 转为计划卡片（前面的探索说明保持 agent）
+        if (useCodexStore.getState().planMode && lastPlanMsgId) {
+          store.updateMessageKind(lastPlanMsgId, 'plan')
+          lastPlanMsgId = null
+        }
         // 写入后审查兜底：git 工作区变化 → 生成文件变更卡片
         void checkFileChanges(store.runWorkdir)
         if (event.usage) {
