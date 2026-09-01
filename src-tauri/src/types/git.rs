@@ -109,6 +109,15 @@ pub struct GitCommit {
     pub summary: String,
 }
 
+/// 文件变更摘要（对话流"文件变更卡片"兜底用，来自 git status）
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct FileChangeBrief {
+    /// 文件路径（相对仓库根）
+    pub path: String,
+    /// 变更类型：add（新增/未跟踪）| update（修改）| delete（删除）
+    pub kind: String,
+}
+
 /// 同步操作结果（push/pull/fetch）
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct GitSyncResult {

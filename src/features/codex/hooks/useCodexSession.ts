@@ -1,3 +1,4 @@
+import { invoke } from '@tauri-apps/api/core'
 import { listen, type UnlistenFn } from '@tauri-apps/api/event'
 import { useCallback, useEffect } from 'react'
 
@@ -5,7 +6,7 @@ import { approveCodex, runCodex, stopCodex } from '@/services/codex'
 import { useCodexStore, type CodexApproval } from '@/stores/useCodexStore'
 import { useSecurityStore } from '@/stores/useSecurityStore'
 import type { CodexEvent } from '@/types/codex'
-import type { CodexJsonEvent, CodexItem } from '@/types/codexJson'
+import type { CodexJsonEvent, CodexFileChange, CodexItem } from '@/types/codexJson'
 
 /**
  * Codex 会话 Hook
@@ -58,6 +59,38 @@ export function useCodexSession() {
       const event = data as CodexJsonEvent
       const store = useCodexStore.getState()
 
+      /**
+       * 写入后审查兜底：部分场景（Windows/PowerShell 下模型用 shell 写文件）没有
+       * file_change 事件。本轮结束时对比 git 工作区，把实际发生的文件变更生成卡片。
+       */
+      const checkFileChanges = async (workdir: string | null | undefined) => {
+        const st = useCodexStore.getState()
+        if (!workdir) return
+        try {
+          const changes = await invoke<CodexFileChange[]>('git_status_changes', {
+            repo: workdir,
+          })
+          // 只展示本轮新增的变更：排除 run 开始时的快照 + 已展示过的
+          const baseline = st.baselineFileChanges
+          const seen = new Set(st.seenFileChanges)
+          const fresh = changes.filter(
+            (c) =>
+              !baseline.some((b) => b.path === c.path && b.kind === c.kind) &&
+              !seen.has(`${c.path}|${c.kind}`),
+          )
+          if (fresh.length === 0) return
+          const s = useCodexStore.getState()
+          s.appendMessage({
+            kind: 'file_change',
+            content: `文件变更：${fresh.map((c) => `${c.path}（${c.kind}）`).join('，')}`,
+            fileChanges: fresh,
+          })
+          s.markFileChangesSeen(fresh.map((c) => `${c.path}|${c.kind}`))
+        } catch {
+          // 非 git 仓库或命令失败时静默
+        }
+      }
+
       if (event.type === 'thread.started') {
         store.setThreadId(event.thread_id)
         store.appendOutput({
@@ -108,6 +141,19 @@ export function useCodexSession() {
           })
         } else if (item.type === 'command_execution') {
           handleCommandItem(item)
+        } else if (item.type === 'file_change') {
+          // 文件变更：对话流插入 diff 卡片（内联展示，可展开看 diff、接受/拒绝回滚）
+          const changes = item.changes ?? []
+          if (changes.length > 0) {
+            const summary = changes.map((c) => `${c.path}（${c.kind}）`).join('，')
+            store.appendMessage({
+              kind: 'file_change',
+              content: `文件变更：${summary}`,
+              fileChanges: changes,
+            })
+            // 与 git 工作区兜底共用 seenFileChanges，避免重复卡片
+            store.markFileChangesSeen(changes.map((c) => `${c.path}|${c.kind}`))
+          }
         } else if (item.type === 'approval_request') {
           const approvalItem: CodexApproval = {
             id: item.id,
@@ -123,6 +169,8 @@ export function useCodexSession() {
       } else if (event.type === 'turn.completed') {
         // 本轮结束，强制完成打字机（避免残留流式状态）
         store.setStreaming(null)
+        // 写入后审查兜底：git 工作区变化 → 生成文件变更卡片
+        void checkFileChanges(store.runWorkdir)
         if (event.usage) {
           store.setUsage(event.usage)
           const tokens = event.usage.output_tokens ?? 0
@@ -200,6 +248,20 @@ export function useCodexSession() {
     store.setApproval(null)
     store.setRunningCommands([])
     store.setStreaming(null)
+    store.setRunWorkdir(workdir ?? null)
+    // 记录本轮开始时的 git 工作区快照（turn 完成时只展示本轮新增的变更）
+    if (workdir) {
+      try {
+        const baseline = await invoke<CodexFileChange[]>('git_status_changes', {
+          repo: workdir,
+        })
+        useCodexStore.getState().setBaselineFileChanges(baseline)
+      } catch {
+        useCodexStore.getState().setBaselineFileChanges([])
+      }
+    } else {
+      useCodexStore.getState().setBaselineFileChanges([])
+    }
     // 每个 run 内 item id 独立计数，跨 run 必须清空去重集合（否则 resume 新输出被误删）
     store.clearProcessedItems()
 

@@ -1,6 +1,6 @@
 use crate::services::git_service::GitService;
 use crate::types::git::{
-    CommitResult, GitBranch, GitCommit, GitRemote, GitStatus, GitSyncResult,
+    CommitResult, FileChangeBrief, GitBranch, GitCommit, GitRemote, GitStatus, GitSyncResult,
 };
 
 /// 获取 git 状态
@@ -25,6 +25,24 @@ pub fn git_checkout(repo: String, branch: String) -> Result<(), String> {
 #[tauri::command]
 pub fn git_diff(repo: String, path: String) -> Result<String, String> {
     GitService::diff(&repo, &path)
+}
+
+/// 获取文件的 diff（自动处理 tracked/untracked/删除），供对话流"文件变更卡片"使用
+#[tauri::command]
+pub fn git_diff_file(repo: String, path: String) -> Result<String, String> {
+    GitService::diff_file(&repo, &path)
+}
+
+/// 拒绝文件变更（回滚）：tracked 恢复 / untracked 删除，供对话流"文件变更卡片"使用
+#[tauri::command]
+pub fn git_discard_file(repo: String, path: String) -> Result<(), String> {
+    GitService::discard_file(&repo, &path)
+}
+
+/// 获取工作区实际变更文件列表（对话流"写入后审查"兜底）
+#[tauri::command]
+pub fn git_status_changes(repo: String) -> Result<Vec<FileChangeBrief>, String> {
+    GitService::status_changes(&repo)
 }
 
 /// 获取单个文件的已暂存 diff

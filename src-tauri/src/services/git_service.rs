@@ -408,6 +408,115 @@ impl GitService {
         Ok(stdout)
     }
 
+    /// 生成未跟踪（新增）文件的 unified diff（git diff --no-index /dev/null <path>）
+    ///
+    /// --no-index 在存在差异时退出码为 1，属正常；返回新增文件全量内容作为 add diff。
+    pub fn diff_untracked(repo: &str, path: &str) -> Result<String, String> {
+        let (code, stdout, stderr) = Self::run_git(
+            repo,
+            &[
+                "diff", "--no-index", "--no-color", "--unified=3", "--no-ext-diff", "--", "/dev/null",
+                path,
+            ],
+            None,
+        );
+        if code != 0 && code != 1 {
+            return Err(stderr.trim().to_string());
+        }
+        Ok(stdout)
+    }
+
+    /// 判断文件是否被 git 跟踪（含已删除但仍处于索引中的 tracked 文件）
+    fn is_tracked(repo: &str, rel_path: &str) -> bool {
+        let (code, _, _) =
+            Self::run_git(repo, &["ls-files", "--error-unmatch", "--", rel_path], None);
+        code == 0
+    }
+
+    /// 归一化路径：绝对路径裁剪为相对 repo 的相对路径；分隔符统一为 '/'
+    fn rel_path(repo: &str, path: &str) -> String {
+        let p = std::path::Path::new(path);
+        if p.is_absolute() {
+            if let Ok(rel) = p.strip_prefix(repo) {
+                return rel.to_string_lossy().replace('\\', "/");
+            }
+        }
+        path.replace('\\', "/")
+    }
+
+    /// 获取文件的 diff（自动处理 tracked/untracked/删除），供对话流"文件变更卡片"使用
+    ///
+    /// - tracked 文件（含工作区已删除）：git diff 显示修改/删除
+    /// - untracked 文件：git diff --no-index /dev/null 显示全量新增
+    pub fn diff_file(repo: &str, path: &str) -> Result<String, String> {
+        let rel = Self::rel_path(repo, path);
+        if Self::is_tracked(repo, &rel) {
+            return Self::diff(repo, &rel);
+        }
+        Self::diff_untracked(repo, &rel)
+    }
+
+    /// 拒绝文件变更（回滚）：tracked → git restore 恢复；untracked → 删除文件
+    pub fn discard_file(repo: &str, path: &str) -> Result<(), String> {
+        let rel = Self::rel_path(repo, path);
+        if Self::is_tracked(repo, &rel) {
+            return Self::discard_changes(repo, Some(&rel));
+        }
+        Self::discard_untracked(repo, &rel)
+    }
+
+    /// 删除未跟踪文件（git clean -f -- path），用于拒绝"新增文件"变更
+    pub fn discard_untracked(repo: &str, path: &str) -> Result<(), String> {
+        let (code, _, stderr) = Self::run_git(repo, &["clean", "-f", "--", path], None);
+        if code != 0 {
+            return Err(stderr.trim().to_string());
+        }
+        Ok(())
+    }
+
+    /// 获取工作区实际变更文件列表（对话流"写入后审查"兜底）。
+    ///
+    /// 解析 `git status --porcelain=v1 -z --untracked-files=all`：
+    /// - `??` → add（未跟踪）
+    /// - `A*` → add（新增，含已暂存）
+    /// - `D*` / `*D` → delete
+    /// - 其余（M/R/C 等）→ update
+    pub fn status_changes(repo: &str) -> Result<Vec<crate::types::git::FileChangeBrief>, String> {
+        use crate::types::git::FileChangeBrief;
+        if !Self::is_repo(repo) {
+            return Ok(Vec::new());
+        }
+        let (code, stdout, stderr) = Self::run_git(
+            repo,
+            &["status", "--porcelain=v1", "-z", "--untracked-files=all"],
+            None,
+        );
+        if code != 0 {
+            return Err(format!("git status failed: {stderr}"));
+        }
+        let mut changes = Vec::new();
+        // -z 模式：每条记录形如 "XY path\0"（NUL 分隔，无换行）
+        for entry in stdout.split('\0') {
+            if entry.len() < 4 {
+                continue;
+            }
+            let (xy, path) = entry.split_at(3); // "XY " 3 字节
+            let code = &xy[..2];
+            let kind = if code == "??" || code.starts_with('A') {
+                "add"
+            } else if code.starts_with('D') || code.ends_with('D') {
+                "delete"
+            } else {
+                "update"
+            };
+            changes.push(FileChangeBrief {
+                path: path.to_string(),
+                kind: kind.to_string(),
+            });
+        }
+        Ok(changes)
+    }
+
     /// 获取已暂存 diff（用于提交前确认）
     pub fn diff_cached(repo: &str, path: &str) -> Result<String, String> {
         let (code, stdout, stderr) = Self::run_git(

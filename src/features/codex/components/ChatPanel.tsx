@@ -18,6 +18,8 @@ import { useEffect, useRef, useState } from 'react'
 
 import { useCodexSession } from '../hooks/useCodexSession'
 
+import { FileChangeCard } from './FileChangeCard'
+
 import { Markdown } from '@/components/ui/Markdown'
 import { sessionService } from '@/services/sessionService'
 import { useCodexStore } from '@/stores/useCodexStore'
@@ -49,7 +51,7 @@ const STATUS_CONFIG: Record<CodexStatus, { label: string; icon: React.ReactNode;
     error: { label: 'Error', icon: <AlertCircle className="h-3.5 w-3.5" />, color: 'text-red-400' },
   }
 
-function MessageCard({ message }: { message: CodexMessage }) {
+function MessageCard({ message, repo }: { message: CodexMessage; repo?: string }) {
   const [expanded, setExpanded] = useState(true)
   // 打字机流式状态：若该消息正在逐字显示，用已渲染文本
   const streaming = useCodexStore((s) => s.streaming)
@@ -76,6 +78,11 @@ function MessageCard({ message }: { message: CodexMessage }) {
     minute: '2-digit',
     second: '2-digit',
   })
+
+  // 文件变更卡片：内联展示 Agent 的修改 + 接受/拒绝回滚
+  if (message.kind === 'file_change') {
+    return <FileChangeCard message={message} repo={repo} />
+  }
 
   if (message.kind === 'system' || message.kind === 'usage') {
     return (
@@ -419,7 +426,11 @@ export function ChatPanel() {
             )}
             {/* 结构化消息 */}
             {messages.map((msg) => (
-              <MessageCard key={msg.id} message={msg} />
+              <MessageCard
+                key={msg.id}
+                message={msg}
+                repo={currentSessionWorkdir || workspaceCwd}
+              />
             ))}
           </div>
         )}

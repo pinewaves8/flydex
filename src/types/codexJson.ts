@@ -42,6 +42,12 @@ export type CodexItem =
       aggregated_output?: string
       exit_code?: number | null
     }
+  | {
+      id: string
+      type: 'file_change'
+      changes: CodexFileChange[]
+      status?: string
+    }
 
 /** token 使用统计 */
 export interface CodexUsage {
@@ -52,13 +58,21 @@ export interface CodexUsage {
   reasoning_output_tokens?: number
 }
 
+/** 文件变更项（file_change item 内的单个文件） */
+export interface CodexFileChange {
+  path: string
+  kind: 'add' | 'delete' | 'update'
+}
+
 /** 前端渲染用的结构化消息 */
 export interface CodexMessage {
   id: string
-  kind: 'agent' | 'tool' | 'error' | 'system' | 'usage'
+  kind: 'agent' | 'tool' | 'error' | 'system' | 'usage' | 'file_change'
   content: string
   toolName?: string
   toolArgs?: unknown
   usage?: CodexUsage
+  /** file_change 消息的文件变更列表 */
+  fileChanges?: CodexFileChange[]
   timestamp: number
 }

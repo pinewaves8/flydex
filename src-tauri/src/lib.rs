@@ -9,9 +9,10 @@ mod utils;
 use commands::codex::{approve_codex, run_codex, stop_codex};
 use commands::git::{
     git_add_remote, git_branches, git_checkout, git_commit, git_create_branch, git_delete_branch,
-    git_diff, git_diff_cached, git_discard_changes, git_fetch, git_log, git_pull, git_push,
-    git_remotes, git_remove_remote, git_rename_branch, git_show, git_stage_all, git_stage_file,
-    git_stage_hunk, git_status, git_unstage_all, git_unstage_file, git_unstage_hunk,
+    git_diff, git_diff_cached, git_diff_file, git_discard_changes, git_discard_file, git_fetch,
+    git_log, git_pull, git_push, git_remotes, git_remove_remote, git_rename_branch, git_show,
+    git_stage_all, git_stage_file, git_stage_hunk, git_status, git_status_changes, git_unstage_all,
+    git_unstage_file, git_unstage_hunk,
 };
 use commands::model::{
     delete_model, delete_provider, get_models, set_current_model, set_reasoning_effort,
@@ -65,10 +66,13 @@ pub fn run() {
             test_model,
             // git
             git_status,
+            git_status_changes,
             git_branches,
             git_checkout,
             git_diff,
             git_diff_cached,
+            git_diff_file,
+            git_discard_file,
             git_stage_hunk,
             git_unstage_hunk,
             git_commit,

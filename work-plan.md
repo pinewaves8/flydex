@@ -306,6 +306,9 @@ src-tauri/src/
 
 ### 任务 1.4：文件操作可视化（Diff 查看 + 逐块接受）
 
+> **状态：✅ 已完成（2026-09-01）**
+> **实现摘要**：按调研推荐改为**整文件粒度**（不做逐块接受，对齐 Claude Code 官方趋势——"接受不相干子集会产生拼不起来的代码"）；diff 来源为 `git diff`（新增文件用 `git diff --no-index /dev/null`；删除/非 git 仓库特判标注）；复用 Git 面板同一套 diff 渲染（抽象为共享 `DiffViewer` 组件）；文件变更以内联 `FileChangeCard` 卡片插入对话流（文件列表 + kind 图标 + 懒加载 diff + 接受保留/拒绝回滚 + 全部接受/拒绝）。新增后端命令 `git_diff_file` / `git_discard_file`（自动处理 tracked/untracked/删除 + 路径归一化）。
+
 | 项 | 内容 |
 |----|------|
 | **描述** | 实现文件修改的可视化，工具调用卡片中显示 diff，支持逐块接受/拒绝修改 |
@@ -320,6 +323,9 @@ src-tauri/src/
 - 修改是先存暂存区再应用，还是直接写文件？（建议先存内存暂存区，用户接受后写磁盘）
 
 ### 任务 1.5：审批拦截交互
+
+> **状态：✅ 已完成（2026-09-01）**
+> **实现摘要**：经代码级核实，`codex exec --json` 事件流**不含 `approval_request` 事件**（写入前审批是 app-server 协议才具备的能力，exec 模式下审批由 codex 内部阻塞等待 y/n）。故 1.5 按**"写入后审查"**形态交付（对齐 Claude Code 的 acceptEdits）：文件写入后立即以 FileChangeCard 展示，用户可逐文件/全部"保留"或"回滚"。现有命令审批卡（approval_request 通路为 dead code）保留并标注"命令审批（实验性）"。
 
 | 项 | 内容 |
 |----|------|

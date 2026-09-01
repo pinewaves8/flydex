@@ -1,7 +1,7 @@
 import { create } from 'zustand'
 
 import type { CodexOutputLine, CodexStatus } from '@/types/codex'
-import type { CodexMessage, CodexUsage } from '@/types/codexJson'
+import type { CodexMessage, CodexFileChange, CodexUsage } from '@/types/codexJson'
 
 /** 待审批的操作（由 codex approval_request 触发） */
 export interface CodexApproval {
@@ -44,6 +44,12 @@ interface CodexState {
   lineId: number
   /** 本轮开始时间戳（用于显示每轮耗时） */
   runStartedAt: number | null
+  /** 当前 run 的工作目录（写入后审查兜底：turn 完成时对比 git 工作区） */
+  runWorkdir: string | null
+  /** 已展示过的文件变更 key（path|kind），避免重复生成文件变更卡片 */
+  seenFileChanges: string[]
+  /** 本轮开始时的 git 工作区变更快照（用于只展示本轮新增的变更，避免误报历史遗留文件） */
+  baselineFileChanges: CodexFileChange[]
   setStatus: (status: CodexStatus) => void
   appendOutput: (line: Omit<CodexOutputLine, 'id'>) => void
   appendMessage: (message: Omit<CodexMessage, 'id' | 'timestamp'>) => string
@@ -54,6 +60,9 @@ interface CodexState {
   setUsage: (usage: CodexUsage | null) => void
   setPendingRunId: (id: string | null) => void
   setRunStartedAt: (ts: number | null) => void
+  setRunWorkdir: (w: string | null) => void
+  markFileChangesSeen: (keys: string[]) => void
+  setBaselineFileChanges: (changes: CodexFileChange[]) => void
   upsertRunningCommand: (cmd: CodexRunningCommand) => void
   removeRunningCommand: (id: string) => void
   setRunningCommands: (cmds: CodexRunningCommand[]) => void
@@ -79,6 +88,9 @@ export const useCodexStore = create<CodexState>((set, get) => ({
   processedItemIds: [],
   lineId: 0,
   runStartedAt: null,
+  runWorkdir: null,
+  seenFileChanges: [],
+  baselineFileChanges: [],
   setStatus: (status) => set({ status }),
   appendOutput: (line) =>
     set((state) => ({
@@ -98,6 +110,12 @@ export const useCodexStore = create<CodexState>((set, get) => ({
   setUsage: (usage) => set({ usage }),
   setPendingRunId: (id) => set({ pendingRunId: id }),
   setRunStartedAt: (ts) => set({ runStartedAt: ts }),
+  setRunWorkdir: (w) => set({ runWorkdir: w }),
+  markFileChangesSeen: (keys) =>
+    set((state) => ({
+      seenFileChanges: [...state.seenFileChanges, ...keys],
+    })),
+  setBaselineFileChanges: (changes) => set({ baselineFileChanges: changes }),
   upsertRunningCommand: (cmd) =>
     set((state) => {
       const exists = state.runningCommands.some((c) => c.id === cmd.id)
@@ -144,6 +162,9 @@ export const useCodexStore = create<CodexState>((set, get) => ({
       processedItemIds: [],
       lineId: 0,
       runStartedAt: null,
+      runWorkdir: null,
+      seenFileChanges: [],
+      baselineFileChanges: [],
     }),
   loadSession: (data) =>
     set({
@@ -159,5 +180,8 @@ export const useCodexStore = create<CodexState>((set, get) => ({
       streaming: null,
       processedItemIds: [],
       runStartedAt: null,
+      runWorkdir: null,
+      seenFileChanges: [],
+      baselineFileChanges: [],
     }),
 }))
