@@ -25,11 +25,13 @@ function emptyServer(): McpServer {
   }
 }
 
+// codex 合法值: auto / prompt / writes / approve（无 never/reject）
 const APPROVAL_OPTIONS = [
   { value: '', label: '跟随全局审批' },
-  { value: 'approve', label: '需要审批' },
-  { value: 'never', label: '免审批（自动）' },
-  { value: 'reject', label: '拒绝调用' },
+  { value: 'approve', label: '需要批准（默认）' },
+  { value: 'auto', label: '自动允许（免审批）' },
+  { value: 'prompt', label: '每次调用询问' },
+  { value: 'writes', label: '仅写操作询问' },
 ]
 
 export function McpSettings() {
