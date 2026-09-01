@@ -227,6 +227,12 @@ export function useCodexSession() {
         const payload = event.payload
         if (payload.type === 'Done') {
           const store = useCodexStore.getState()
+          // 兜底：计划模式下若本轮有 agent 消息但未转成计划卡片（turn.completed
+          // 事件缺失/异常提前结束时），在进程结束前把最后一个 agent 消息转为计划。
+          if (useCodexStore.getState().planMode && lastPlanMsgId) {
+            store.updateMessageKind(lastPlanMsgId, 'plan')
+            lastPlanMsgId = null
+          }
           store.setExitCode(payload.data.exit_code)
           store.setStatus(payload.data.exit_code === 0 ? 'done' : 'error')
           store.setPendingRunId(null)
