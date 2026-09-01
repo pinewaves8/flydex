@@ -191,6 +191,10 @@ impl CodexManager {
             }
         }
         args.push("--json".to_string());
+        // 桌面应用场景：用户主动选择工作目录（常为非 git 项目），跳过 codex 的
+        // "trusted directory" 检查，否则非 git 目录直接报 "Not inside a trusted directory"。
+        // 实际安全边界由 sandbox_mode（read-only / workspace-write / danger-full-access）控制。
+        args.push("--skip-git-repo-check".to_string());
         // 从安全配置读取沙箱模式与审批策略，统一用 `-c` 覆盖（exec 与 resume 均支持）。
         // 沙箱：read-only / workspace-write / danger-full-access（真实用户权限，AI 可完成 git 写操作）
         // 审批：untrusted / on-request / never（模型按需请求时触发 approval_request 事件 → 前端审批卡）

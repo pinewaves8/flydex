@@ -1,5 +1,7 @@
-import { open } from '@tauri-apps/plugin-dialog'
+import { confirm, open } from '@tauri-apps/plugin-dialog'
 import { create } from 'zustand'
+
+import { gitService } from '@/services/gitService'
 
 const CWD_KEY = 'flydex.workspace.cwd'
 const DEFAULT_CWD = 'C:\\llm\\flydex'
@@ -13,6 +15,26 @@ function loadInitialCwd(): string {
     // ignore
   }
   return DEFAULT_CWD
+}
+
+/**
+ * 打开非 git 目录时引导初始化 git 仓库。
+ *
+ * git 仓库是文件变更卡片（diff/回滚）与 Git 面板的前提；
+ * 初始化后 Codex 的文件修改可查看 diff 并可回滚（强烈建议）。
+ * 用户取消则保持非 git 模式（文件变更不显示 diff 卡片）。
+ */
+async function ensureGitRepo(dir: string) {
+  try {
+    if (await gitService.isRepo(dir)) return
+    const yes = await confirm(
+      `"${dir}" 不是 Git 仓库。\n\n是否初始化 Git 仓库？\n初始化后：Codex 文件变更可查看 diff 并可回滚、Git 面板可用（强烈建议）。\n提示：初始化后建议先在 Git 面板做一次首次提交，之后所有文件修改都会显示 diff 卡片。\n\n取消则保持非 Git 模式。`,
+      { title: '初始化 Git 仓库', kind: 'warning' },
+    )
+    if (yes) await gitService.init(dir)
+  } catch {
+    // 静默：检测/初始化失败不影响打开目录
+  }
 }
 
 interface WorkspaceState {
@@ -43,6 +65,8 @@ export const useWorkspaceStore = create<WorkspaceState>((set) => ({
       // ignore
     }
     set({ cwd: p })
+    // 非 git 目录引导初始化（覆盖 TitleBar / Projects 所有打开入口）
+    void ensureGitRepo(p)
   },
 
   openFolder: async () => {

@@ -9,6 +9,18 @@ pub fn git_status(repo: String) -> Result<GitStatus, String> {
     GitService::status(&repo)
 }
 
+/// 判断目录是否为 git 仓库
+#[tauri::command]
+pub fn git_is_repo(repo: String) -> bool {
+    GitService::is_repo(&repo)
+}
+
+/// 初始化 git 仓库（打开非 git 项目时引导）
+#[tauri::command]
+pub fn git_init(repo: String) -> Result<(), String> {
+    GitService::init(&repo)
+}
+
 /// 获取所有分支
 #[tauri::command]
 pub fn git_branches(repo: String) -> Result<Vec<GitBranch>, String> {

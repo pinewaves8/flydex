@@ -78,6 +78,15 @@ impl GitService {
         code == 0
     }
 
+    /// 初始化 git 仓库
+    pub fn init(repo: &str) -> Result<(), String> {
+        let (code, _, stderr) = Self::run_git(repo, &["init"], None);
+        if code != 0 {
+            return Err(stderr.trim().to_string());
+        }
+        Ok(())
+    }
+
     /// 获取当前分支名
     fn current_branch(repo: &str) -> (String, bool) {
         let (code, stdout, _) = Self::run_git(repo, &["rev-parse", "--abbrev-ref", "HEAD"], None);

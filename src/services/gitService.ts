@@ -15,6 +15,16 @@ import type {
  * 封装与 Tauri 后端 Git 相关的 IPC 调用。
  */
 export const gitService = {
+  /** 判断目录是否为 git 仓库 */
+  async isRepo(repo: string): Promise<boolean> {
+    return invoke<boolean>('git_is_repo', { repo })
+  },
+
+  /** 初始化 git 仓库 */
+  async init(repo: string): Promise<void> {
+    await invoke('git_init', { repo })
+  },
+
   /** 获取 git 状态（变更列表 + 当前分支） */
   async status(repo: string): Promise<GitStatus> {
     return invoke<GitStatus>('git_status', { repo })

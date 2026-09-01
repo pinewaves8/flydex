@@ -357,6 +357,9 @@ src-tauri/src/
 
 ### 任务 1.7：端到端闭环联调
 
+> **状态：✅ 已完成（2026-09-01）**
+> **实现摘要**：跑通"打开项目 → 创建 hello.py → 文件变更卡片 → 运行输出 → 会话完成"完整闭环。联调修复：(1) codex 命令加 `--skip-git-repo-check`（否则非 git 目录报 "Not inside a trusted directory"）；(2) 打开非 git 目录时集中式引导初始化 git 仓库（全局 setCwd 入口，confirm 弹窗 + `git init`），git 化后文件变更卡片/Git 面板才可用；非 git 按"无卡片"处理（git 语义边界：untracked 文件修改不追踪，提示先做首次提交）。
+
 | 项 | 内容 |
 |----|------|
 | **描述** | 将 1.1-1.6 的组件串联，完成一次真实的 Codex 对话全流程，修复联调中的问题 |
