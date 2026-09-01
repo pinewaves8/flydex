@@ -198,6 +198,50 @@
   background: hsl(var(--muted-foreground) / 0.5);
 }
 
+/* ── 2.2 / 2.3 风格差异化增强 ── */
+
+/* 主题切换平滑过渡 */
+body {
+  transition:
+    background-color 0.2s ease,
+    color 0.2s ease;
+}
+
+/* 选区：极客风霓虹青 / 简洁风靛蓝 */
+[data-theme='geek'] ::selection {
+  background: hsl(165 100% 50% / 0.28);
+}
+[data-theme='clean'] ::selection {
+  background: hsl(239 84% 67% / 0.22);
+}
+
+/* 背景氛围（叠加在 background-color 之上的渐变光晕） */
+[data-theme='geek'] body {
+  background-image:
+    radial-gradient(1100px 520px at 50% -8%, hsl(165 100% 55% / 0.08), transparent 62%),
+    radial-gradient(900px 500px at 100% 100%, hsl(280 70% 55% / 0.06), transparent 60%);
+}
+[data-theme='clean'] body {
+  background-image: radial-gradient(
+    900px 420px at 50% -10%,
+    hsl(239 84% 70% / 0.06),
+    transparent 60%
+  );
+}
+
+/* 链接与主交互色在极客风下的悬停发光 */
+[data-theme='geek'] a:hover,
+[data-theme='geek'] button:hover:not(:disabled) {
+  transition:
+    color 0.15s ease,
+    border-color 0.15s ease,
+    box-shadow 0.15s ease,
+    background-color 0.15s ease;
+}
+[data-theme='geek'] button:hover:not(:disabled) {
+  box-shadow: 0 0 0 1px hsl(165 100% 50% / 0.25);
+}
+
 /* Markdown rendering */
 .markdown-body {
   color: hsl(var(--foreground));
