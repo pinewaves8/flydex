@@ -33,6 +33,7 @@ export function parseReviewReport(content: string): ReviewReport {
     .map((l) => l.replace(/\r$/, '').trim())
     .filter(Boolean)
   const issues: ReviewIssue[] = []
+  const seen = new Set<string>()
   let summary = ''
   let conclusion = ''
   const rest: string[] = []
@@ -41,13 +42,17 @@ export function parseReviewReport(content: string): ReviewReport {
       /^[【[]?(严重|警告|建议|好评)[】]]?\s*\|([^|:]+?)\s*:\s*(\d+)\s*\|(.+?)(?:\|(.+))?$/,
     )
     if (m) {
-      issues.push({
-        level: m[1] as ReviewLevel,
-        file: m[2].trim(),
-        line: m[3],
-        summary: m[4].trim(),
-        suggestion: m[5]?.trim(),
-      })
+      const key = m[2].trim() + ':' + m[3] + '|' + m[4].trim()
+      if (!seen.has(key)) {
+        seen.add(key)
+        issues.push({
+          level: m[1] as ReviewLevel,
+          file: m[2].trim(),
+          line: m[3],
+          summary: m[4].trim(),
+          suggestion: m[5]?.trim(),
+        })
+      }
       continue
     }
     if (/^审查总结[:：]/.test(line)) {
