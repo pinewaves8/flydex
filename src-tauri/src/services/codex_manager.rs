@@ -227,7 +227,11 @@ impl CodexManager {
         args.extend(Self::model_args(session_model.as_deref()));
         // 计划模式：在用户指令前注入计划指令（配合 read-only 沙箱双重约束）
         let final_command = match mode {
-            CodexExecMode::Plan => format!("{}\n\n用户需求：{}", PLAN_INSTRUCTION, command),
+            CodexExecMode::Plan => format!(
+                "{} 用户需求：{}",
+                PLAN_INSTRUCTION,
+                command.replace(['\n', '\r'], " ")
+            ),
             _ => command.clone(),
         };
         args.push(final_command);
