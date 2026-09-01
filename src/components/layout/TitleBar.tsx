@@ -1,7 +1,8 @@
-import { FolderOpen, ShieldCheck, Sparkles } from 'lucide-react'
+import { FolderOpen, Moon, Palette, ShieldCheck, Sparkles, Sun } from 'lucide-react'
 import { useEffect } from 'react'
 
 import { useSecurityStore } from '@/stores/useSecurityStore'
+import { useThemeStore } from '@/stores/useThemeStore'
 import { useUIStore } from '@/stores/useUIStore'
 import { useWorkspaceStore } from '@/stores/useWorkspaceStore'
 import { approvalLabel, sandboxLabel } from '@/types/security'
@@ -12,6 +13,10 @@ export function TitleBar() {
   const securityConfig = useSecurityStore((s) => s.config)
   const loadSecurity = useSecurityStore((s) => s.load)
   const openSettings = useUIStore((s) => s.openSettings)
+  const themeStyle = useThemeStore((s) => s.style)
+  const themeMode = useThemeStore((s) => s.mode)
+  const toggleStyle = useThemeStore((s) => s.toggleStyle)
+  const toggleMode = useThemeStore((s) => s.toggleMode)
 
   // 启动时加载安全配置（顶部状态栏显示）
   useEffect(() => {
@@ -42,6 +47,30 @@ export function TitleBar() {
           <FolderOpen className="h-3.5 w-3.5 shrink-0 text-muted-foreground" />
           <span className="truncate font-mono">{cwd}</span>
           <span className="shrink-0 text-[10px] opacity-60">▾</span>
+        </button>
+
+        {/* 主题风格切换（极客风 / 简洁风） */}
+        <button
+          onClick={toggleStyle}
+          className="flex items-center gap-1.5 rounded-md border border-border bg-muted/40 px-2.5 py-1 text-xs text-muted-foreground transition-colors hover:bg-accent/50 hover:text-foreground"
+          title={`主题风格：${themeStyle === 'geek' ? '极客风' : '简洁风'}\n点击切换（用于风格对比）`}
+        >
+          <Palette className="h-3.5 w-3.5 shrink-0" />
+          <span className="hidden md:inline">{themeStyle === 'geek' ? '极客' : '简洁'}</span>
+        </button>
+
+        {/* 明暗模式切换 */}
+        <button
+          onClick={toggleMode}
+          className="flex items-center gap-1.5 rounded-md border border-border bg-muted/40 px-2.5 py-1 text-xs text-muted-foreground transition-colors hover:bg-accent/50 hover:text-foreground"
+          title={`明暗模式：${themeMode === 'dark' ? '深色' : '浅色'}\n点击切换`}
+        >
+          {themeMode === 'dark' ? (
+            <Moon className="h-3.5 w-3.5 shrink-0" />
+          ) : (
+            <Sun className="h-3.5 w-3.5 shrink-0" />
+          )}
+          <span className="hidden md:inline">{themeMode === 'dark' ? '深色' : '浅色'}</span>
         </button>
 
         {/* 安全状态指示器 */}

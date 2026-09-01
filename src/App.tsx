@@ -8,6 +8,7 @@ import { ProjectsPanel } from '@/features/project'
 import { SettingsPanel } from '@/features/security/SettingsPanel'
 import { TerminalPanel } from '@/features/terminal'
 import { useProjectStore } from '@/stores/useProjectStore'
+import { applyTheme, useThemeStore } from '@/stores/useThemeStore'
 import { useUIStore } from '@/stores/useUIStore'
 import { useWorkspaceStore } from '@/stores/useWorkspaceStore'
 
@@ -27,6 +28,12 @@ function App() {
       }
     })()
   }, [loadProjects])
+
+  // 启动时应用已保存的主题
+  useEffect(() => {
+    const { style, mode } = useThemeStore.getState()
+    applyTheme(style, mode)
+  }, [])
 
   return (
     <div className="flex h-screen w-screen flex-col bg-background text-foreground">

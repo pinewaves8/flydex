@@ -34,6 +34,10 @@ export default {
           DEFAULT: "hsl(var(--card))",
           foreground: "hsl(var(--card-foreground))",
         },
+        overlay: "hsl(var(--overlay))",
+      },
+      boxShadow: {
+        card: "var(--shadow-card)",
       },
       borderRadius: {
         lg: "var(--radius)",
