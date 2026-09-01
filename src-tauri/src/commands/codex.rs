@@ -26,6 +26,7 @@ pub async fn run_codex(
 ) -> Result<(), String> {
     let exec_mode = match mode.as_deref() {
         Some("resume") => CodexExecMode::Resume,
+        Some("plan") => CodexExecMode::Plan,
         _ => CodexExecMode::Exec,
     };
     let rid = run_id.unwrap_or_else(|| {

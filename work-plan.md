@@ -505,6 +505,14 @@ src-tauri/src/
 | **验收标准** | 1. /plan-mode 或按钮切换 2. 开启后 Agent 先生成分步计划 3. 计划可编辑（修改/删除/重排序）4. 全部批准/逐步批准 5. 执行过程中每步显示结果 6. 完成后可触发 review |
 | **预估** | 2 天 |
 
+> **状态：✅ 已完成（2026-09-01）**
+> **实现摘要**：应用层两阶段 Plan Mode（借鉴 Claude Code，codex CLI 无原生 plan mode）：
+> - 计划轮：后端新增 `CodexExecMode::Plan`，`-c sandbox_mode=read-only`（硬约束无法写文件）+ 注入计划指令（编号步骤：目标/涉及文件/操作）；已有会话 resume 保持上下文，否则新开
+> - 批准轮：`codex exec resume <thread_id>` 切回用户正常沙箱，按批准计划逐步执行（现有 tool/file 卡片显示每步结果）
+> - 前端：ChatPanel 输入区 Plan toggle；`PlanCard` 组件（编号步骤解析、步骤编辑/删除/添加、批准并执行/取消计划）；useCodexStore 新增 `planMode`；useCodexSession 新增 `approvePlan`/`cancelPlan`、`run` 支持 mode 参数
+> - 已验收：CLI 端到端实测 计划轮输出分步计划且不写文件 → 批准轮 resume 同会话创建文件成功（read-only 硬约束 + 指令双重生效）
+> - 说明：逐步独立批准（每步一次 exec）未做，以"编辑筛选步骤 + 全部批准"替代（MVP 合理）；完成后触发 review 衔接 3.2
+
 ### 任务 3.7：会话历史管理
 
 | 项 | 内容 |

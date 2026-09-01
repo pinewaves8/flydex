@@ -67,7 +67,7 @@ export interface CodexFileChange {
 /** 前端渲染用的结构化消息 */
 export interface CodexMessage {
   id: string
-  kind: 'agent' | 'tool' | 'error' | 'system' | 'usage' | 'file_change'
+  kind: 'agent' | 'tool' | 'error' | 'system' | 'usage' | 'file_change' | 'plan'
   content: string
   toolName?: string
   toolArgs?: unknown

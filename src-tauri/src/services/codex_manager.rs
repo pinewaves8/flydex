@@ -16,7 +16,14 @@ pub enum CodexExecMode {
     Exec,
     /// 恢复会话：codex exec resume --last --json
     Resume,
+    /// 计划模式：沙箱强制 read-only（只出计划不改文件）+ 注入计划指令；
+    /// 已有会话则 resume 保持对话上下文，否则新开首轮
+    Plan,
 }
+
+/// 计划模式注入的系统指令：强制模型只输出计划、不执行任何写操作。
+/// 配合 read-only 沙箱形成双重约束（指令约束 + 硬权限约束）。
+const PLAN_INSTRUCTION: &str = "【计划模式】你当前的工作目录是只读的，无法创建、修改或删除任何文件。请先充分分析用户需求（可以读取和搜索代码与文件），然后输出一份分步执行计划，不要实际执行任何修改。要求：1) 用编号列表分步列出每一步（每步包含：目标、涉及文件、具体操作）；2) 计划要具体、可执行、覆盖边界情况；3) 只输出计划本身，不要执行任何写操作。";
 
 /// 运行中的 codex 进程句柄（供审批写入与停止）
 pub struct ActiveCodex {
@@ -189,6 +196,13 @@ impl CodexManager {
                     args.push("--last".to_string());
                 }
             }
+            CodexExecMode::Plan => {
+                // 计划模式：已有会话则 resume 保持对话上下文（仍在只读沙箱下）
+                if let Some(tid) = &thread_id {
+                    args.push("resume".to_string());
+                    args.push(tid.clone());
+                }
+            }
         }
         args.push("--json".to_string());
         // 桌面应用场景：用户主动选择工作目录（常为非 git 项目），跳过 codex 的
@@ -200,13 +214,23 @@ impl CodexManager {
         // 审批：untrusted / on-request / never（模型按需请求时触发 approval_request 事件 → 前端审批卡）
         let sec = SecurityService::load();
         // 所有 -c 值一律不加引号（cmd /c 重新解析会破坏内嵌引号），含连字符的值也可安全裸传
+        // 计划模式强制 read-only 沙箱（模型只能分析出计划，无法修改任何文件）；其余用用户安全配置
+        let sandbox = match mode {
+            CodexExecMode::Plan => "read-only",
+            _ => sec.sandbox_mode.as_codex(),
+        };
         args.push("-c".to_string());
-        args.push(format!("sandbox_mode={}", sec.sandbox_mode.as_codex()));
+        args.push(format!("sandbox_mode={}", sandbox));
         args.push("-c".to_string());
         args.push(format!("approval_policy={}", sec.approval_policy.as_codex()));
         // 模型参数：会话级覆盖 > 全局默认
         args.extend(Self::model_args(session_model.as_deref()));
-        args.push(command.clone());
+        // 计划模式：在用户指令前注入计划指令（配合 read-only 沙箱双重约束）
+        let final_command = match mode {
+            CodexExecMode::Plan => format!("{}\n\n用户需求：{}", PLAN_INSTRUCTION, command),
+            _ => command.clone(),
+        };
+        args.push(final_command);
 
         // 创建伪终端
         let pty_system = native_pty_system();

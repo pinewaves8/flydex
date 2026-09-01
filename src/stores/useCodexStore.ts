@@ -50,6 +50,9 @@ interface CodexState {
   seenFileChanges: string[]
   /** 本轮开始时的 git 工作区变更快照（用于只展示本轮新增的变更，避免误报历史遗留文件） */
   baselineFileChanges: CodexFileChange[]
+  /** 计划模式开关（开启后发送生成计划而非直接执行，批准后再执行） */
+  planMode: boolean
+  setPlanMode: (v: boolean) => void
   setStatus: (status: CodexStatus) => void
   appendOutput: (line: Omit<CodexOutputLine, 'id'>) => void
   appendMessage: (message: Omit<CodexMessage, 'id' | 'timestamp'>) => string
@@ -91,6 +94,8 @@ export const useCodexStore = create<CodexState>((set, get) => ({
   runWorkdir: null,
   seenFileChanges: [],
   baselineFileChanges: [],
+  planMode: false,
+  setPlanMode: (v) => set({ planMode: v }),
   setStatus: (status) => set({ status }),
   appendOutput: (line) =>
     set((state) => ({
@@ -165,6 +170,7 @@ export const useCodexStore = create<CodexState>((set, get) => ({
       runWorkdir: null,
       seenFileChanges: [],
       baselineFileChanges: [],
+      planMode: false,
     }),
   loadSession: (data) =>
     set({
@@ -183,5 +189,6 @@ export const useCodexStore = create<CodexState>((set, get) => ({
       runWorkdir: null,
       seenFileChanges: [],
       baselineFileChanges: [],
+      planMode: false,
     }),
 }))

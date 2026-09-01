@@ -2,7 +2,7 @@ import { invoke } from '@tauri-apps/api/core'
 import { listen, type UnlistenFn } from '@tauri-apps/api/event'
 import { useCallback, useEffect } from 'react'
 
-import { approveCodex, runCodex, stopCodex } from '@/services/codex'
+import { approveCodex, runCodex, stopCodex, type CodexExecMode } from '@/services/codex'
 import { useCodexStore, type CodexApproval } from '@/stores/useCodexStore'
 import { useSecurityStore } from '@/stores/useSecurityStore'
 import type { CodexEvent } from '@/types/codex'
@@ -109,6 +109,13 @@ export function useCodexSession() {
         // 事件级幂等去重：同一 item 重复投递（监听器泄漏/StrictMode）只处理一次
         if (item.id && !store.markItemProcessed(item.id)) return
         if (item.type === 'agent_message') {
+          const st = useCodexStore.getState()
+          if (st.planMode) {
+            // 计划模式：本轮输出为分步计划，存入计划卡片（完整展示，不流式打字机）
+            store.appendMessage({ kind: 'plan', content: item.text })
+            store.setStreaming(null)
+            return
+          }
           // 存入全文，同时标记为打字机流式（显示层逐字）；id 用 appendMessage 返回的真实 id
           const msgId = store.appendMessage({ kind: 'agent', content: item.text })
           store.setStreaming({ id: msgId, full: item.text, shown: 0 })
@@ -235,58 +242,61 @@ export function useCodexSession() {
   }, []) // 空依赖，只在挂载时执行一次
 
   // 发送指令
-  const run = useCallback(async (command: string, workdir?: string, model?: string | null) => {
-    const store = useCodexStore.getState()
-    const mode = store.threadId ? 'resume' : 'exec'
-    const runId = crypto.randomUUID()
+  const run = useCallback(
+    async (command: string, workdir?: string, model?: string | null, mode?: CodexExecMode) => {
+      const store = useCodexStore.getState()
+      const execMode = mode ?? (store.threadId ? 'resume' : 'exec')
+      const runId = crypto.randomUUID()
 
-    store.setStatus('running')
-    store.setExitCode(null)
-    store.setUsage(null)
-    store.setPendingRunId(runId)
-    store.setRunStartedAt(Date.now())
-    store.setApproval(null)
-    store.setRunningCommands([])
-    store.setStreaming(null)
-    store.setRunWorkdir(workdir ?? null)
-    // 记录本轮开始时的 git 工作区快照（turn 完成时只展示本轮新增的变更）
-    if (workdir) {
-      try {
-        const baseline = await invoke<CodexFileChange[]>('git_status_changes', {
-          repo: workdir,
-        })
-        useCodexStore.getState().setBaselineFileChanges(baseline)
-      } catch {
+      store.setStatus('running')
+      store.setExitCode(null)
+      store.setUsage(null)
+      store.setPendingRunId(runId)
+      store.setRunStartedAt(Date.now())
+      store.setApproval(null)
+      store.setRunningCommands([])
+      store.setStreaming(null)
+      store.setRunWorkdir(workdir ?? null)
+      // 记录本轮开始时的 git 工作区快照（turn 完成时只展示本轮新增的变更）
+      if (workdir) {
+        try {
+          const baseline = await invoke<CodexFileChange[]>('git_status_changes', {
+            repo: workdir,
+          })
+          useCodexStore.getState().setBaselineFileChanges(baseline)
+        } catch {
+          useCodexStore.getState().setBaselineFileChanges([])
+        }
+      } else {
         useCodexStore.getState().setBaselineFileChanges([])
       }
-    } else {
-      useCodexStore.getState().setBaselineFileChanges([])
-    }
-    // 每个 run 内 item id 独立计数，跨 run 必须清空去重集合（否则 resume 新输出被误删）
-    store.clearProcessedItems()
+      // 每个 run 内 item id 独立计数，跨 run 必须清空去重集合（否则 resume 新输出被误删）
+      store.clearProcessedItems()
 
-    try {
-      await runCodex(command, {
-        workdir,
-        mode,
-        threadId: store.threadId ?? undefined,
-        runId,
-        model: model ?? null,
-      })
-      // 兜底：如果 done 事件丢失，强制更新状态
-      if (useCodexStore.getState().status === 'running') {
-        useCodexStore.getState().setStatus('done')
+      try {
+        await runCodex(command, {
+          workdir,
+          mode: execMode,
+          threadId: store.threadId ?? undefined,
+          runId,
+          model: model ?? null,
+        })
+        // 兜底：如果 done 事件丢失，强制更新状态
+        if (useCodexStore.getState().status === 'running') {
+          useCodexStore.getState().setStatus('done')
+          useCodexStore.getState().setPendingRunId(null)
+        }
+      } catch (err) {
+        useCodexStore.getState().appendOutput({
+          text: `Failed to start codex: ${String(err)}`,
+          kind: 'stderr',
+        })
+        useCodexStore.getState().setStatus('error')
         useCodexStore.getState().setPendingRunId(null)
       }
-    } catch (err) {
-      useCodexStore.getState().appendOutput({
-        text: `Failed to start codex: ${String(err)}`,
-        kind: 'stderr',
-      })
-      useCodexStore.getState().setStatus('error')
-      useCodexStore.getState().setPendingRunId(null)
-    }
-  }, [])
+    },
+    [],
+  )
 
   // 停止当前运行
   const stop = useCallback(async () => {
@@ -329,6 +339,32 @@ export function useCodexSession() {
     useCodexStore.getState().reset()
   }, [])
 
+  // 批准计划并执行：退出计划模式，resume 同一会话按批准的计划逐步执行
+  const approvePlan = useCallback(
+    async (steps: string[]) => {
+      const store = useCodexStore.getState()
+      const planText = steps
+        .map((s, i) => `${i + 1}. ${s.trim()}`)
+        .filter(Boolean)
+        .join('\n')
+      if (!planText) return
+      const approvalCmd = `【计划已批准】请严格按以下已批准的计划逐步执行：\n${planText}`
+      store.setPlanMode(false)
+      store.appendMessage({
+        kind: 'system',
+        content: '▸ 计划已批准，开始执行',
+      })
+      await run(approvalCmd, store.runWorkdir ?? undefined, null)
+    },
+    [run],
+  )
+
+  // 取消计划：退出计划模式（计划卡片保留，可重新批准）
+  const cancelPlan = useCallback(() => {
+    useCodexStore.getState().setPlanMode(false)
+    useCodexStore.getState().appendMessage({ kind: 'system', content: '▸ 已取消计划，等待新指令' })
+  }, [])
+
   // 新建会话（清空 thread_id）
   const newSession = useCallback(() => {
     useCodexStore.getState().reset()
@@ -348,6 +384,8 @@ export function useCodexSession() {
     run,
     stop,
     respondApproval,
+    approvePlan,
+    cancelPlan,
     clear,
     newSession,
   }

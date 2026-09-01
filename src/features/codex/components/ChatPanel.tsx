@@ -13,12 +13,14 @@ import {
   FolderOpen,
   Square,
   ShieldAlert,
+  ListChecks,
 } from 'lucide-react'
 import { useEffect, useRef, useState } from 'react'
 
 import { useCodexSession } from '../hooks/useCodexSession'
 
 import { FileChangeCard } from './FileChangeCard'
+import { PlanCard } from './PlanCard'
 
 import { Markdown } from '@/components/ui/Markdown'
 import { sessionService } from '@/services/sessionService'
@@ -51,7 +53,19 @@ const STATUS_CONFIG: Record<CodexStatus, { label: string; icon: React.ReactNode;
     error: { label: 'Error', icon: <AlertCircle className="h-3.5 w-3.5" />, color: 'text-red-400' },
   }
 
-function MessageCard({ message, repo }: { message: CodexMessage; repo?: string }) {
+function MessageCard({
+  message,
+  repo,
+  onApprovePlan,
+  onCancelPlan,
+  planDisabled,
+}: {
+  message: CodexMessage
+  repo?: string
+  onApprovePlan?: (steps: string[]) => void
+  onCancelPlan?: () => void
+  planDisabled?: boolean
+}) {
   const [expanded, setExpanded] = useState(true)
   // 打字机流式状态：若该消息正在逐字显示，用已渲染文本
   const streaming = useCodexStore((s) => s.streaming)
@@ -82,6 +96,18 @@ function MessageCard({ message, repo }: { message: CodexMessage; repo?: string }
   // 文件变更卡片：内联展示 Agent 的修改 + 接受/拒绝回滚
   if (message.kind === 'file_change') {
     return <FileChangeCard message={message} repo={repo} />
+  }
+
+  // 计划卡片：展示分步计划，可编辑步骤，批准后执行
+  if (message.kind === 'plan') {
+    return (
+      <PlanCard
+        message={message}
+        onApprove={onApprovePlan ?? (() => {})}
+        onCancel={onCancelPlan ?? (() => {})}
+        disabled={planDisabled}
+      />
+    )
   }
 
   if (message.kind === 'system' || message.kind === 'usage') {
@@ -164,9 +190,12 @@ export function ChatPanel() {
     run,
     stop,
     respondApproval,
+    approvePlan,
+    cancelPlan,
     clear,
     newSession,
   } = useCodexSession()
+  const planMode = useCodexStore((s) => s.planMode)
   const [command, setCommand] = useState('')
   const messagesRef = useRef<HTMLDivElement>(null)
   const saveTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
@@ -281,7 +310,14 @@ export function ChatPanel() {
     }
 
     // 遵循 codex：resume 会话用会话绑定的 cwd，新会话用全局 cwd；模型用会话级覆盖（无则全局默认）
-    run(cmd, currentSessionWorkdir || workspaceCwd, currentSessionModel)
+    // 计划模式开启时传 mode='plan'（后端强制 read-only 沙箱 + 注入计划指令）
+    const planModeActive = useCodexStore.getState().planMode
+    run(
+      cmd,
+      currentSessionWorkdir || workspaceCwd,
+      currentSessionModel,
+      planModeActive ? 'plan' : undefined,
+    )
   }
 
   // 切换会话模型覆盖。模型与会话 thread 绑定：若会话已有历史 thread，自动新建（清 threadId），
@@ -430,6 +466,9 @@ export function ChatPanel() {
                 key={msg.id}
                 message={msg}
                 repo={currentSessionWorkdir || workspaceCwd}
+                onApprovePlan={approvePlan}
+                onCancelPlan={cancelPlan}
+                planDisabled={status === 'running'}
               />
             ))}
           </div>
@@ -476,6 +515,30 @@ export function ChatPanel() {
             </div>
           </div>
         )}
+        <div className="mb-2 flex items-center gap-2">
+          <button
+            onClick={() => useCodexStore.getState().setPlanMode(!planMode)}
+            disabled={status === 'running'}
+            className={`flex items-center gap-1 rounded px-2 py-1 text-[11px] font-medium transition-colors disabled:opacity-50 ${
+              planMode
+                ? 'bg-primary/15 text-primary ring-1 ring-primary/40'
+                : 'text-muted-foreground hover:bg-accent hover:text-accent-foreground'
+            }`}
+            title="计划模式：发送后先生成可编辑的分步计划，批准后再执行（不直接动手改文件）"
+          >
+            <ListChecks className="h-3 w-3" />
+            Plan
+          </button>
+          {planMode ? (
+            <span className="text-[10px] text-primary/70">
+              计划模式已开启：先生成计划，批准后再执行
+            </span>
+          ) : (
+            <span className="text-[10px] text-muted-foreground/50">
+              计划模式：先出方案，批准后动手
+            </span>
+          )}
+        </div>
         <div className="mb-2 flex items-center gap-1.5">
           <FolderOpen className="h-3 w-3 shrink-0 text-muted-foreground" />
           <span
