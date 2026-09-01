@@ -56,6 +56,8 @@ interface CodexState {
   /** 计划模式开关（开启后发送生成计划而非直接执行，批准后再执行） */
   planMode: boolean
   setPlanMode: (v: boolean) => void
+  reviewMode: boolean
+  setReviewMode: (v: boolean) => void
   setStatus: (status: CodexStatus) => void
   appendOutput: (line: Omit<CodexOutputLine, 'id'>) => void
   appendMessage: (message: Omit<CodexMessage, 'id' | 'timestamp'>) => string
@@ -105,6 +107,8 @@ export const useCodexStore = create<CodexState>((set, get) => ({
       return false
     }
   })(),
+  reviewMode: false,
+  setReviewMode: (v) => set({ reviewMode: v }),
   setPlanMode: (v) => {
     try {
       localStorage.setItem(PLAN_MODE_KEY, v ? '1' : '0')

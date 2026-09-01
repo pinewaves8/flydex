@@ -19,10 +19,18 @@ pub enum CodexExecMode {
     /// 计划模式：沙箱强制 read-only（只出计划不改文件）+ 注入计划指令；
     /// 已有会话则 resume 保持对话上下文，否则新开首轮
     Plan,
+    /// 审查模式：沙箱强制 read-only（只读 diff 出报告，不改文件）+ 注入审查指令；
+    /// 已有会话则 resume 保持对话上下文，否则新开首轮
+    Review,
 }
 
 /// 计划模式注入的系统指令：强制模型只输出计划、不执行任何写操作。
 /// 配合 read-only 沙箱形成双重约束（指令约束 + 硬权限约束）。
+/// 审查模式注入的系统指令：要求模型读取工作目录下的 .flydex-review.diff 并输出
+/// 结构化审查报告（级别|文件:行号|概述|建议，每行一条，最后一行审查总结）。
+/// 单行书写：命令行经 cmd /c 传递，含换行会被截断。
+const REVIEW_INSTRUCTION: &str = "【代码审查模式】你正在以资深工程师视角审查代码变更。diff 内容已保存在工作目录下的 .flydex-review.diff 文件中，请先用读取工具读取该文件，再输出结构化审查报告。输出格式要求：1) 第一行输出一行总评；2) 之后每行一个问题，严格格式：级别|文件:行号|问题概述|修改建议，级别只能取【严重】【警告】【建议】【好评】之一（好评用于肯定做得好的点），文件与行号必须来自 diff 中的真实位置；3) 即使没有严重问题也至少要给出一条好评或说明；4) 最后一行输出：审查总结：xxx。";
+
 const PLAN_INSTRUCTION: &str = "【计划模式】你当前的工作目录是只读的，无法创建、修改或删除任何文件。请先充分分析用户需求（可以读取和搜索代码与文件），然后输出一份分步执行计划，不要实际执行任何修改。要求：1) 用编号列表分步列出，每一步【单独一行】，格式为：数字. 具体操作（例如：1. 在根目录创建 demo.txt 并写入 hello）；2) 禁止输出嵌套子列表（不要'涉及文件/具体操作'子项）、禁止加粗标题、禁止计划总结或前言；3) 每步要具体、可执行、覆盖边界情况；4) 只输出计划本身，不要执行任何写操作。";
 
 /// 运行中的 codex 进程句柄（供审批写入与停止）
@@ -196,8 +204,8 @@ impl CodexManager {
                     args.push("--last".to_string());
                 }
             }
-            CodexExecMode::Plan => {
-                // 计划模式：已有会话则 resume 保持对话上下文（仍在只读沙箱下）
+            CodexExecMode::Plan | CodexExecMode::Review => {
+                // 计划/审查模式：已有会话则 resume 保持对话上下文（仍在只读沙箱下）
                 if let Some(tid) = &thread_id {
                     args.push("resume".to_string());
                     args.push(tid.clone());
@@ -216,7 +224,7 @@ impl CodexManager {
         // 所有 -c 值一律不加引号（cmd /c 重新解析会破坏内嵌引号），含连字符的值也可安全裸传
         // 计划模式强制 read-only 沙箱（模型只能分析出计划，无法修改任何文件）；其余用用户安全配置
         let sandbox = match mode {
-            CodexExecMode::Plan => "read-only",
+            CodexExecMode::Plan | CodexExecMode::Review => "read-only",
             _ => sec.sandbox_mode.as_codex(),
         };
         args.push("-c".to_string());
@@ -230,6 +238,11 @@ impl CodexManager {
             CodexExecMode::Plan => format!(
                 "{} 用户需求：{}",
                 PLAN_INSTRUCTION,
+                command.replace(['\n', '\r'], " ")
+            ),
+            CodexExecMode::Review => format!(
+                "{} 审查指令：{}",
+                REVIEW_INSTRUCTION,
                 command.replace(['\n', '\r'], " ")
             ),
             _ => command.clone(),

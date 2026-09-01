@@ -34,6 +34,8 @@ export function useCodexSession() {
     // 计划模式下模型可能在 turn 内多次输出 agent_message（探索说明 → 正式计划）。
     // 记录本轮最后一个 agent_message id，turn 结束时将其转换为计划卡片。
     let lastPlanMsgId: string | null = null
+    // 审查模式同理：记录最后一个 agent_message，turn 结束时转为审查报告卡片
+    let lastReviewMsgId: string | null = null
 
     /** 解析待执行/正在执行的命令（codex 的 command_execution item） */
     const handleCommandItem = (item: CodexItem) => {
@@ -101,8 +103,9 @@ export function useCodexSession() {
           kind: 'system',
         })
       } else if (event.type === 'turn.started') {
-        // 新的一轮：重置计划消息追踪（计划模式下每轮独立）
+        // 新的一轮：重置计划/审查消息追踪（每轮独立）
         lastPlanMsgId = null
+        lastReviewMsgId = null
       } else if (event.type === 'item.started') {
         // item.started 可能带 tool 或 command 信息
         const item = event.item as CodexItem
@@ -121,6 +124,14 @@ export function useCodexSession() {
             // 全部按 agent 消息暂存（不流式），turn 结束时最后一个转成计划卡片。
             const msgId = store.appendMessage({ kind: 'agent', content: item.text })
             lastPlanMsgId = msgId
+            store.setStreaming(null)
+            return
+          }
+          if (st.reviewMode) {
+            // 审查模式：模型可能先输出过程说明再输出正式报告。
+            // 全部按 agent 消息暂存，turn 结束时最后一个转成审查报告卡片。
+            const msgId = store.appendMessage({ kind: 'agent', content: item.text })
+            lastReviewMsgId = msgId
             store.setStreaming(null)
             return
           }
@@ -189,6 +200,12 @@ export function useCodexSession() {
           store.updateMessageKind(lastPlanMsgId, 'plan')
           lastPlanMsgId = null
         }
+        // 审查模式：最后一个 agent_message 转为审查报告卡片，并关闭临时审查态
+        if (useCodexStore.getState().reviewMode && lastReviewMsgId) {
+          store.updateMessageKind(lastReviewMsgId, 'review')
+          lastReviewMsgId = null
+          useCodexStore.getState().setReviewMode(false)
+        }
         // 写入后审查兜底：git 工作区变化 → 生成文件变更卡片
         void checkFileChanges(store.runWorkdir)
         if (event.usage) {
@@ -227,11 +244,16 @@ export function useCodexSession() {
         const payload = event.payload
         if (payload.type === 'Done') {
           const store = useCodexStore.getState()
-          // 兜底：计划模式下若本轮有 agent 消息但未转成计划卡片（turn.completed
-          // 事件缺失/异常提前结束时），在进程结束前把最后一个 agent 消息转为计划。
+          // 兜底：计划/审查模式下若本轮有 agent 消息但未转成卡片（turn.completed
+          // 事件缺失/异常提前结束时），在进程结束前把最后一个 agent 消息转为卡片。
           if (useCodexStore.getState().planMode && lastPlanMsgId) {
             store.updateMessageKind(lastPlanMsgId, 'plan')
             lastPlanMsgId = null
+          }
+          if (useCodexStore.getState().reviewMode && lastReviewMsgId) {
+            store.updateMessageKind(lastReviewMsgId, 'review')
+            lastReviewMsgId = null
+            useCodexStore.getState().setReviewMode(false)
           }
           store.setExitCode(payload.data.exit_code)
           store.setStatus(payload.data.exit_code === 0 ? 'done' : 'error')

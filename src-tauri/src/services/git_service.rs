@@ -1010,4 +1010,56 @@ impl GitService {
         }
         Ok(stdout)
     }
+
+    /// 获取代码审查用 diff（供 3.2 审查模式使用）
+    ///
+    /// * mode：uncommitted（工作区+暂存，默认）/ commit（指定提交）/ base（与基线差异）
+    /// * ref_：commit 模式为提交 hash；base 模式为基线分支/提交（如 main）
+    pub fn review_diff(repo: &str, mode: &str, ref_: Option<&str>) -> Result<String, String> {
+        let mode = mode.to_lowercase();
+        let (code, stdout, stderr) = match mode.as_str() {
+            "commit" => {
+                let hash = ref_.map(str::trim).filter(|s| !s.is_empty());
+                let Some(hash) = hash else {
+                    return Err("commit 模式需要提供提交 hash".to_string());
+                };
+                // --format= 去掉提交信息，只保留 diff 本体
+                Self::run_git(repo, &["show", "--no-color", "--format=", hash], None)
+            }
+            "base" => {
+                let base = ref_.map(str::trim).filter(|s| !s.is_empty());
+                let Some(base) = base else {
+                    return Err("base 模式需要提供基线分支/提交（如 main）".to_string());
+                };
+                let range = format!("{}...HEAD", base);
+                Self::run_git(repo, &["diff", "--no-color", "--no-ext-diff", &range], None)
+            }
+            _ => {
+                // uncommitted（默认）：未暂存 + 已暂存
+                let (c1, o1, e1) =
+                    Self::run_git(repo, &["diff", "--no-color", "--no-ext-diff"], None);
+                let (c2, o2, e2) =
+                    Self::run_git(repo, &["diff", "--cached", "--no-color", "--no-ext-diff"], None);
+                if c1 != 0 {
+                    return Err(e1.trim().to_string());
+                }
+                if c2 != 0 {
+                    return Err(e2.trim().to_string());
+                }
+                let mut full = String::new();
+                if !o1.trim().is_empty() {
+                    full.push_str(&o1);
+                    if !o1.ends_with('\n') {
+                        full.push('\n');
+                    }
+                }
+                full.push_str(&o2);
+                return Ok(full);
+            }
+        };
+        if code != 0 {
+            return Err(stderr.trim().to_string());
+        }
+        Ok(stdout)
+    }
 }

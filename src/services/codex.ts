@@ -6,7 +6,7 @@ import { invoke } from '@tauri-apps/api/core'
  * 前端调用后端的唯一入口，组件不直接调 invoke。
  */
 
-export type CodexExecMode = 'exec' | 'resume' | 'plan'
+export type CodexExecMode = 'exec' | 'resume' | 'plan' | 'review'
 
 /** 执行 codex 命令 */
 export async function runCodex(

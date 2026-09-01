@@ -189,3 +189,28 @@ pub fn git_log(repo: String, limit: usize) -> Result<Vec<GitCommit>, String> {
 pub fn git_show(repo: String, hash: String) -> Result<String, String> {
     GitService::show(&repo, &hash)
 }
+
+
+/// 获取代码审查用 diff（三种模式）
+#[tauri::command]
+pub fn git_review_diff(repo: String, mode: String, ref_: Option<String>) -> Result<String, String> {
+    GitService::review_diff(&repo, &mode, ref_.as_deref())
+}
+
+/// 写入审查临时 diff 文件（供模型读取，避免命令行换行截断）
+#[tauri::command]
+pub fn write_review_diff(repo: String, content: String) -> Result<(), String> {
+    let path = std::path::Path::new(&repo).join(".flydex-review.diff");
+    std::fs::write(&path, content).map_err(|e| format!("写入审查 diff 失败: {e}"))
+}
+
+/// 删除审查临时 diff 文件
+#[tauri::command]
+pub fn remove_review_diff(repo: String) -> Result<(), String> {
+    let path = std::path::Path::new(&repo).join(".flydex-review.diff");
+    match std::fs::remove_file(&path) {
+        Ok(_) => Ok(()),
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(()),
+        Err(e) => Err(format!("删除审查 diff 失败: {e}")),
+    }
+}

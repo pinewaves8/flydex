@@ -1,3 +1,4 @@
+import { invoke } from '@tauri-apps/api/core'
 import {
   Play,
   Trash2,
@@ -21,6 +22,7 @@ import { useCodexSession } from '../hooks/useCodexSession'
 
 import { FileChangeCard } from './FileChangeCard'
 import { PlanCard } from './PlanCard'
+import { ReviewCard } from './ReviewCard'
 
 import { Markdown } from '@/components/ui/Markdown'
 import { sessionService } from '@/services/sessionService'
@@ -32,6 +34,30 @@ import { useWorkspaceStore } from '@/stores/useWorkspaceStore'
 import type { CodexStatus } from '@/types/codex'
 import type { CodexMessage } from '@/types/codexJson'
 import { approvalLabel } from '@/types/security'
+
+/** 审查意图解析：/review、/rv、/cr 前缀或"审查"开头，可选模式参数
+ *
+ * 支持：/review、/review uncommitted、/review commit <hash>、/review base <branch>，
+ * 以及中文"审查未提交的改动"等自然语言形式。
+ */
+interface ReviewIntent {
+  mode: 'uncommitted' | 'commit' | 'base'
+  ref?: string
+}
+function parseReviewCommand(cmd: string): ReviewIntent | null {
+  const c = cmd.trim()
+  const m = c.match(/^\/(?:review|rv|cr)\b\s*(.*)$/i) || c.match(/^审查\s*(.*)$/)
+  if (!m) return null
+  const rest = m[1].trim()
+  if (!rest || /^(未提交|当前|改动|代码)$/.test(rest)) return { mode: 'uncommitted' }
+  const parts = rest.split(/\s+/)
+  const head = parts[0].toLowerCase()
+  if (head === 'uncommitted' || head === '当前' || head === '未提交') return { mode: 'uncommitted' }
+  if (head === 'commit' || head === '提交') return { mode: 'commit', ref: parts[1] }
+  if (head === 'base' || head === '对比' || head === '基线') return { mode: 'base', ref: parts[1] }
+  // 其余情况把第一个词当作 commit ref（如 /review abc123 / 审查 abc123）
+  return { mode: 'commit', ref: parts[0] }
+}
 
 const STATUS_CONFIG: Record<CodexStatus, { label: string; icon: React.ReactNode; color: string }> =
   {
@@ -108,6 +134,11 @@ function MessageCard({
         disabled={planDisabled}
       />
     )
+  }
+
+  // 审查报告卡片：分级问题清单 + 文件:行号 + 导出 Markdown
+  if (message.kind === 'review') {
+    return <ReviewCard message={message} />
   }
 
   if (message.kind === 'system' || message.kind === 'usage') {
@@ -312,12 +343,33 @@ export function ChatPanel() {
     // 遵循 codex：resume 会话用会话绑定的 cwd，新会话用全局 cwd；模型用会话级覆盖（无则全局默认）
     // 计划模式开启时传 mode='plan'（后端强制 read-only 沙箱 + 注入计划指令）
     const planModeActive = useCodexStore.getState().planMode
-    run(
-      cmd,
-      currentSessionWorkdir || workspaceCwd,
-      currentSessionModel,
-      planModeActive ? 'plan' : undefined,
-    )
+    const workdir = currentSessionWorkdir || workspaceCwd
+    // 审查模式：/review 前缀或"审查"开头 → 取 diff 写临时文件 → read-only 审查
+    const reviewIntent = parseReviewCommand(cmd)
+    if (reviewIntent && workdir) {
+      try {
+        const diff = (await invoke('git_review_diff', {
+          repo: workdir,
+          mode: reviewIntent.mode,
+          ref_: reviewIntent.ref ?? null,
+        })) as string
+        await invoke('write_review_diff', { repo: workdir, content: diff })
+        useCodexStore.getState().setReviewMode(true)
+        const hasDiff = diff.trim().length > 0
+        const prompt = `请审查代码变更。diff 内容已写入工作目录下的 .flydex-review.diff 文件${
+          hasDiff
+            ? '，请读取后按要求输出结构化审查报告'
+            : '，但当前没有检测到任何代码变更，请直接说明这一点'
+        }。`
+        await run(prompt, workdir, currentSessionModel, 'review')
+        await invoke('remove_review_diff', { repo: workdir }).catch(() => {})
+        return
+      } catch (e) {
+        useCodexStore.getState().appendOutput({ text: `审查失败: ${String(e)}`, kind: 'stderr' })
+        return
+      }
+    }
+    run(cmd, workdir, currentSessionModel, planModeActive ? 'plan' : undefined)
   }
 
   // 切换会话模型覆盖。模型与会话 thread 绑定：若会话已有历史 thread，自动新建（清 threadId），
