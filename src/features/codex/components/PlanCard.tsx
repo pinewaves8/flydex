@@ -56,6 +56,8 @@ export function PlanCard({ message, onApprove, onCancel, disabled }: PlanCardPro
   const [draft, setDraft] = useState('')
   const [adding, setAdding] = useState(false)
   const [addDraft, setAddDraft] = useState('')
+  // 点击批准后永久标记已执行，防止执行期间/结束后重复批准同一计划
+  const [approved, setApproved] = useState(false)
 
   const timeStr = new Date(message.timestamp).toLocaleTimeString('zh-CN', {
     hour: '2-digit',
@@ -193,22 +195,29 @@ export function PlanCard({ message, onApprove, onCancel, disabled }: PlanCardPro
       {/* 操作 */}
       <div className="mt-2 flex items-center gap-2 border-t border-border/50 pt-2">
         <button
-          onClick={() => onApprove(steps)}
-          disabled={disabled || steps.length === 0}
+          onClick={() => {
+            if (approved) return
+            setApproved(true)
+            onApprove(steps)
+          }}
+          disabled={disabled || approved || steps.length === 0}
           className="flex items-center gap-1 rounded bg-primary px-2.5 py-1 text-[11px] font-medium text-primary-foreground hover:bg-primary/90 disabled:cursor-not-allowed disabled:opacity-50"
         >
           <Play className="h-3 w-3" />
-          批准并执行
+          {approved ? '已提交执行' : '批准并执行'}
         </button>
         <button
           onClick={onCancel}
-          disabled={disabled}
+          disabled={disabled || approved}
           className="flex items-center gap-1 rounded px-2 py-1 text-[11px] text-muted-foreground hover:bg-accent hover:text-accent-foreground disabled:opacity-50"
         >
           <X className="h-3 w-3" />
           取消计划
         </button>
-        {disabled && <span className="text-[10px] text-muted-foreground/70">执行中…</span>}
+        {approved && <span className="text-[10px] text-primary/70">✓ 已提交执行</span>}
+        {!approved && disabled && (
+          <span className="text-[10px] text-muted-foreground/70">执行中…</span>
+        )}
       </div>
     </div>
   )
