@@ -7,7 +7,8 @@ import type { CodexMessage } from '@/types/codexJson'
  *
  * 只识别**顶层编号步骤**（如 `1.` / `1)` / `1、`），忽略：
  * - markdown 分隔线（`---`、`***`、`===`）
- * - 加粗子标题 / 子列表详情（`**目标**`、缩进的 `- **涉及文件**` 等）
+ * - 加粗子标题 / 子列表详情（缩进的 `- **涉及文件**` 等）
+ * 清理 markdown 标记与"目标:"标签前缀，过滤纯标题等无意义步骤。
  * 无编号结构时整段作为一步兜底。
  */
 export function parsePlanSteps(content: string): string[] {
@@ -21,16 +22,23 @@ export function parsePlanSteps(content: string): string[] {
     if (/^[-*_=]{3,}$/.test(line)) continue
     // 顶层编号步骤
     const num = line.match(/^\d+[.、)]\s*(.+)/)
+    let stepText: string | null = null
     if (num) {
-      steps.push(num[1])
-      continue
-    }
-    // 无编号步骤时的普通列表项兜底（仅当还没有任何步骤）
-    if (steps.length === 0) {
+      stepText = num[1]
+    } else if (steps.length === 0) {
+      // 无编号步骤时的普通列表项兜底（仅当还没有任何步骤）
       const dash = line.match(/^[-*•]\s*(.+)/)
-      if (dash) steps.push(dash[1])
+      if (dash) stepText = dash[1]
     }
-    // 其余行（子项说明、加粗标题等）忽略
+    if (stepText == null) continue
+    // 清理 markdown 标记
+    let t = stepText.replace(/\*\*/g, '').trim()
+    // 去掉 "目标" / "目标:" 标签前缀（模型可能用扁平"目标:"格式）
+    t = t.replace(/^目标\s*[:：]\s*/, '')
+    // 过滤无意义步骤（空、过短、纯标题词）
+    if (!t || t.length < 2) continue
+    if (/^(执行计划|计划总结|前言|概述|开始执行|步骤)$/.test(t)) continue
+    steps.push(t)
   }
   return steps.length > 0 ? steps : [content]
 }
