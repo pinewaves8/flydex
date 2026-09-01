@@ -1,6 +1,16 @@
-import { ArrowLeft, CheckCircle2, Clock, Cpu, ShieldCheck, Trash2, XCircle } from 'lucide-react'
+import {
+  ArrowLeft,
+  Boxes,
+  CheckCircle2,
+  Clock,
+  Cpu,
+  ShieldCheck,
+  Trash2,
+  XCircle,
+} from 'lucide-react'
 import { useEffect } from 'react'
 
+import { McpSettings } from '@/features/mcp/McpSettings'
 import { ModelSettings } from '@/features/model/ModelSettings'
 import { useSecurityStore } from '@/stores/useSecurityStore'
 import { useUIStore } from '@/stores/useUIStore'
@@ -110,6 +120,17 @@ export function SettingsPanel() {
             >
               <Cpu className="h-4 w-4" />
               模型配置
+            </button>
+            <button
+              onClick={() => openSettings('mcp')}
+              className={`flex items-center gap-1.5 rounded-t-md border-b-2 px-3 py-2 text-sm transition-colors ${
+                settingsTab === 'mcp'
+                  ? 'border-primary text-foreground'
+                  : 'border-transparent text-muted-foreground hover:text-foreground'
+              }`}
+            >
+              <Boxes className="h-4 w-4" />
+              MCP 服务
             </button>
           </div>
         </div>
@@ -227,9 +248,12 @@ export function SettingsPanel() {
               )}
             </section>
           </>
-        ) : (
+        ) : settingsTab === 'model' ? (
           /* 模型配置 tab */
           <ModelSettings />
+        ) : (
+          /* MCP tab */
+          <McpSettings />
         )}
       </div>
     </div>
