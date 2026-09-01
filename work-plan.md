@@ -469,6 +469,10 @@ src-tauri/src/
 | **验收标准** | 1. 支持 --base / --uncommitted / --commit 三种模式 2. 审查结果分级显示（严重/警告/建议/好评）3. 每个问题关联文件+行号，点击跳转 4. 报告可导出 Markdown |
 | **预估** | 2 天 |
 
+> **状态：✅ 已完成（2026-09-01）**
+> **实现摘要**：应用层实现（codex CLI 无原生 review）。后端 CodexExecMode::Review + REVIEW_INSTRUCTION（结构化分级格式）+ read-only 沙箱；git_review_diff 三模式（uncommitted/commit/base）+ 临时 diff 文件（.flydex-review.diff，规避 cmd /c 换行截断）；前端 ReviewCard 分级 badge（严重/警告/建议/好评）+ 文件:行号复制 + 导出 Markdown；自然语言触发（/review、/rv、/cr、中文"审查"）。验收实测通过（test.md 审查出好评 + 总结）。
+> **说明**：验收标准第 3 条"点击跳转"降级为"显示文件:行号 + 一键复制"（flydex 暂无代码编辑器，后续阶段补跳转）。
+
 ### 任务 3.3：MCP 客户端
 
 | 项 | 内容 |
