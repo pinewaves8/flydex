@@ -604,11 +604,20 @@ src-tauri/src/
 
 ### 任务 4.1：Windows 平台适配
 
+> **状态：批次 A ✅ 已完成（2026-09-02），批次 B ⏳ 待做**
+> **批次 A 实现摘要**（commit `e54214c` + `7e9f1c8`）：
+> - **① Shell 切换**：新增 `src/services/shellService.ts`（auto 探测 pwsh→powershell→cmd，`where` 探测并缓存；显式可切 pwsh/powershell/cmd/wsl）；`terminalService` 按所选 shell 动态构造命令（pwsh/powershell `-NoLogo -NoExit -Command` utf8、cmd `/c` gbk、wsl `bash -lc`）；`TerminalPanel` 工具栏显示当前 shell + 提示符按 shell 风格；`useSettingsStore` 持久化。Settings 新增「终端与通知」tab（Shell 卡片选择）。
+> - **② 系统通知**：接入 `tauri-plugin-notification`（前后端依赖 + `lib.rs` 注册）。新建 `src/services/notificationService.ts`（首次请求权限、失败静默降级）。三触发点：审批请求（默认开）、任务失败（默认开）、任务完成（默认关）。Settings「终端与通知」tab 三个开关。
+> - **③ 应用内快捷键**：新建 `src/hooks/useGlobalShortcuts.ts`，`Ctrl+Shift+N` 打开终端 / `Ctrl+Shift+K` 回对话，window **捕获阶段**监听（任意焦点生效，含终端内）。⚠️ 实测修复：初版按"焦点在输入元素跳过"拦截了终端内快捷键（xterm 焦点在隐藏 textarea），改捕获阶段 + 不跳过输入元素，实机验证通过（2026-09-02）。
+> - **④ 长路径/UNC**：`resolve_dir` 修复 `\\?\UNC\server\share` → `\\server\share` 前缀还原（此前只处理本地盘 `\\?\`）。⚠️ 说明：>260 字符长路径受 Windows 系统限制，canonicalize 走 `\\?\` 扩展路径可读，返回普通路径后普通 API 可能仍受限，属系统级约束（详见批次 B 遗留）。
+> - **验证**：前端 tsc ✅、后端 cargo check ✅、tauri dev 自动重编译并重启、flydex.exe 稳定运行无崩溃、实机 UI 验证通过（快捷键双向、Shell 切换、通知开关）。
+> - **批次 B（⏳ 待做）**：① WebView2 检测与引导（非 WebView2 运行时安装提示/引导下载）；② **全局热键**（系统级注册，应用失焦时也可唤起到前台，区别于应用内快捷键）；③ 文件对话框 Windows 原生风格；④ 评估长路径/UNC 完整支持（如需要 `\\?\` 透传或 manifest longPathAware）。
+
 | 项 | 内容 |
 |----|------|
 | **描述** | 适配 Windows 平台的 Shell、路径、通知、快捷键、WebView2 |
 | **交付物** | Windows 上可正常运行的应用 |
-| **验收标准** | 1. 默认 PowerShell，可切换 cmd/WSL 2. 长路径/UNC 路径支持 3. Windows Toast 通知 4. 全局热键 5. WebView2 检测与引导 6. 文件对话框 Windows 风格 |
+| **验收标准** | 1. ✅ 默认 PowerShell，可切换 cmd/WSL（批次A：auto 探测 + 显式切换） 2. ✅ 长路径/UNC 路径支持（批次A：UNC 前缀修复；长路径系统级约束批次B评估） 3. ✅ Windows Toast 通知（批次A：三场景+开关） 4. ⏳ 全局热键（批次B） 5. ⏳ WebView2 检测与引导（批次B） 6. ⏳ 文件对话框 Windows 风格（批次B） |
 | **预估** | 3 天 |
 
 ### 任务 4.2：macOS 平台适配
