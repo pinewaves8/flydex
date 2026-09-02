@@ -1,5 +1,7 @@
 import { create } from 'zustand'
 
+import { sessionService } from '@/services/sessionService'
+import { useProjectStore } from '@/stores/useProjectStore'
 import type { CodexOutputLine, CodexStatus } from '@/types/codex'
 import type { CodexMessage, CodexFileChange, CodexUsage } from '@/types/codexJson'
 
@@ -26,6 +28,9 @@ export interface CodexStreaming {
 
 /** 计划模式开关的 localStorage key（跨重启保持开关状态） */
 const PLAN_MODE_KEY = 'flydex.planMode'
+
+/** 自动保存 debounce 时间（毫秒） */
+const AUTOSAVE_DEBOUNCE_MS = 500
 
 interface CodexState {
   status: CodexStatus
@@ -55,6 +60,10 @@ interface CodexState {
   baselineFileChanges: CodexFileChange[]
   /** 计划模式开关（开启后发送生成计划而非直接执行，批准后再执行） */
   planMode: boolean
+  /** 当前会话 id（用于自动保存）；null 表示不保存 */
+  currentSessionId: string | null
+  /** 是否有待保存的变更 */
+  dirty: boolean
   setPlanMode: (v: boolean) => void
   reviewMode: boolean
   setReviewMode: (v: boolean) => void
@@ -79,9 +88,73 @@ interface CodexState {
   setStreaming: (streaming: CodexStreaming | null) => void
   advanceStream: (count: number) => void
   reset: () => void
+  /** 设置当前会话 id（启用自动保存）；传 null 关闭自动保存 */
+  setCurrentSessionId: (id: string | null) => void
+  /** 标记脏并触发自动保存（手动立即保存） */
+  flushAutosave: () => Promise<void>
   /** 加载会话数据（切换会话时用） */
   loadSession: (data: { messages: CodexMessage[]; threadId: string | null }) => void
 }
+
+/**
+ * 自动保存调度：监听 store 状态变化，debounce 后异步写入磁盘
+ *
+ * 为什么放这里：避免 ChatPanel 里 load+save的竞态，统一在 store 层管理
+ * 为什么用 subscribe：zustand store 不应该依赖 React 副作用
+ */
+function setupAutosave(): void {
+  let timer: ReturnType<typeof setTimeout> | null = null
+  let saving = false
+  let pending = false
+
+  const saveNow = async () => {
+    const state = useCodexStore.getState()
+    const sid = state.currentSessionId
+    if (!sid) return
+    if (saving) {
+      pending = true
+      return
+    }
+    saving = true
+    try {
+      const session = await sessionService.load(sid)
+      if (!session) return
+      session.messages = state.messages
+      session.threadId = state.threadId
+      session.updatedAt = Date.now()
+      await sessionService.save(session)
+      // 通知 project store 刷新列表（更新排序）
+      void useProjectStore.getState().loadSessions()
+    } catch (e) {
+      console.error('[autosave] failed:', e)
+    } finally {
+      saving = false
+      // 如果在等待期间又有变更，再跑一轮
+      if (pending) {
+        pending = false
+        void saveNow()
+      }
+    }
+  }
+
+  useCodexStore.subscribe((state, prev) => {
+    if (!state.currentSessionId) return
+    if (
+      state.messages === prev.messages &&
+      state.threadId === prev.threadId &&
+      state.dirty === prev.dirty
+    ) {
+      return
+    }
+    if (timer) clearTimeout(timer)
+    timer = setTimeout(() => {
+      void saveNow()
+    }, AUTOSAVE_DEBOUNCE_MS)
+  })
+}
+
+// 注意：setupAutosave 在模块初始化时执行一次；它从 store 闭包获取 state
+// 由于 store 在 create 之后才存在，subscribe 调用要放到 create 后面
 
 export const useCodexStore = create<CodexState>((set, get) => ({
   status: 'idle',
@@ -107,6 +180,8 @@ export const useCodexStore = create<CodexState>((set, get) => ({
       return false
     }
   })(),
+  currentSessionId: null,
+  dirty: false,
   reviewMode: false,
   setReviewMode: (v) => set({ reviewMode: v }),
   setPlanMode: (v) => {
@@ -128,15 +203,17 @@ export const useCodexStore = create<CodexState>((set, get) => ({
     const id = `msg-${crypto.randomUUID()}`
     set((state) => ({
       messages: [...state.messages, { ...message, id, timestamp: Date.now() }],
+      dirty: true,
     }))
     return id
   },
   updateMessageKind: (id, kind) =>
     set((state) => ({
       messages: state.messages.map((m) => (m.id === id ? { ...m, kind } : m)),
+      dirty: true,
     })),
   setExitCode: (code) => set({ exitCode: code }),
-  setThreadId: (id) => set({ threadId: id }),
+  setThreadId: (id) => set({ threadId: id, dirty: true }),
   setUsage: (usage) => set({ usage }),
   setPendingRunId: (id) => set({ pendingRunId: id }),
   setRunStartedAt: (ts) => set({ runStartedAt: ts }),
@@ -195,7 +272,27 @@ export const useCodexStore = create<CodexState>((set, get) => ({
       runWorkdir: null,
       seenFileChanges: [],
       baselineFileChanges: [],
+      dirty: false,
     }),
+  setCurrentSessionId: (id) => set({ currentSessionId: id, dirty: false }),
+  flushAutosave: async () => {
+    // 立即触发保存（不等 debounce）
+    const state = get()
+    const sid = state.currentSessionId
+    if (!sid) return
+    try {
+      const session = await sessionService.load(sid)
+      if (!session) return
+      session.messages = state.messages
+      session.threadId = state.threadId
+      session.updatedAt = Date.now()
+      await sessionService.save(session)
+      set({ dirty: false })
+      void useProjectStore.getState().loadSessions()
+    } catch (e) {
+      console.error('[flushAutosave] failed:', e)
+    }
+  },
   loadSession: (data) =>
     set({
       status: 'idle',
@@ -213,5 +310,9 @@ export const useCodexStore = create<CodexState>((set, get) => ({
       runWorkdir: null,
       seenFileChanges: [],
       baselineFileChanges: [],
+      dirty: false,
     }),
 }))
+
+// 初始化自动保存订阅（模块加载时执行一次）
+setupAutosave()

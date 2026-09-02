@@ -27,7 +27,6 @@ import { ReviewCard } from './ReviewCard'
 
 import { Markdown } from '@/components/ui/Markdown'
 import { SkillPalette } from '@/features/skills/SkillPalette'
-import { sessionService } from '@/services/sessionService'
 import { useCodexStore } from '@/stores/useCodexStore'
 import { useModelStore } from '@/stores/useModelStore'
 import { useProjectStore } from '@/stores/useProjectStore'
@@ -233,7 +232,6 @@ export function ChatPanel() {
   const [command, setCommand] = useState('')
   const [showSkillPalette, setShowSkillPalette] = useState(false)
   const messagesRef = useRef<HTMLDivElement>(null)
-  const saveTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
   const inputRef = useRef<HTMLTextAreaElement>(null)
 
   const currentSessionId = useProjectStore((s) => s.currentSessionId)
@@ -241,7 +239,6 @@ export function ChatPanel() {
   const renameSession = useProjectStore((s) => s.renameSession)
   const sessions = useProjectStore((s) => s.sessions)
   const setSessionModel = useProjectStore((s) => s.setSessionModel)
-  const loadSession = useCodexStore((s) => s.loadSession)
   const setCurrentSession = useProjectStore((s) => s.setCurrentSession)
   const workspaceCwd = useWorkspaceStore((s) => s.cwd)
   const streaming = useCodexStore((s) => s.streaming)
@@ -282,42 +279,12 @@ export function ChatPanel() {
     }
   }, [workspaceCwd, loadSkills])
 
-  // 切换会话时加载会话数据
+  // 切换会话时加载会话数据（已迁移到 useProjectStore.setCurrentSession，这里保留兼容性）
   useEffect(() => {
     if (!currentSessionId) {
       useCodexStore.getState().reset()
-      return
     }
-    let cancelled = false
-    ;(async () => {
-      const session = await sessionService.load(currentSessionId)
-      if (cancelled || !session) return
-      loadSession({ messages: session.messages, threadId: session.threadId })
-    })()
-    return () => {
-      cancelled = true
-    }
-  }, [currentSessionId, loadSession])
-
-  // 消息变化时防抖保存会话
-  useEffect(() => {
-    if (!currentSessionId || messages.length === 0) return
-    if (saveTimerRef.current) clearTimeout(saveTimerRef.current)
-    saveTimerRef.current = setTimeout(async () => {
-      const state = useCodexStore.getState()
-      const session = await sessionService.load(currentSessionId)
-      if (session) {
-        session.messages = state.messages
-        session.threadId = state.threadId
-        await sessionService.save(session)
-        // 刷新会话列表的更新时间
-        useProjectStore.getState().loadSessions()
-      }
-    }, 500)
-    return () => {
-      if (saveTimerRef.current) clearTimeout(saveTimerRef.current)
-    }
-  }, [messages, currentSessionId])
+  }, [currentSessionId])
 
   // 自动滚动到底部（消息变化或打字机推进时）
   useEffect(() => {

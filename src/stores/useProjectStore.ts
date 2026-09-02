@@ -2,12 +2,17 @@ import { create } from 'zustand'
 
 import { projectService } from '@/services/projectService'
 import { sessionService } from '@/services/sessionService'
-import type { Project, SessionMeta } from '@/types/project'
+import { useCodexStore } from '@/stores/useCodexStore'
+import type { ExportFormat, Project, SessionMeta, SessionSearchHit } from '@/types/project'
 
 interface ProjectState {
   projects: Project[]
   currentProjectId: string | null
   sessions: SessionMeta[]
+  /** 回收站会话（软删除） */
+  trashedSessions: SessionMeta[]
+  /** 搜索结果 */
+  searchHits: SessionSearchHit[]
   currentSessionId: string | null
   loading: boolean
 
@@ -18,7 +23,7 @@ interface ProjectState {
   deleteProject: (id: string) => Promise<void>
   setCurrentProject: (id: string | null) => Promise<void>
 
-  // 会话
+  // 会话基础 CRUD
   loadSessions: (projectId?: string) => Promise<void>
   createSession: (title: string, workdir: string, model?: string | null) => Promise<string>
   deleteSession: (id: string) => Promise<void>
@@ -26,12 +31,25 @@ interface ProjectState {
   setCurrentSession: (id: string | null) => void
   /** 更新会话的模型覆盖并持久化 */
   setSessionModel: (id: string, model: string | null) => Promise<void>
+
+  // 3.7 新增
+  trashSession: (id: string) => Promise<void>
+  restoreSession: (id: string) => Promise<void>
+  /** 永久删除会话（从回收站） */
+  purgeSession: (id: string) => Promise<void>
+  loadTrashed: () => Promise<void>
+  forkSession: (id: string, messageIndex: number) => Promise<string>
+  searchSessions: (query: string) => Promise<void>
+  clearSearch: () => void
+  exportSession: (id: string, format: ExportFormat) => Promise<string>
 }
 
 export const useProjectStore = create<ProjectState>((set, get) => ({
   projects: [],
   currentProjectId: null,
   sessions: [],
+  trashedSessions: [],
+  searchHits: [],
   currentSessionId: null,
   loading: false,
 
@@ -129,6 +147,22 @@ export const useProjectStore = create<ProjectState>((set, get) => ({
 
   setCurrentSession: (id) => {
     set({ currentSessionId: id })
+    // 同步到 codex store（启用 autosave + 加载历史消息）
+    if (id) {
+      // 先清空当前 codex 状态，避免新会话加载前显示旧数据
+      useCodexStore.getState().loadSession({ messages: [], threadId: null })
+      void sessionService.load(id).then((session) => {
+        if (session) {
+          useCodexStore.getState().loadSession({
+            messages: session.messages,
+            threadId: session.threadId,
+          })
+        }
+        useCodexStore.getState().setCurrentSessionId(id)
+      })
+    } else {
+      useCodexStore.getState().setCurrentSessionId(null)
+    }
   },
 
   setSessionModel: async (id, model) => {
@@ -140,5 +174,61 @@ export const useProjectStore = create<ProjectState>((set, get) => ({
     set((state) => ({
       sessions: state.sessions.map((s) => (s.id === id ? { ...s, model } : s)),
     }))
+  },
+
+  // ── 3.7 新增 actions ──
+
+  trashSession: async (id) => {
+    // 如果是当前会话，先清空 codex store
+    if (get().currentSessionId === id) {
+      useCodexStore.getState().setCurrentSessionId(null)
+      useCodexStore.getState().reset()
+      set({ currentSessionId: null })
+    }
+    await sessionService.trash(id)
+    set((state) => ({
+      sessions: state.sessions.filter((s) => s.id !== id),
+    }))
+  },
+
+  restoreSession: async (id) => {
+    await sessionService.restore(id)
+    await get().loadSessions()
+    await get().loadTrashed()
+  },
+
+  purgeSession: async (id) => {
+    await sessionService.delete(id)
+    set((state) => ({
+      trashedSessions: state.trashedSessions.filter((s) => s.id !== id),
+    }))
+  },
+
+  loadTrashed: async () => {
+    const trashed = await sessionService.listTrashed()
+    set({ trashedSessions: trashed })
+  },
+
+  forkSession: async (id, messageIndex) => {
+    const newSession = await sessionService.fork(id, messageIndex)
+    await get().loadSessions()
+    // 跳转到新会话
+    get().setCurrentSession(newSession.id)
+    return newSession.id
+  },
+
+  searchSessions: async (query) => {
+    if (!query.trim()) {
+      set({ searchHits: [] })
+      return
+    }
+    const hits = await sessionService.search(query)
+    set({ searchHits: hits })
+  },
+
+  clearSearch: () => set({ searchHits: [] }),
+
+  exportSession: async (id, format) => {
+    return sessionService.export(id, format)
   },
 }))

@@ -14,7 +14,15 @@ const BUILTIN_SKILLS: SkillDefinition[] = [
     interface: { displayName: '网络搜索', icon: 'Search', brandColor: '#00ffaa' },
     source: 'builtin',
     inputMarker: '',
-    prompt: '请直接调用 web_search MCP 工具（参数 query），把以下内容作为搜索词：',
+    prompt:
+      '请使用 web_search MCP 工具回答用户问题。规则：\n' +
+      '1) 关键词精简：人名/主体 + 1~2 个关键限定；\n' +
+      '2) 最多搜索 3 次，第 3 次仍无关键信息时停止搜索并向用户反馈；\n' +
+      '3) 每次搜索后必须先整合所有结果再回复，不要每次工具调用完就写一段；\n' +
+      '4) 不同姓名的搜索结果严禁交叉引用/拼接，必须严格区分每个搜索结果对应的人物；\n' +
+      '5) 信息来自搜索结果才可作为事实，未覆盖的信息必须如实写"未找到公开信息"；\n' +
+      '6) 不要拼错关键词（拼写错误会让所有搜索白费）。\n' +
+      '搜索词：',
     enabled: true,
   },
   {

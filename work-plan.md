@@ -528,6 +528,20 @@ src-tauri/src/
 
 ### 任务 3.7：会话历史管理
 
+> **状态：✅ 已完成（2026-09-02）**
+> **实现摘要**：
+> - **Step 0 关键 bug 修复**：把 autosave 从 ChatPanel 下移到 useCodexStore（zustand subscribe + debounce），避免 load+save 的竞态；sidebar 切换会话时通过 `setCurrentSession` 触发 `useCodexStore.loadSession`（之前这个 action 从未被调用，导致切会话不加载消息）
+> - **存储扩展**：Session 新增 `deletedAt`/`forkedFrom` 字段；保持 JSON 存储（不迁 SQLite，会话量小无需）
+> - **后端命令**：新增 `trash_session`/`restore_session`/`purge_session`/`fork_session`/`search_sessions`/`export_session`/`list_trashed_sessions`（7 个）
+> - **搜索算法**：扫描所有未删除会话，先匹配 title（优先），再扫消息文本，生成 120 字符片段预览（⟪⟫ 标记匹配位置）
+> - **Sidebar UI**：顶部搜索框（边输入边搜索，结果展示标题/内容匹配 + 片段）；hover 显示 Fork / Export(Markdown) / Rename / Trash 按钮；底部"回收站"折叠面板（带数量徽章 + 恢复/永久删除）
+> - **Markdown 导出**：用结构化标题列出每条消息 + 元数据（ID/工作目录/时间/消息数）+ 角色 emoji（🤖/🛠/📝/📋/🔍/⚙️/❌）
+> - **Fork 语义**：复制会话到指定消息位置（含），新会话不继承 codex thread（独立上下文），记录 `forked_from` 链路
+> **未做（已列入后续任务）**：
+> - SQLite 迁移（当前 JSON 足够，无需）
+> - ForkDialog 让用户选从哪条消息 fork（当前直接用最后一条）
+> - Export 复制到剪贴板选项（当前仅下载）
+
 | 项 | 内容 |
 |----|------|
 | **描述** | 实现会话的持久化、搜索、恢复、分叉、删除 |

@@ -25,7 +25,9 @@ use commands::security::{
     clear_approval_history, get_security, record_approval, set_approval_policy, set_sandbox_mode,
 };
 use commands::session::{
-    create_session, delete_session, list_sessions, load_session, rename_session, save_session,
+    create_session, delete_session, export_session, fork_session, list_sessions,
+    list_trashed_sessions, load_session, rename_session, restore_session, save_session,
+    search_sessions, trash_session,
 };
 use commands::skill::{skill_list, skill_read};
 use commands::terminal::resolve_dir;
@@ -46,11 +48,17 @@ pub fn run() {
             delete_project,
             // session
             list_sessions,
+            list_trashed_sessions,
             load_session,
             create_session,
             save_session,
             delete_session,
             rename_session,
+            trash_session,
+            restore_session,
+            fork_session,
+            search_sessions,
+            export_session,
             // security
             get_security,
             set_sandbox_mode,
