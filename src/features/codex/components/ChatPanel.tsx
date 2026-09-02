@@ -33,6 +33,7 @@ import { ReviewCard } from './ReviewCard'
 
 import { Markdown } from '@/components/ui/Markdown'
 import { SkillPalette } from '@/features/skills/SkillPalette'
+import { memoryService } from '@/services/memoryService'
 import { useCodexStore } from '@/stores/useCodexStore'
 import { useModelStore } from '@/stores/useModelStore'
 import { useProjectStore } from '@/stores/useProjectStore'
@@ -316,6 +317,37 @@ export function ChatPanel() {
     }
   }, [status])
 
+  /** 压缩上下文（6.1 P2）：长会话 → 模型摘要为上下文快照 → 重置为新会话
+   *
+   * 通过 loadSession 替换 messages 为快照 + threadId 置空，下次 run 用 exec 开新 thread，
+   * 从快照 + 记忆注入继续工作，token 预算清零。
+   */
+  const handleCompact = async () => {
+    if (status === 'running') return
+    const msgs = useCodexStore.getState().messages
+    if (msgs.length === 0) return
+    const text = msgs
+      .map((m) => (typeof m.content === 'string' ? m.content : JSON.stringify(m.content)))
+      .join('\n')
+    try {
+      const summary = await memoryService.compactSummary(text.slice(0, 30000))
+      const snapshot = `[上下文快照]\n${summary}\n\n（原会话已压缩为快照，可在此上下文基础上继续工作）`
+      useCodexStore.getState().loadSession({
+        messages: [
+          {
+            id: `msg_compact_${Date.now()}`,
+            kind: 'system',
+            content: snapshot,
+            timestamp: Date.now(),
+          },
+        ],
+        threadId: null,
+      })
+    } catch (e) {
+      console.error('[compact]', e)
+    }
+  }
+
   const handleRun = async () => {
     if ((!command.trim() && attachments.length === 0) || status === 'running') return
     let cmd = command.trim()
@@ -537,8 +569,11 @@ export function ChatPanel() {
               </option>
             ))}
           </select>
-          {/* 上下文与记忆指示器（6.1）：L1/L2 记忆层 + 会话上下文用量 */}
-          <MemoryIndicator workdir={currentSessionWorkdir || workspaceCwd} />
+          {/* 上下文与记忆指示器（6.1）：L1/L2 记忆层 + 会话上下文用量 + 超阈值压缩 */}
+          <MemoryIndicator
+            workdir={currentSessionWorkdir || workspaceCwd}
+            onCompact={handleCompact}
+          />
           <span className={`flex items-center gap-1 text-xs ${statusCfg.color}`}>
             {statusCfg.icon}
             {statusCfg.label}

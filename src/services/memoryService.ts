@@ -60,4 +60,9 @@ export const memoryService = {
   async extract(sessionText: string): Promise<unknown> {
     return invoke<unknown>('extract_memory', { sessionText })
   },
+
+  /** 把会话文本压缩成上下文快照摘要（调用当前模型） */
+  async compactSummary(sessionText: string): Promise<string> {
+    return invoke<string>('compact_summary', { sessionText })
+  },
 }

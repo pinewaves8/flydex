@@ -1,4 +1,4 @@
-import { BookOpen, Database } from 'lucide-react'
+import { BookOpen, Database, Minimize2 } from 'lucide-react'
 import { useEffect, useState } from 'react'
 
 import { memoryService } from '@/services/memoryService'
@@ -9,9 +9,16 @@ import { useCodexStore } from '@/stores/useCodexStore'
  *
  * - 记忆层徽章：L1 用户记忆（~/.flydex/MEMORY.md） / L2 项目记忆（.flydex/MEMORY.md）
  *   是否生效（存在内容即点亮，否则置灰）
- * - 上下文用量条：基于当前会话消息 JSON 长度的 token 粗估，展示进度条与千 token 数
+ * - 上下文用量条：基于当前会话消息 JSON 长度的 token 粗估，展示进度条与千 token 数；
+ *   超过 80% 预算时显示「压缩」按钮（需提供 onCompact 回调）
  */
-export function MemoryIndicator({ workdir }: { workdir: string }) {
+export function MemoryIndicator({
+  workdir,
+  onCompact,
+}: {
+  workdir: string
+  onCompact?: () => void
+}) {
   const messages = useCodexStore((s) => s.messages)
   const [userLen, setUserLen] = useState(0)
   const [projectLen, setProjectLen] = useState(0)
@@ -68,6 +75,16 @@ export function MemoryIndicator({ workdir }: { workdir: string }) {
         </span>
         {Math.round(estTokens / 1000)}k
       </span>
+      {pct > 80 && onCompact && (
+        <button
+          onClick={onCompact}
+          className="flex items-center gap-0.5 rounded bg-yellow-500/15 px-1.5 py-0.5 text-[10px] text-yellow-500 hover:bg-yellow-500/25"
+          title="会话上下文接近预算，压缩为快照后继续（新会话）"
+        >
+          <Minimize2 className="h-3 w-3" />
+          压缩
+        </button>
+      )}
     </div>
   )
 }
