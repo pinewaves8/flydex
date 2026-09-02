@@ -239,7 +239,7 @@ impl CodexManager {
         // 模型参数：会话级覆盖 > 全局默认
         args.extend(Self::model_args(session_model.as_deref()));
         // 计划模式：在用户指令前注入计划指令（配合 read-only 沙箱双重约束）
-        let final_command = match mode {
+        let mut final_command = match mode {
             CodexExecMode::Plan => format!(
                 "{} 用户需求：{}",
                 PLAN_INSTRUCTION,
@@ -252,6 +252,15 @@ impl CodexManager {
             ),
             _ => command.clone(),
         };
+        // 空指令保护：codex exec 强制要求 prompt，空串会报 "No prompt provided"。
+        // 纯图片发送（无文字）时注入默认指令，让 codex 基于附加图片回复；两者皆空则报错。
+        if final_command.trim().is_empty() {
+            if images.as_ref().is_some_and(|v| !v.is_empty()) {
+                final_command = "请描述你看到的图片内容，并结合项目上下文给出分析和建议。".to_string();
+            } else {
+                return Err("指令不能为空：请先输入消息，或附加图片后发送。".to_string());
+            }
+        }
         // 图像附件：通过 -i 传给 codex（相对路径 ./.flydex-attachments/xxx）
         if let Some(imgs) = &images {
             for img in imgs {

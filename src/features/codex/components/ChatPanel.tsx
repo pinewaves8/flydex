@@ -312,8 +312,12 @@ export function ChatPanel() {
   }, [status])
 
   const handleRun = async () => {
-    if (!command.trim() || status === 'running') return
+    if ((!command.trim() && attachments.length === 0) || status === 'running') return
     let cmd = command.trim()
+    // 纯图片发送（无文字）：注入默认指令（后端也有兜底，这里前端友好提示文案）
+    if (!cmd && attachments.length > 0) {
+      cmd = '请描述你看到的图片内容，并结合项目上下文给出分析和建议。'
+    }
     setCommand('')
     // 发送后保持焦点在输入框，便于继续输入下一条
     requestAnimationFrame(() => inputRef.current?.focus())
