@@ -4,6 +4,7 @@ import {
   Trash2,
   Terminal,
   AlertCircle,
+  BookOpen,
   CheckCircle,
   Loader2,
   Plus,
@@ -25,6 +26,8 @@ import { useCodexSession } from '../hooks/useCodexSession'
 
 import { FileChangeCard } from './FileChangeCard'
 import { MemoryIndicator } from './MemoryIndicator'
+import { MemoryPanel } from './MemoryPanel'
+import { MemorySettle } from './MemorySettle'
 import { PlanCard } from './PlanCard'
 import { ReviewCard } from './ReviewCard'
 
@@ -234,6 +237,7 @@ export function ChatPanel() {
   const planMode = useCodexStore((s) => s.planMode)
   const [command, setCommand] = useState('')
   const [showSkillPalette, setShowSkillPalette] = useState(false)
+  const [showMemoryPanel, setShowMemoryPanel] = useState(false)
   // 图像附件：{ name: 原始文件名, dataUrl: 预览用 base64 data URL, path: 落盘后的相对路径, saving: 是否保存中 }
   const [attachments, setAttachments] = useState<
     { name: string; dataUrl: string; path: string; saving: boolean }[]
@@ -566,6 +570,14 @@ export function ChatPanel() {
             Skills
           </button>
           <button
+            onClick={() => setShowMemoryPanel(true)}
+            className="flex items-center gap-1 rounded px-2 py-1 text-xs text-muted-foreground hover:bg-accent hover:text-accent-foreground"
+            title="记忆管理（查看/编辑项目记忆与用户记忆）"
+          >
+            <BookOpen className="h-3 w-3" />
+            记忆
+          </button>
+          <button
             onClick={newSession}
             disabled={status === 'running'}
             className="flex items-center gap-1 rounded px-2 py-1 text-xs text-muted-foreground hover:bg-accent hover:text-accent-foreground disabled:opacity-50"
@@ -674,6 +686,13 @@ export function ChatPanel() {
         />
       )}
 
+      {/* 记忆管理面板（6.1） */}
+      <MemoryPanel
+        workdir={currentSessionWorkdir || workspaceCwd}
+        open={showMemoryPanel}
+        onClose={() => setShowMemoryPanel(false)}
+      />
+
       {/* 输入区域 */}
       <div className="border-t border-border p-3">
         {approval && (
@@ -706,6 +725,8 @@ export function ChatPanel() {
             </div>
           </div>
         )}
+        {/* 记忆沉淀入口（6.1）：会话完成后提炼候选 → 勾选 → 写入项目记忆 */}
+        <MemorySettle workdir={currentSessionWorkdir || workspaceCwd} />
         <div className="mb-2 flex items-center gap-2">
           <button
             onClick={() => useCodexStore.getState().setPlanMode(!planMode)}

@@ -55,4 +55,9 @@ export const memoryService = {
   async writeUser(content: string): Promise<void> {
     await invoke('write_user_memory', { content })
   },
+
+  /** 从会话文本提取可沉淀的记忆候选（调用当前模型） */
+  async extract(sessionText: string): Promise<unknown> {
+    return invoke<unknown>('extract_memory', { sessionText })
+  },
 }
