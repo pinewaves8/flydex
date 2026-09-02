@@ -261,14 +261,16 @@ impl CodexManager {
                 return Err("指令不能为空：请先输入消息，或附加图片后发送。".to_string());
             }
         }
-        // 图像附件：通过 -i 传给 codex（相对路径 ./.flydex-attachments/xxx）
+        // 图像附件：通过 -i 传给 codex（相对路径 ./.flydex-attachments/xxx）。
+        // 注意：-i/--image 是 num_args=1.. 的贪婪多值参数，会吞掉其后的所有非 option 参数（含 prompt），
+        // 因此 prompt 必须先入 args，-i 图片必须排在 prompt 之后，否则 codex 报 "No prompt provided"。
+        args.push(final_command);
         if let Some(imgs) = &images {
             for img in imgs {
                 args.push("-i".to_string());
                 args.push(img.clone());
             }
         }
-        args.push(final_command);
 
         // 创建伪终端
         let pty_system = native_pty_system();

@@ -508,6 +508,7 @@ src-tauri/src/
 > - **前端**：输入区新增图片按钮（多选）、拖拽图片、剪贴板粘贴截图三种入口；`FileReader` 读 base64 → 落盘 → 缩略图预览（含保存中 spinner、单张移除）；发送时等待全部落盘完成后透传 `images`，发送后自动清空附件；纯图片（无文字）也可发送
 > - **验证**：typecheck / vite build / cargo check 全部通过；CLI 实测 `codex exec -i <png>` 参数被正确接受（thread 正常启动，仅因模型服务商高负载导致回复失败，与改动无关）
 > **说明**：图片通过 `-i` 附加到**初始 prompt**（新会话首轮）或 resume 后的该轮 prompt，多图按序 `-i` 传入。
+> **⚠️ 实测发现并修复（2026-09-02 续）**：上传图片发送时 codex 报 `No prompt provided`（exit 1）。根因：codex 顶层 `-i/--image <FILE>...` 是 `num_args=1..` **贪婪多值参数**，会吞掉其后的所有非 option 参数（含位置 prompt）。原实现把 `-i <img>` 排在 prompt 之前 → prompt 被 `-i` 吞掉 → codex 收到空 prompt → 从 stdin 读（PTY 下 stdin 是 terminal）→ 报错。**修复**：把 `args.push(final_command)` 移到 `-i` 之前（prompt 先入 args，图片后置），命令变为 `codex exec <configs> <prompt> -i img1 -i img2`。经 CLI 实测：`codex exec 请用一句话回复OK -i ./img.jpg` 正常进入执行（此前 `codex exec -i ./img.jpg 请描述图片` 复现 `Reading prompt from stdin... / No prompt provided via stdin.`）。resume 模式的 `-i` 是子命令参数（num_args=1）不受影响。
 
 | 项 | 内容 |
 |----|------|
