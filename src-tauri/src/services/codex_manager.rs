@@ -261,7 +261,14 @@ impl CodexManager {
                 return Err("指令不能为空：请先输入消息，或附加图片后发送。".to_string());
             }
         }
-        // 图像附件：通过 -i 传给 codex（相对路径 ./.flydex-attachments/xxx）。
+        
+        // 记忆注入（6.1）：L1 用户记忆 + L2 项目记忆（.flydex/MEMORY.md）拼到指令前。
+        // 放在空指令保护之后，避免纯记忆被误当成用户指令发送。
+        let memory_block = crate::services::memory::MemoryService::build_inject_block(workdir.as_deref());
+        if !memory_block.trim().is_empty() {
+            final_command = format!("{}\n\n{}", memory_block.trim_end(), final_command);
+        }
+// 图像附件：通过 -i 传给 codex（相对路径 ./.flydex-attachments/xxx）。
         // 注意：-i/--image 是 num_args=1.. 的贪婪多值参数，会吞掉其后的所有非 option 参数（含 prompt），
         // 因此 prompt 必须先入 args，-i 图片必须排在 prompt 之后，否则 codex 报 "No prompt provided"。
         args.push(final_command);

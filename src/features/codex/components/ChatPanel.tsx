@@ -24,6 +24,7 @@ import { useEffect, useRef, useState } from 'react'
 import { useCodexSession } from '../hooks/useCodexSession'
 
 import { FileChangeCard } from './FileChangeCard'
+import { MemoryIndicator } from './MemoryIndicator'
 import { PlanCard } from './PlanCard'
 import { ReviewCard } from './ReviewCard'
 
@@ -532,6 +533,8 @@ export function ChatPanel() {
               </option>
             ))}
           </select>
+          {/* 上下文与记忆指示器（6.1）：L1/L2 记忆层 + 会话上下文用量 */}
+          <MemoryIndicator workdir={currentSessionWorkdir || workspaceCwd} />
           <span className={`flex items-center gap-1 text-xs ${statusCfg.color}`}>
             {statusCfg.icon}
             {statusCfg.label}

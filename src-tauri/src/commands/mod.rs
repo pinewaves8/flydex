@@ -1,6 +1,7 @@
 pub mod codex;
 pub mod git;
 pub mod mcp;
+pub mod memory;
 pub mod model;
 pub mod project;
 pub mod security;
