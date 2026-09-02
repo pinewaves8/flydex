@@ -33,9 +33,13 @@ pub fn resolve_dir(path: String, cwd: String) -> Result<String, String> {
     }
 
     let mut s = canonical.to_string_lossy().to_string();
-    // Windows 上 canonicalize 会返回 \\?\ 扩展路径前缀，去掉以保持与真实终端一致
+    // Windows 上 canonicalize 会返回 \\?\ 扩展路径前缀，去掉以保持与真实终端一致：
+    // - \\?\C:\... → C:\...（本地盘）
+    // - \\?\UNC\server\share\... → \\server\share\...（UNC 网络路径还原）
     #[cfg(windows)]
-    if let Some(stripped) = s.strip_prefix(r"\\?\") {
+    if let Some(stripped) = s.strip_prefix(r"\\?\UNC\") {
+        s = format!("\\{}", stripped);
+    } else if let Some(stripped) = s.strip_prefix(r"\\?\") {
         s = stripped.to_string();
     }
 

@@ -1,7 +1,7 @@
 import { create } from 'zustand'
 
 export type View = 'codex' | 'projects' | 'terminal' | 'git' | 'settings'
-export type SettingsTab = 'security' | 'model' | 'mcp' | 'skills'
+export type SettingsTab = 'security' | 'model' | 'mcp' | 'skills' | 'terminal'
 
 interface UIState {
   sidebarCollapsed: boolean

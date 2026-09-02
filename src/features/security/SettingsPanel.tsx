@@ -1,11 +1,13 @@
 import {
   ArrowLeft,
+  Bell,
   Boxes,
   CheckCircle2,
   Clock,
   Cpu,
   ShieldCheck,
   Sparkles,
+  Terminal,
   Trash2,
   XCircle,
 } from 'lucide-react'
@@ -14,7 +16,9 @@ import { useEffect } from 'react'
 import { McpSettings } from '@/features/mcp/McpSettings'
 import { ModelSettings } from '@/features/model/ModelSettings'
 import { SkillSettings } from '@/features/skills/SkillSettings'
+import { terminalService } from '@/services/terminalService'
 import { useSecurityStore } from '@/stores/useSecurityStore'
+import { useSettingsStore, type ShellType } from '@/stores/useSettingsStore'
 import { useUIStore } from '@/stores/useUIStore'
 import { APPROVAL_POLICIES, SANDBOX_MODES } from '@/types/security'
 
@@ -40,6 +44,16 @@ export function SettingsPanel() {
   const setCurrentView = useUIStore((s) => s.setCurrentView)
   const settingsTab = useUIStore((s) => s.settingsTab)
   const openSettings = useUIStore((s) => s.openSettings)
+
+  // 终端与通知设置
+  const shell = useSettingsStore((s) => s.shell)
+  const setShell = useSettingsStore((s) => s.setShell)
+  const notifyOnDone = useSettingsStore((s) => s.notifyOnDone)
+  const setNotifyOnDone = useSettingsStore((s) => s.setNotifyOnDone)
+  const notifyOnError = useSettingsStore((s) => s.notifyOnError)
+  const setNotifyOnError = useSettingsStore((s) => s.setNotifyOnError)
+  const notifyOnApproval = useSettingsStore((s) => s.notifyOnApproval)
+  const setNotifyOnApproval = useSettingsStore((s) => s.setNotifyOnApproval)
 
   useEffect(() => {
     void load()
@@ -77,6 +91,12 @@ export function SettingsPanel() {
     const ok = window.confirm('确定清空全部审批历史记录吗？')
     if (!ok) return
     void clearHistory()
+  }
+
+  /** 切换终端 Shell：更新设置并重置 terminalService 的 shell 缓存 */
+  const handleShellChange = (s: ShellType) => {
+    setShell(s)
+    terminalService.resetResolvedShell()
   }
 
   return (
@@ -144,6 +164,17 @@ export function SettingsPanel() {
             >
               <Sparkles className="h-4 w-4" />
               Skills
+            </button>
+            <button
+              onClick={() => openSettings('terminal')}
+              className={`flex items-center gap-1.5 rounded-t-md border-b-2 px-3 py-2 text-sm transition-colors ${
+                settingsTab === 'terminal'
+                  ? 'border-primary text-foreground'
+                  : 'border-transparent text-muted-foreground hover:text-foreground'
+              }`}
+            >
+              <Terminal className="h-4 w-4" />
+              终端与通知
             </button>
           </div>
         </div>
@@ -277,6 +308,108 @@ export function SettingsPanel() {
         ) : settingsTab === 'skills' ? (
           /* Skills tab */
           <SkillSettings />
+        ) : settingsTab === 'terminal' ? (
+          /* 终端与通知 tab */
+          <>
+            {/* Shell 选择 */}
+            <section>
+              <h2 className="mb-1 text-sm font-medium text-muted-foreground">终端 Shell</h2>
+              <p className="mb-3 text-xs leading-relaxed text-muted-foreground">
+                内置终端使用的命令行解释器。选择「自动」时按优先级探测 pwsh → PowerShell →
+                cmd。切换后在新终端或下次执行命令时生效。
+              </p>
+              <div className="grid grid-cols-2 gap-3 sm:grid-cols-3">
+                {(
+                  [
+                    { value: 'auto', label: '自动', desc: 'pwsh → PowerShell → cmd' },
+                    { value: 'pwsh', label: 'PowerShell 7', desc: 'pwsh（需已安装）' },
+                    {
+                      value: 'powershell',
+                      label: 'PowerShell 5.1',
+                      desc: '系统自带 powershell.exe',
+                    },
+                    { value: 'cmd', label: '命令提示符', desc: 'cmd.exe' },
+                    { value: 'wsl', label: 'WSL', desc: 'wsl bash（需已启用）' },
+                  ] as { value: ShellType; label: string; desc: string }[]
+                ).map((s) => {
+                  const active = shell === s.value
+                  return (
+                    <button
+                      key={s.value}
+                      onClick={() => handleShellChange(s.value)}
+                      className={`rounded-lg border p-3 text-left transition-colors ${
+                        active
+                          ? 'border-primary bg-primary/10 ring-1 ring-primary'
+                          : 'border-border bg-card hover:border-primary/50'
+                      }`}
+                    >
+                      <div className="mb-1 text-sm font-medium">{s.label}</div>
+                      <p className="text-xs leading-relaxed text-muted-foreground">{s.desc}</p>
+                      {active && (
+                        <div className="mt-2 text-xs font-medium text-primary">当前选择</div>
+                      )}
+                    </button>
+                  )
+                })}
+              </div>
+            </section>
+
+            {/* 通知设置 */}
+            <section>
+              <h2 className="mb-3 flex items-center gap-2 text-sm font-medium text-muted-foreground">
+                <Bell className="h-4 w-4" />
+                系统通知
+              </h2>
+              <div className="divide-y divide-border rounded-lg border border-border">
+                {[
+                  {
+                    key: 'approval' as const,
+                    label: '审批请求',
+                    desc: 'AI 等待你批准操作时弹通知（建议保持开启，避免流程卡住）',
+                    value: notifyOnApproval,
+                    set: setNotifyOnApproval,
+                  },
+                  {
+                    key: 'error' as const,
+                    label: '任务失败',
+                    desc: 'codex 进程异常退出时弹通知',
+                    value: notifyOnError,
+                    set: setNotifyOnError,
+                  },
+                  {
+                    key: 'done' as const,
+                    label: '任务完成',
+                    desc: '本轮会话正常结束时弹通知',
+                    value: notifyOnDone,
+                    set: setNotifyOnDone,
+                  },
+                ].map((n) => (
+                  <div key={n.key} className="flex items-start justify-between gap-4 px-4 py-3">
+                    <div className="min-w-0">
+                      <div className="text-sm font-medium">{n.label}</div>
+                      <p className="mt-0.5 text-xs leading-relaxed text-muted-foreground">
+                        {n.desc}
+                      </p>
+                    </div>
+                    <button
+                      onClick={() => n.set(!n.value)}
+                      role="switch"
+                      aria-checked={n.value}
+                      className={`relative h-6 w-11 shrink-0 rounded-full transition-colors ${
+                        n.value ? 'bg-primary' : 'bg-muted'
+                      }`}
+                    >
+                      <span
+                        className={`absolute top-0.5 h-5 w-5 rounded-full bg-white transition-transform ${
+                          n.value ? 'translate-x-[22px]' : 'translate-x-0.5'
+                        }`}
+                      />
+                    </button>
+                  </div>
+                ))}
+              </div>
+            </section>
+          </>
         ) : null}
       </div>
     </div>

@@ -3,8 +3,10 @@ import { listen, type UnlistenFn } from '@tauri-apps/api/event'
 import { useCallback, useEffect } from 'react'
 
 import { approveCodex, runCodex, stopCodex, type CodexExecMode } from '@/services/codex'
+import { notificationService } from '@/services/notificationService'
 import { useCodexStore, type CodexApproval } from '@/stores/useCodexStore'
 import { useSecurityStore } from '@/stores/useSecurityStore'
+import { useSettingsStore } from '@/stores/useSettingsStore'
 import type { CodexEvent } from '@/types/codex'
 import type { CodexJsonEvent, CodexFileChange, CodexItem } from '@/types/codexJson'
 
@@ -191,6 +193,11 @@ export function useCodexSession() {
             kind: 'system',
             content: `需要审批: ${item.command || item.description || '未知操作'}`,
           })
+          // 审批请求通知：等待用户操作，弹系统通知避免错过
+          if (useSettingsStore.getState().notifyOnApproval) {
+            const desc = item.command || item.description || '未知操作'
+            void notificationService.notify('Flydex · 需要审批', desc)
+          }
         }
       } else if (event.type === 'turn.completed') {
         // 本轮结束，强制完成打字机（避免残留流式状态）
@@ -261,6 +268,13 @@ export function useCodexSession() {
           store.setApproval(null)
           store.setRunningCommands([])
           store.setStreaming(null)
+          // 会话完成/失败通知（按设置开关控制）
+          const settings = useSettingsStore.getState()
+          if (payload.data.exit_code !== 0 && settings.notifyOnError) {
+            void notificationService.notify('Flydex · 任务失败', 'codex 进程异常退出')
+          } else if (payload.data.exit_code === 0 && settings.notifyOnDone) {
+            void notificationService.notify('Flydex · 任务完成', '本轮会话已结束')
+          }
         }
       })
 

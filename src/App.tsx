@@ -7,6 +7,7 @@ import { GitPanel } from '@/features/git'
 import { ProjectsPanel } from '@/features/project'
 import { SettingsPanel } from '@/features/security/SettingsPanel'
 import { TerminalPanel } from '@/features/terminal'
+import { useGlobalShortcuts } from '@/hooks/useGlobalShortcuts'
 import { useProjectStore } from '@/stores/useProjectStore'
 import { applyTheme, useThemeStore } from '@/stores/useThemeStore'
 import { useUIStore } from '@/stores/useUIStore'
@@ -15,6 +16,9 @@ import { useWorkspaceStore } from '@/stores/useWorkspaceStore'
 function App() {
   const { currentView } = useUIStore()
   const loadProjects = useProjectStore((s) => s.loadProjects)
+
+  // 应用内全局快捷键（Ctrl+Shift+N 终端 / Ctrl+Shift+K 对话）
+  useGlobalShortcuts()
 
   // 应用启动时加载项目和会话列表
   useEffect(() => {

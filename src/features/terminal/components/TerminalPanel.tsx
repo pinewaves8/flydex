@@ -4,6 +4,7 @@ import { FitAddon } from 'xterm-addon-fit'
 
 import 'xterm/css/xterm.css'
 
+import { shellService } from '@/services/shellService'
 import { terminalService } from '@/services/terminalService'
 import { useWorkspaceStore } from '@/stores/useWorkspaceStore'
 
@@ -38,7 +39,9 @@ export function TerminalPanel() {
   const inputBufferRef = useRef<string>('')
   const cursorIndexRef = useRef<number>(0)
   const handleInputRef = useRef<(data: string) => void>(() => {})
+  const shellRef = useRef<Exclude<import('@/stores/useSettingsStore').ShellType, 'auto'>>('cmd')
   const [isRunning, setIsRunning] = useState(false)
+  const [shellLabel, setShellLabel] = useState<string>('')
   const workspaceCwd = useWorkspaceStore((s) => s.cwd)
 
   // 全局工作目录变化时同步终端（遵循 codex：cwd 是唯一事实源）
@@ -92,8 +95,21 @@ export function TerminalPanel() {
     // 显示欢迎信息
     term.writeln('\x1b[1;36mFlydex Terminal\x1b[0m')
     term.writeln(`工作目录: ${terminalService.getCwd()}`)
-    term.writeln('输入命令执行，上下箭头浏览历史，Ctrl+C 中断\r\n')
-    writePrompt()
+    // 异步解析当前 shell（auto 模式探测）并更新标题
+    void terminalService
+      .getResolvedShell()
+      .then((shell) => {
+        shellRef.current = shell
+        const label = shellService.labelOf(shell)
+        setShellLabel(label)
+        term.writeln(`Shell: ${label}`)
+        term.writeln('输入命令执行，上下箭头浏览历史，Ctrl+C 中断\r\n')
+        writePrompt()
+      })
+      .catch(() => {
+        term.writeln('输入命令执行，上下箭头浏览历史，Ctrl+C 中断\r\n')
+        writePrompt()
+      })
 
     // 处理窗口大小变化
     const handleResize = () => {
@@ -178,7 +194,14 @@ export function TerminalPanel() {
     const cwd = terminalService.getCwd()
     // 简化路径显示（只显示最后一级目录）
     const shortCwd = cwd.split('\\').pop() || cwd
-    term.write(`\x1b[1;32m${shortCwd}\x1b[0m\x1b[1;34m>\x1b[0m `)
+    const shell = shellRef.current
+    if (shell === 'pwsh' || shell === 'powershell') {
+      term.write(`\x1b[1;32mPS ${shortCwd}\x1b[0m\x1b[1;34m>\x1b[0m `)
+    } else if (shell === 'wsl') {
+      term.write(`\x1b[1;32m${shortCwd}\x1b[0m\x1b[1;34m$\x1b[0m `)
+    } else {
+      term.write(`\x1b[1;32m${shortCwd}\x1b[0m\x1b[1;34m>\x1b[0m `)
+    }
     inputBufferRef.current = ''
     cursorIndexRef.current = 0
   }
@@ -372,6 +395,7 @@ export function TerminalPanel() {
       <div className="flex items-center justify-between border-b border-gray-700 bg-[#161b22] px-3 py-1.5">
         <div className="flex items-center gap-2">
           <span className="text-xs font-medium text-gray-400">Terminal</span>
+          {shellLabel && <span className="text-[10px] text-gray-500">{shellLabel}</span>}
           {isRunning && (
             <span className="flex items-center gap-1 text-xs text-yellow-400">
               <span className="h-2 w-2 animate-pulse rounded-full bg-yellow-400" />

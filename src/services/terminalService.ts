@@ -1,5 +1,7 @@
 import { Command, type Child } from '@tauri-apps/plugin-shell'
 
+import { shellService } from '@/services/shellService'
+import { useSettingsStore } from '@/stores/useSettingsStore'
 import { useWorkspaceStore } from '@/stores/useWorkspaceStore'
 
 /**
@@ -25,9 +27,27 @@ class TerminalService {
   private cwd: string = 'C:\\llm\\flydex'
   private history: CommandHistory[] = []
   private historyIndex: number = -1
+  private resolvedShell: Exclude<import('@/stores/useSettingsStore').ShellType, 'auto'> | null =
+    null
   private readonly platform: 'windows' | 'unix' = navigator.userAgent.includes('Windows')
     ? 'windows'
     : 'unix'
+
+  /** 获取当前实际使用的 Shell（auto 模式会探测一次并缓存） */
+  async getResolvedShell(): Promise<
+    Exclude<import('@/stores/useSettingsStore').ShellType, 'auto'>
+  > {
+    if (!this.resolvedShell) {
+      const pref = useSettingsStore.getState().shell
+      this.resolvedShell = await shellService.resolve(pref)
+    }
+    return this.resolvedShell
+  }
+
+  /** 重置已解析的 shell（设置变更后调用，下次执行重新解析） */
+  resetResolvedShell() {
+    this.resolvedShell = null
+  }
 
   /** 设置工作目录 */
   setCwd(cwd: string) {
@@ -126,10 +146,12 @@ class TerminalService {
     }
 
     try {
-      // Windows 上通过 cmd /c 执行；encoding 用 gbk 匹配 Windows 中文系统的 cmd 输出编码
-      const cmd = Command.create('cmd', ['/c', command], {
+      // 按当前 Shell 构造命令（auto 探测一次并缓存；PowerShell 保留会话、cmd 用 /c、WSL 走 bash）
+      const shell = await this.getResolvedShell()
+      const { program, args, encoding } = shellService.build(shell, command)
+      const cmd = Command.create(program, args, {
         cwd: this.cwd,
-        encoding: 'gbk',
+        encoding,
       })
 
       cmd.stdout.on('data', (data) => {
