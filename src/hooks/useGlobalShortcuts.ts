@@ -5,24 +5,14 @@ import { useUIStore } from '@/stores/useUIStore'
 /**
  * 应用内全局快捷键
  *
- * 监听 window keydown，在任意视图下生效（无需聚焦输入框）。
- * 当焦点在输入框/文本域/终端等可输入元素时跳过，避免与打字冲突。
+ * 在 window 捕获阶段监听 keydown，任意视图/任意焦点下生效。
+ * 使用捕获阶段（capture）是为了保证事件先于 xterm 终端输入框等
+ * 内层元素的 keydown 处理，避免被拦截或 stopPropagation。
+ * Ctrl+Shift+N / Ctrl+Shift+K 不是常规打字组合，无需担心误触。
  */
 export function useGlobalShortcuts() {
   useEffect(() => {
-    const isEditable = (el: Element | null): boolean => {
-      if (!el) return false
-      const tag = el.tagName.toLowerCase()
-      if (tag === 'input' || tag === 'textarea' || tag === 'select') return true
-      if ((el as HTMLElement).isContentEditable) return true
-      return false
-    }
-
     const handler = (e: KeyboardEvent) => {
-      // 焦点在可输入元素时放行（终端面板内部有自己的按键处理）
-      const target = e.target as Element | null
-      if (isEditable(target)) return
-
       // Ctrl+Shift+N：切换/打开内置终端
       if (e.ctrlKey && e.shiftKey && e.key.toLowerCase() === 'n') {
         e.preventDefault()
@@ -37,7 +27,8 @@ export function useGlobalShortcuts() {
       }
     }
 
-    window.addEventListener('keydown', handler)
-    return () => window.removeEventListener('keydown', handler)
+    // 捕获阶段监听：先于目标元素（如 xterm 的输入 textarea）的 keydown 处理执行
+    window.addEventListener('keydown', handler, true)
+    return () => window.removeEventListener('keydown', handler, true)
   }, [])
 }
