@@ -350,6 +350,8 @@ impl CodexManager {
         let turn_done = Arc::new(std::sync::atomic::AtomicBool::new(false));
         let app_reader = app.clone();
         let turn_done_reader = turn_done.clone();
+        let run_id_reader = run_id.clone();
+        let workdir_reader = workdir.clone();
         let reader_thread = std::thread::spawn(move || {
             let mut reader = BufReader::new(reader);
             // 累积解析：PTY 按终端宽度（160 列）会把长 JSON（如 mcp_tool_call 的大结果）
@@ -363,6 +365,18 @@ impl CodexManager {
                     return;
                 }
                 let compact: String = buf.chars().filter(|&c| c != '\n').collect();
+                // 诊断：把 codex 原始输出（去 wrap 换行后的内容）追加写盘，便于实机排查
+                if let Some(dir) = workdir_reader.as_deref() {
+                    if let Ok(log_path) = std::path::Path::new(dir).join(".codex-output.log").into_os_string().into_string() {
+                        let _ = std::fs::OpenOptions::new()
+                            .create(true).append(true).open(&log_path)
+                            .and_then(|mut f| {
+                                use std::io::Write;
+                                let _ = writeln!(f, "[{}] {}", run_id_reader, compact);
+                                Ok(())
+                            });
+                    }
+                }
                 match serde_json::from_str::<serde_json::Value>(&compact) {
                     Ok(json) => {
                         if json.get("type").and_then(|v| v.as_str()) == Some("turn.completed") {
