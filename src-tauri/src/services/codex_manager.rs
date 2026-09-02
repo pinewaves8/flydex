@@ -297,6 +297,18 @@ impl CodexManager {
         }
         // 调试日志：打印实际传给 codex 的完整命令行，便于排查 cmd /c 参数解析问题
         eprintln!("[codex] full command: codex {}", args.join(" "));
+        // 同时写入项目根 .codex-cmd.log（Windows 下 tauri dev 控制台不可见时用）
+        if let Some(dir) = &workdir {
+            if let Ok(log_path) = std::path::Path::new(dir).join(".codex-cmd.log").into_os_string().into_string() {
+                let _ = std::fs::OpenOptions::new()
+                    .create(true).append(true).open(&log_path)
+                    .and_then(|mut f| {
+                        use std::io::Write;
+                        let _ = writeln!(f, "[{}] codex {}", run_id, args.join(" "));
+                        Ok(())
+                    });
+            }
+        }
 
         // 预配置 git safe.directory，避免 workspace-write 下 AI 的 git 操作失败
         Self::ensure_git_safe_directory(workdir.as_deref());
