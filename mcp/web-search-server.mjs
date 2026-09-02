@@ -43,6 +43,27 @@ const WEB_SEARCH_TOOL = {
   },
 };
 
+/** web_fetch 工具：抓取网页正文（剥离 HTML 标签与脚本样式，返回纯文本） */
+const WEB_FETCH_TOOL = {
+  name: 'web_fetch',
+  description:
+    '抓取一个网页 URL 的正文内容，返回纯文本（自动剥离 HTML 标签、脚本与样式）。' +
+    '用于阅读搜索结果指向的页面全文、文档、新闻原文等需要网页完整内容的场景。\n' +
+    '【使用建议】先用 web_search 找到目标链接，再用 web_fetch 抓取该链接正文；' +
+    '抓取失败（403/反爬/动态渲染）时如实说明，不要编造页面内容。',
+  inputSchema: {
+    type: 'object',
+    properties: {
+      url: { type: 'string', description: '要抓取的网页完整 URL（http/https）' },
+      max_chars: {
+        type: 'number',
+        description: '返回正文的最大字符数，默认 6000，最大 20000',
+      },
+    },
+    required: ['url'],
+  },
+};
+
 /** 检测查询语言：含 CJK 字符用中文版，否则用英文版（人名/英文查询效果差异巨大） */
 function detectMkt(query) {
   return /[\u4e00-\u9fff\u3400-\u4dbf]/.test(query) ? 'zh-CN' : 'en-US';
@@ -267,6 +288,43 @@ export function formatResults(query, results, source = 'Bing 中国') {
   return lines.join('\n');
 }
 
+/**
+ * 抓取网页正文为纯文本
+ * - 剥离 <script>/<style> 与全部 HTML 标签（复用 stripHtml）
+ * - 压缩空白、截断到 maxChars（默认 6000，最大 20000）
+ * - 仅允许 http/https，15s 超时
+ */
+export async function fetchPage(url, maxChars = 6000) {
+  const clean = String(url).trim();
+  if (!/^https?:\/\//i.test(clean)) throw new Error('仅支持 http/https URL');
+  const limit = Math.min(Math.max(Number(maxChars) || 6000, 1000), 20000);
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), 15000);
+  let res;
+  try {
+    res = await fetch(clean, {
+      headers: { 'User-Agent': UA, 'Accept-Language': 'zh-CN,zh;q=0.9,en;q=0.8' },
+      redirect: 'follow',
+      signal: controller.signal,
+    });
+  } finally {
+    clearTimeout(timer);
+  }
+  if (!res.ok) throw new Error(`抓取失败: HTTP ${res.status}`);
+  const html = await res.text();
+  // 去掉脚本/样式/导航等非正文块
+  const stripped = html
+    .replace(/<script[\s\S]*?<\/script>/gi, ' ')
+    .replace(/<style[\s\S]*?<\/style>/gi, ' ')
+    .replace(/<!--[\s\S]*?-->/g, ' ')
+    .replace(/<nav[\s\S]*?<\/nav>/gi, ' ')
+    .replace(/<header[\s\S]*?<\/header>/gi, ' ');
+  let text = stripHtml(stripped).replace(/\s+/g, ' ').trim();
+  if (!text) throw new Error('未能提取到正文内容（可能为动态渲染页面）');
+  if (text.length > limit) text = text.slice(0, limit) + '\n\n…（内容已截断）';
+  return text;
+}
+
 /** JSON-RPC 响应写 stdout */
 function respond(id, result) {
   process.stdout.write(JSON.stringify({ jsonrpc: '2.0', id, result }) + '\n');
@@ -291,7 +349,7 @@ async function handleMessage(msg) {
       respond(id, {});
       break;
     case 'tools/list':
-      respond(id, { tools: [WEB_SEARCH_TOOL] });
+      respond(id, { tools: [WEB_SEARCH_TOOL, WEB_FETCH_TOOL] });
       break;
     case 'tools/call': {
       const { name, arguments: args } = params || {};
@@ -307,6 +365,19 @@ async function handleMessage(msg) {
         } catch (err) {
           respond(id, {
             content: [{ type: 'text', text: `搜索失败: ${err.message}` }],
+            isError: true,
+          });
+        }
+      } else if (name === 'web_fetch') {
+        try {
+          const url = (args && args.url) || '';
+          if (!url.trim()) throw new Error('url 不能为空');
+          const maxChars = Number(args?.max_chars) || 6000;
+          const text = await fetchPage(url, maxChars);
+          respond(id, { content: [{ type: 'text', text }] });
+        } catch (err) {
+          respond(id, {
+            content: [{ type: 'text', text: `抓取失败: ${err.message}` }],
             isError: true,
           });
         }

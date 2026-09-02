@@ -27,3 +27,37 @@ pub fn mcp_remove(name: String) -> Result<Vec<McpServer>, String> {
 pub fn mcp_test(server: McpServer) -> Result<String, String> {
     test_server(&server)
 }
+
+/// 内置 web 工具 MCP server 信息（node + web-search-server.mjs 绝对路径）
+///
+/// 供 MCP 模板市场一键接入 web_search / web_fetch 工具。路径定位顺序：
+/// 1. 当前可执行文件同目录 mcp/web-search-server.mjs（发布布局）
+/// 2. 当前可执行文件上级目录 mcp/web-search-server.mjs（target/debug 布局）
+/// 3. 开发固定路径 C:\llm\flydex\mcp\web-search-server.mjs
+#[tauri::command]
+pub fn mcp_builtin_web_server() -> Result<crate::services::mcp::McpServer, String> {
+    use std::path::PathBuf;
+    let file_name = "web-search-server.mjs";
+    let mut candidates: Vec<PathBuf> = Vec::new();
+    if let Ok(exe) = std::env::current_exe() {
+        if let Some(dir) = exe.parent() {
+            candidates.push(dir.join("mcp").join(file_name));
+            candidates.push(dir.join("..").join("mcp").join(file_name));
+        }
+    }
+    // 开发固定路径兜底
+    candidates.push(PathBuf::from(r"C:\llm\flydex\mcp").join(file_name));
+    let found = candidates
+        .iter()
+        .find(|p| p.exists())
+        .ok_or_else(|| "未找到内置 web 工具 MCP server（web-search-server.mjs）".to_string())?;
+    Ok(crate::services::mcp::McpServer {
+        name: "web-search".to_string(),
+        transport: "stdio".to_string(),
+        command: Some("node".to_string()),
+        args: vec![found.to_string_lossy().to_string()],
+        env: std::collections::HashMap::new(),
+        url: None,
+        approval_mode: None,
+    })
+}
