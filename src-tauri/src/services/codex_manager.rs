@@ -7,7 +7,7 @@ use std::time::Duration;
 use tauri::{AppHandle, Emitter};
 
 use crate::services::security::SecurityService;
-use crate::types::codex::CodexEvent;
+use crate::types::codex::{CodexEvent, CodexEventBody};
 
 /// Codex 执行模式
 #[derive(Debug, Clone, Copy)]
@@ -192,6 +192,7 @@ impl CodexManager {
         run_id: String,
         session_model: Option<String>,
         images: Option<Vec<String>>,
+        sandbox: Option<String>,
     ) -> Result<(), String> {
         // 构建 codex 参数
         let mut args: Vec<String> = vec!["exec".to_string()];
@@ -227,9 +228,13 @@ impl CodexManager {
         let sec = SecurityService::load();
         // 所有 -c 值一律不加引号（cmd /c 重新解析会破坏内嵌引号），含连字符的值也可安全裸传
         // 计划模式强制 read-only 沙箱（模型只能分析出计划，无法修改任何文件）；其余用用户安全配置
-        let sandbox = match mode {
-            CodexExecMode::Plan | CodexExecMode::Review => "read-only",
-            _ => sec.sandbox_mode.as_codex(),
+        // 沙箱边界：per-run 覆盖（子代理可配）> 计划/审查强制只读 > 全局配置
+        let sandbox = match sandbox {
+            Some(s) => s,
+            None => match mode {
+                CodexExecMode::Plan | CodexExecMode::Review => "read-only".to_string(),
+                _ => sec.sandbox_mode.as_codex().to_string(),
+            },
         };
         args.push("-c".to_string());
         args.push(format!("sandbox_mode={}", sandbox));
@@ -349,7 +354,10 @@ impl CodexManager {
             },
         );
 
-        app.emit("codex-output", CodexEvent::Started { pid })
+        app.emit(
+            "codex-output",
+            CodexEvent { run_id: run_id.clone(), body: CodexEventBody::Started { pid } },
+        )
             .map_err(|e| format!("Failed to emit started event: {}", e))?;
 
         // 读线程：阻塞读 master（TTY 行缓冲 → 流式），过滤控制序列，解析 JSONL
@@ -389,11 +397,16 @@ impl CodexManager {
                         if json.get("type").and_then(|v| v.as_str()) == Some("turn.completed") {
                             turn_done_reader.store(true, std::sync::atomic::Ordering::Relaxed);
                         }
-                        let _ = app_reader.emit("codex-output", CodexEvent::Json(json));
+                        let _ = app_reader.emit(
+                            "codex-output",
+                            CodexEvent { run_id: run_id_reader.clone(), body: CodexEventBody::Json(json) },
+                        );
                     }
                     Err(_) => {
-                        let _ = app_reader
-                            .emit("codex-output", CodexEvent::Output { text: buf.to_string() });
+                        let _ = app_reader.emit(
+                                "codex-output",
+                                CodexEvent { run_id: run_id_reader.clone(), body: CodexEventBody::Output { text: buf.to_string() } },
+                            );
                     }
                 }
             };
@@ -444,7 +457,10 @@ impl CodexManager {
                     // 保持 stdin 打开，让 codex 自然收尾退出（实测 ~16s 内）。
                     if turn_done.load(std::sync::atomic::Ordering::Relaxed) && !done_sent {
                         done_sent = true;
-                        let _ = app.emit("codex-done", CodexEvent::Done { exit_code: 0 });
+                        let _ = app.emit(
+                            "codex-done",
+                            CodexEvent { run_id: run_id.clone(), body: CodexEventBody::Done { exit_code: 0 } },
+                        );
                     }
                     if start.elapsed() > CODEX_TIMEOUT {
                         let mut g = child.lock().unwrap();
@@ -462,7 +478,10 @@ impl CodexManager {
 
         // 推送完成事件（若 turn.completed 已提前推送过，则不重复）
         if !done_sent {
-            app.emit("codex-done", CodexEvent::Done { exit_code })
+            app.emit(
+                "codex-done",
+                CodexEvent { run_id: run_id.clone(), body: CodexEventBody::Done { exit_code } },
+            )
                 .map_err(|e| format!("Failed to emit codex done event: {}", e))?;
         }
 

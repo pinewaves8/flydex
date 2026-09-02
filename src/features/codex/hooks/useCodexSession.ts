@@ -233,6 +233,10 @@ export function useCodexSession() {
         const payload = event.payload
         const store = useCodexStore.getState()
 
+        // 子代理并行（6.3）：只处理本会话自己的 run，避免子代理事件污染主会话
+        const myRunId = useCodexStore.getState().pendingRunId
+        if (payload.run_id && payload.run_id !== myRunId) return
+
         if (payload.type === 'Started') {
           store.appendOutput({
             text: `▸ Codex 已启动 (PID: ${payload.data.pid})，正在思考…`,
@@ -249,6 +253,9 @@ export function useCodexSession() {
 
       const done = await listen<CodexEvent>('codex-done', (event) => {
         const payload = event.payload
+        // 子代理并行（6.3）：只处理本会话自己的 run
+        const myRunId = useCodexStore.getState().pendingRunId
+        if (payload.run_id && payload.run_id !== myRunId) return
         if (payload.type === 'Done') {
           const store = useCodexStore.getState()
           // 兜底：计划/审查模式下若本轮有 agent 消息但未转成卡片（turn.completed

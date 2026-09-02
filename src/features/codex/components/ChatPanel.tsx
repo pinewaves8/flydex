@@ -17,6 +17,7 @@ import {
   ShieldAlert,
   ListChecks,
   Sparkles,
+  Users,
   ImagePlus,
   X,
 } from 'lucide-react'
@@ -33,6 +34,7 @@ import { ReviewCard } from './ReviewCard'
 
 import { Markdown } from '@/components/ui/Markdown'
 import { SkillPalette } from '@/features/skills/SkillPalette'
+import { SubagentPanel } from '@/features/subagent/SubagentPanel'
 import { memoryService } from '@/services/memoryService'
 import { useCodexStore } from '@/stores/useCodexStore'
 import { useModelStore } from '@/stores/useModelStore'
@@ -239,6 +241,7 @@ export function ChatPanel() {
   const [command, setCommand] = useState('')
   const [showSkillPalette, setShowSkillPalette] = useState(false)
   const [showMemoryPanel, setShowMemoryPanel] = useState(false)
+  const [showSubagent, setShowSubagent] = useState(false)
   // 图像附件：{ name: 原始文件名, dataUrl: 预览用 base64 data URL, path: 落盘后的相对路径, saving: 是否保存中 }
   const [attachments, setAttachments] = useState<
     { name: string; dataUrl: string; path: string; saving: boolean }[]
@@ -613,6 +616,14 @@ export function ChatPanel() {
             记忆
           </button>
           <button
+            onClick={() => setShowSubagent(true)}
+            className="flex items-center gap-1 rounded px-2 py-1 text-xs text-muted-foreground hover:bg-accent hover:text-accent-foreground"
+            title="子代理并行：派发多个独立 codex 子任务并行执行"
+          >
+            <Users className="h-3 w-3" />
+            子代理
+          </button>
+          <button
             onClick={newSession}
             disabled={status === 'running'}
             className="flex items-center gap-1 rounded px-2 py-1 text-xs text-muted-foreground hover:bg-accent hover:text-accent-foreground disabled:opacity-50"
@@ -720,6 +731,14 @@ export function ChatPanel() {
           onClose={() => setShowSkillPalette(false)}
         />
       )}
+
+      {/* 子代理并行面板（6.3 P1） */}
+      <SubagentPanel
+        open={showSubagent}
+        onClose={() => setShowSubagent(false)}
+        defaultWorkdir={currentSessionWorkdir || workspaceCwd}
+        defaultModel={currentSessionModel}
+      />
 
       {/* 记忆管理面板（6.1） */}
       <MemoryPanel
