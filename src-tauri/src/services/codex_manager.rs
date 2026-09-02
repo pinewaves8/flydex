@@ -191,6 +191,7 @@ impl CodexManager {
         thread_id: Option<String>,
         run_id: String,
         session_model: Option<String>,
+        images: Option<Vec<String>>,
     ) -> Result<(), String> {
         // 构建 codex 参数
         let mut args: Vec<String> = vec!["exec".to_string()];
@@ -217,9 +218,12 @@ impl CodexManager {
         // "trusted directory" 检查，否则非 git 目录直接报 "Not inside a trusted directory"。
         // 实际安全边界由 sandbox_mode（read-only / workspace-write / danger-full-access）控制。
         args.push("--skip-git-repo-check".to_string());
-        // 从安全配置读取沙箱模式与审批策略，统一用 `-c` 覆盖（exec 与 resume 均支持）。
+        // 从安全配置读取沙箱模式，统一用 `-c` 覆盖（exec 与 resume 均支持）。
         // 沙箱：read-only / workspace-write / danger-full-access（真实用户权限，AI 可完成 git 写操作）
-        // 审批：untrusted / on-request / never（模型按需请求时触发 approval_request 事件 → 前端审批卡）
+        // 审批策略：exec 模式**强制 approval_policy=never**（headless 下无法交互审批——
+        // codex exec 对 CommandExecutionRequestApproval / FileChangeRequestApproval 一律直接拒绝
+        // （"not supported in exec mode"），on-request/untrusted 只会导致 AI 写文件/跑命令被拒。
+        // 安全边界完全由 sandbox_mode 承担：用户切 read-only 即只读，workspace-write/danger-full-access 即可写。
         let sec = SecurityService::load();
         // 所有 -c 值一律不加引号（cmd /c 重新解析会破坏内嵌引号），含连字符的值也可安全裸传
         // 计划模式强制 read-only 沙箱（模型只能分析出计划，无法修改任何文件）；其余用用户安全配置
@@ -229,8 +233,9 @@ impl CodexManager {
         };
         args.push("-c".to_string());
         args.push(format!("sandbox_mode={}", sandbox));
+        // exec 模式强制 never（无法交互审批）；后端不再向 exec 传 on-request/untrusted
         args.push("-c".to_string());
-        args.push(format!("approval_policy={}", sec.approval_policy.as_codex()));
+        args.push("approval_policy=never".to_string());
         // 模型参数：会话级覆盖 > 全局默认
         args.extend(Self::model_args(session_model.as_deref()));
         // 计划模式：在用户指令前注入计划指令（配合 read-only 沙箱双重约束）
@@ -247,6 +252,13 @@ impl CodexManager {
             ),
             _ => command.clone(),
         };
+        // 图像附件：通过 -i 传给 codex（相对路径 ./.flydex-attachments/xxx）
+        if let Some(imgs) = &images {
+            for img in imgs {
+                args.push("-i".to_string());
+                args.push(img.clone());
+            }
+        }
         args.push(final_command);
 
         // 创建伪终端

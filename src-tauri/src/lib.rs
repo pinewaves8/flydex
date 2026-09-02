@@ -6,7 +6,7 @@ mod services;
 mod types;
 mod utils;
 
-use commands::codex::{approve_codex, run_codex, stop_codex};
+use commands::codex::{approve_codex, run_codex, save_attachment_image, stop_codex};
 use commands::git::{
     git_add_remote, git_branches, git_checkout, git_commit, git_create_branch, git_delete_branch,
     git_diff, git_diff_cached, git_diff_file, git_discard_changes, git_discard_file, git_fetch,
@@ -41,6 +41,7 @@ pub fn run() {
             run_codex,
             approve_codex,
             stop_codex,
+            save_attachment_image,
             // project
             list_projects,
             create_project,

@@ -325,7 +325,7 @@ src-tauri/src/
 ### 任务 1.5：审批拦截交互
 
 > **状态：✅ 已完成（2026-09-01）**
-> **实现摘要**：经代码级核实，`codex exec --json` 事件流**不含 `approval_request` 事件**（写入前审批是 app-server 协议才具备的能力，exec 模式下审批由 codex 内部阻塞等待 y/n）。故 1.5 按**"写入后审查"**形态交付（对齐 Claude Code 的 acceptEdits）：文件写入后立即以 FileChangeCard 展示，用户可逐文件/全部"保留"或"回滚"。现有命令审批卡（approval_request 通路为 dead code）保留并标注"命令审批（实验性）"。
+> **实现摘要**：经代码级核实，`codex exec --json` 事件流**不含 `approval_request` 事件**（写入前审批是 app-server 协议才具备的能力）。exec 模式下若触发审批请求，codex **直接拒绝该操作**（源码 exec/src/lib.rs：CommandExecutionRequestApproval / FileChangeRequestApproval 均 reject，提示 "not supported in exec mode"）——故 1.5 按**"写入后审查"**形态交付（对齐 Claude Code 的 acceptEdits）：文件写入后立即以 FileChangeCard 展示，用户可逐文件/全部"保留"或"回滚"。现有命令审批卡（approval_request 通路为 dead code）保留并标注"命令审批（实验性）"。
 
 | 项 | 内容 |
 |----|------|
@@ -502,6 +502,13 @@ src-tauri/src/
 
 ### 任务 3.5：图像附件
 
+> **状态：✅ 已完成（2026-09-02）**
+> **实现摘要**：基于 codex 原生 `-i/--image <FILE>`（`codex exec` 与 `codex exec resume` 均支持）实现：
+> - **后端**：新增 `save_attachment_image` 命令（base64 → 落盘到 `<workdir>/.flydex-attachments/`，返回相对路径，规避 Windows cmd /c 对绝对路径的引号解析问题）；`run_codex` 新增 `images` 参数 → `CodexManager` 构建 `-i <path>` 参数序列（相对路径，codex 以 workdir 为 cwd 可直接解析）
+> - **前端**：输入区新增图片按钮（多选）、拖拽图片、剪贴板粘贴截图三种入口；`FileReader` 读 base64 → 落盘 → 缩略图预览（含保存中 spinner、单张移除）；发送时等待全部落盘完成后透传 `images`，发送后自动清空附件；纯图片（无文字）也可发送
+> - **验证**：typecheck / vite build / cargo check 全部通过；CLI 实测 `codex exec -i <png>` 参数被正确接受（thread 正常启动，仅因模型服务商高负载导致回复失败，与改动无关）
+> **说明**：图片通过 `-i` 附加到**初始 prompt**（新会话首轮）或 resume 后的该轮 prompt，多图按序 `-i` 传入。
+
 | 项 | 内容 |
 |----|------|
 | **描述** | 实现图像附件功能，支持拖拽、粘贴、截图 |
@@ -551,6 +558,10 @@ src-tauri/src/
 
 ### 任务 3.8：模型配置管理
 
+> **状态：✅ 已完成（2026-09-02 收尾验收）**
+> **实现摘要**：前端 `features/model/ModelSettings.tsx` + 后端 `commands/model.rs` / `services/model.rs`，已接入 Settings 面板「模型配置」tab。支持：供应商 CRUD（API Base + Key）、模型 CRUD（关联供应商 + context_window）、全局默认模型切换、推理强度（none/minimal/low/medium/high）、供应商连接测试（GET /models）、单模型对话测试（POST /chat/completions）。配置持久化到 `~/.flydex/models.json`（seed 内置 openai 等供应商）。前端 typecheck 通过、后端 cargo check 通过、命令已注册 lib.rs。
+> **验收说明**：验收标准 6「会话级覆盖」未做（当前仅全局默认）；验收标准 7 写 config.toml 实为 models.json（已调整）。
+
 | 项 | 内容 |
 |----|------|
 | **描述** | 实现模型管理设置页，支持多模型、多供应商、自定义模型 |
@@ -560,12 +571,27 @@ src-tauri/src/
 
 ### 任务 3.9：沙箱与审批策略可视化
 
+> **状态：✅ 已完成（2026-09-02 收尾验收）**
+> **实现摘要**：前端 `features/security/SettingsPanel.tsx`（「沙箱与权限」tab）+ 后端 `commands/security.rs` / `services/security.rs`，已接入 Settings 面板与 TitleBar 顶部状态指示器。支持：三档沙箱（read-only / workspace-write / danger-full-access，切换 danger 有确认弹窗）、审批策略（untrusted / on-request / never）、审批历史记录/清空。配置持久化。前端 typecheck、后端 cargo check 均通过，命令已注册 lib.rs；TitleBar 常驻显示当前沙箱+审批状态。
+> **验收说明**：验收标准 2 原写「五种审批策略」，实现为 codex 合法值三档；验收标准 5「execpolicy 自定义规则」未做（后续阶段可补）。
+
 | 项 | 内容 |
 |----|------|
 | **描述** | 实现沙箱模式和审批策略的可视化设置与状态显示 |
 | **交付物** | 安全设置页 + 顶部状态栏指示器 |
 | **验收标准** | 1. 三档沙箱切换（只读/工作区写入/完全访问）2. 五种审批策略切换 3. 切换到高风险模式时警告确认 4. 顶部状态栏始终显示当前沙箱+审批状态 5. 审批规则自定义（execpolicy）6. 审批历史记录 |
 | **预估** | 2 天 |
+
+### 任务 3.10：技术债清理——沙箱写文件普通对话化
+
+> **状态：✅ 已完成（2026-09-02）**
+> **背景**：known-issues.md 记录"codex 默认 read-only 无法写文件 / workspace-write 命令阻塞 / --approve-for-me 闪退"。经源码级核实，根因是 **exec 模式不支持交互式审批**：codex exec/src/lib.rs 对 CommandExecutionRequestApproval 与 FileChangeRequestApproval 一律直接 reject（"not supported in exec mode"），而 flydex 此前把用户配置的 `approval_policy=on-request` 透传给 exec → 写文件/执行命令的操作被 codex 直接拒绝，表现为"AI 无法写文件"。
+> **修复**：
+> 1. 后端 `codex_manager.rs`：exec/resume（普通对话）**强制 `approval_policy=never`**（headless 无法交互审批，on-request/untrusted 只会让操作被拒）。安全边界完全由 `sandbox_mode` 承担：read-only=只读、workspace-write=允许项目内写入、danger-full-access=不限制。Plan/Review 模式仍强制 read-only 沙箱。
+> 2. 前端 `SettingsPanel.tsx`：审批策略区加说明文案（普通对话基于 headless 无法交互审批，写操作放行与否由沙箱模式决定），避免 UI 误导用户。
+> 3. `work-plan.md` 任务 1.5 修正错误结论（"内部阻塞等待 y/n" → "直接拒绝"）。
+> **验证**：cargo check EXIT=0；前端 typecheck EXIT=0。模型服务商 MiniMax 高负载期间无法端到端实测 AI 写文件，但 codex 源码链路（never 策略 → 无审批拦截 → workspace-write/danger-full-access 可写）已确认。默认 `security.json` 为 danger-full-access + on-request（on-request 现仅作 UI 预留，exec 下不生效）。
+> **遗留**：前端 approval_request 审批卡仍为 dead code（保留为 codex 未来支持 exec 审批的兼容点）；审批历史在 exec 模式下无真实触发点。
 
 ---
 

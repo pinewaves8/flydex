@@ -17,6 +17,7 @@ export async function runCodex(
     threadId?: string
     runId?: string
     model?: string | null
+    images?: string[]
   },
 ): Promise<string> {
   const runId = options?.runId ?? crypto.randomUUID()
@@ -27,6 +28,7 @@ export async function runCodex(
     threadId: options?.threadId ?? null,
     runId,
     model: options?.model ?? null,
+    images: options?.images ?? null,
   })
   return runId
 }

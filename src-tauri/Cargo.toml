@@ -28,6 +28,8 @@ ureq = { version = "2", features = ["json"] }
 # 读取 ~/.codex/config.toml 继承已配置的供应商
 toml = "0.8"
 serde_yaml = "0.9"
+# 图像附件：base64 解码落盘
+base64 = "0.22"
 
 [features]
 default = ["custom-protocol"]

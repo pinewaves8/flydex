@@ -2,27 +2,25 @@
 
 ## 未完成 Bug
 
-### 1. Codex 文件写入/Sandbox 模式支持
+### 1. Codex 文件写入/Sandbox 模式支持（✅ 已在任务 3.10 解决）
 
-**状态**：未解决，已回退到 read-only 模式
+**状态**：已解决（2026-09-02，任务 3.10 技术债清理）
 
-**问题描述**：
-- codex CLI 默认运行在 `read-only` sandbox 模式，无法创建/修改文件
-- 尝试 `--sandbox workspace-write`：命令阻塞等待审批交互（stdin），因我们使用 `Stdio::null()` 导致死锁
-- 尝试 `--approve-for-me`：应用闪退（原因待查，可能是自动审批流程仍需某些交互或输出格式异常）
-- `--sandbox` 与 `--approve-for-me` 不能同时使用（CLI 参数冲突）
+**历史问题描述**（早期记录，均已过时）：
+- ~~codex CLI 默认运行在 `read-only` sandbox 模式，无法创建/修改文件~~
+- ~~尝试 `--sandbox workspace-write`：命令阻塞等待审批交互（stdin），因我们使用 `Stdio::null()` 导致死锁~~
+- ~~尝试 `--approve-for-me`：应用闪退（原因待查）~~
+- ~~`--sandbox` 与 `--approve-for-me` 不能同时使用（CLI 参数冲突）~~
 
-**根因分析**：
-- 当前架构通过 `cmd.stdin(Stdio::null())` 关闭子进程 stdin，无法处理 codex 的审批请求
-- workspace-write 模式下 codex 会发起 approval_request，需要用户通过 stdin 输入 y/n
-- 需要重构子进程 stdin 管理，支持动态写入审批响应
+**真实根因（源码级核实）**：exec 模式不支持交互式审批——codex `exec/src/lib.rs` 对 `CommandExecutionRequestApproval` / `FileChangeRequestApproval` 一律直接 reject（"not supported in exec mode"）。flydex 此前把 `approval_policy=on-request` 透传给 exec → AI 写文件/执行命令时操作被 codex 直接拒绝，表现为"无法写文件"。与 stdin 死锁无关。
 
-**解决方案（待实现）**：
-- 方案 A：重构 CodexManager，保留 stdin 管道，监听 approval_request 事件后自动写入 "y\n"
-- 方案 B：使用 `--dangerously-bypass-approvals-and-sandbox`（完全关闭 sandbox，安全风险高，仅用于开发环境）
-- 方案 C：在前端实现审批 UI，用户点击"允许"后通过 stdin 写入响应
+**当前实现（3.x + 3.10）**：
+- 已用 portable-pty 取代 `Stdio::null()`（`native_pty_system`），非死锁
+- 沙箱模式由 `~/.flydex/security.json` 用户配置控制，经 `-c sandbox_mode=...` 传入；默认 danger-full-access
+- **exec/resume 普通对话强制 `approval_policy=never`**（3.10）：headless 无法交互审批，on-request 只会让操作被拒；写操作放行与否完全由 sandbox_mode 决定
+- Plan/Review 模式强制 read-only 沙箱
 
-**预计实现阶段**：任务 1.4（内置终端集成）或任务 1.5（Git 集成）时重构 stdin 管理
+**遗留**：前端 approval_request 审批卡为 dead code（保留为 codex 未来支持 exec 审批的兼容点）；审批历史在 exec 模式下无真实触发点。
 
 ---
 

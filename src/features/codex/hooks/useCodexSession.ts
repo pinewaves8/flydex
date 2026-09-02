@@ -284,7 +284,13 @@ export function useCodexSession() {
 
   // 发送指令
   const run = useCallback(
-    async (command: string, workdir?: string, model?: string | null, mode?: CodexExecMode) => {
+    async (
+      command: string,
+      workdir?: string,
+      model?: string | null,
+      mode?: CodexExecMode,
+      images?: string[],
+    ) => {
       const store = useCodexStore.getState()
       const execMode = mode ?? (store.threadId ? 'resume' : 'exec')
       const runId = crypto.randomUUID()
@@ -321,6 +327,7 @@ export function useCodexSession() {
           threadId: store.threadId ?? undefined,
           runId,
           model: model ?? null,
+          images,
         })
         // 兜底：如果 done 事件丢失，强制更新状态
         if (useCodexStore.getState().status === 'running') {

@@ -186,8 +186,15 @@ export function SettingsPanel() {
             <section>
               <h2 className="mb-3 text-sm font-medium text-muted-foreground">
                 审批策略
-                <span className="ml-2 text-xs opacity-60">（何时需要你确认 AI 的操作）</span>
+                <span className="ml-2 text-xs opacity-60">
+                  （预留，当前 exec 模式恒为自动放行）
+                </span>
               </h2>
+              <p className="mb-3 text-xs leading-relaxed text-muted-foreground">
+                普通对话基于 Codex
+                headless（exec）模式运行，无法交互式审批，写文件与命令操作是否放行由
+                「沙箱模式」决定：只读=禁止写入，工作区写入=允许项目内写入，完全访问=不限制。审批策略在此模式下暂不生效。
+              </p>
               <div className="grid grid-cols-3 gap-3">
                 {APPROVAL_POLICIES.map((p) => {
                   const active = config.approval_policy === p.value

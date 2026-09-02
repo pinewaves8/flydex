@@ -1,3 +1,6 @@
+use std::io::Write;
+use std::path::PathBuf;
+
 use tauri::{AppHandle, command};
 
 use crate::services::codex_manager::{CodexExecMode, CodexManager};
@@ -14,6 +17,7 @@ use crate::services::codex_manager::{CodexExecMode, CodexManager};
 /// * `thread_id` - 恢复指定会话（可选，resume 模式下不传则恢复最近一次）
 /// * `run_id` - 本次运行的唯一标识（审批/停止用，前端生成）
 /// * `model` - 会话级模型覆盖（可选，None 时用全局默认）
+/// * `images` - 图像附件路径列表（可选，save_attachment_image 落盘后的相对路径）
 #[command]
 pub async fn run_codex(
     app: AppHandle,
@@ -23,6 +27,7 @@ pub async fn run_codex(
     thread_id: Option<String>,
     run_id: Option<String>,
     model: Option<String>,
+    images: Option<Vec<String>>,
 ) -> Result<(), String> {
     let exec_mode = match mode.as_deref() {
         Some("resume") => CodexExecMode::Resume,
@@ -35,10 +40,50 @@ pub async fn run_codex(
     });
 
     tokio::task::spawn_blocking(move || {
-        CodexManager::run_command(app, command, workdir, exec_mode, thread_id, rid, model)
+        CodexManager::run_command(app, command, workdir, exec_mode, thread_id, rid, model, images)
     })
     .await
     .map_err(|e| format!("Task join error: {}", e))?
+}
+
+/// 保存图像附件到工作目录的 .flydex-attachments/ 目录，返回相对路径
+///
+/// 前端把图片（File 对象）读成 base64 data URL 传入，这里解码后写入
+/// `<workdir>/.flydex-attachments/<name>`。返回**相对路径**（如
+/// `./.flydex-attachments/xxx.png`），供 codex 的 `-i/--image` 使用——
+/// 相对路径可规避 Windows 下 cmd /c 对含空格/盘符绝对路径的引号解析问题
+/// （codex 子进程 cwd 为 workdir，相对路径可直接解析）。
+#[command]
+pub fn save_attachment_image(
+    workdir: String,
+    file_name: String,
+    data: String,
+) -> Result<String, String> {
+    use base64::Engine;
+
+    // 兼容 data URL（data:image/png;base64,xxx）与裸 base64 两种传入
+    let b64 = data
+        .split_once("base64,")
+        .map(|(_, rest)| rest)
+        .unwrap_or(&data);
+    let bytes = base64::engine::general_purpose::STANDARD
+        .decode(b64.trim())
+        .map_err(|e| format!("图片 base64 解码失败: {e}"))?;
+
+    // 目录固定为 .flydex-attachments；文件名只取 basename，防路径穿越
+    let safe_name = PathBuf::from(file_name)
+        .file_name()
+        .map(|s| s.to_string_lossy().to_string())
+        .filter(|s| !s.is_empty())
+        .unwrap_or_else(|| "attachment.png".to_string());
+
+    let dir = PathBuf::from(&workdir).join(".flydex-attachments");
+    std::fs::create_dir_all(&dir).map_err(|e| format!("创建附件目录失败: {e}"))?;
+    let dest = dir.join(&safe_name);
+    let mut f = std::fs::File::create(&dest).map_err(|e| format!("写入附件失败: {e}"))?;
+    f.write_all(&bytes).map_err(|e| format!("写入附件失败: {e}"))?;
+
+    Ok(format!("./.flydex-attachments/{}", safe_name))
 }
 
 /// 审批响应：向运行中的 codex 写入 y/n，并记录审批历史
