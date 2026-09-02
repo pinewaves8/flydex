@@ -4,6 +4,7 @@ import {
   Trash2,
   Terminal,
   AlertCircle,
+  BookOpen,
   CheckCircle,
   Loader2,
   Plus,
@@ -24,11 +25,15 @@ import { useEffect, useRef, useState } from 'react'
 import { useCodexSession } from '../hooks/useCodexSession'
 
 import { FileChangeCard } from './FileChangeCard'
+import { MemoryIndicator } from './MemoryIndicator'
+import { MemoryPanel } from './MemoryPanel'
+import { MemorySettle } from './MemorySettle'
 import { PlanCard } from './PlanCard'
 import { ReviewCard } from './ReviewCard'
 
 import { Markdown } from '@/components/ui/Markdown'
 import { SkillPalette } from '@/features/skills/SkillPalette'
+import { memoryService } from '@/services/memoryService'
 import { useCodexStore } from '@/stores/useCodexStore'
 import { useModelStore } from '@/stores/useModelStore'
 import { useProjectStore } from '@/stores/useProjectStore'
@@ -233,6 +238,7 @@ export function ChatPanel() {
   const planMode = useCodexStore((s) => s.planMode)
   const [command, setCommand] = useState('')
   const [showSkillPalette, setShowSkillPalette] = useState(false)
+  const [showMemoryPanel, setShowMemoryPanel] = useState(false)
   // 图像附件：{ name: 原始文件名, dataUrl: 预览用 base64 data URL, path: 落盘后的相对路径, saving: 是否保存中 }
   const [attachments, setAttachments] = useState<
     { name: string; dataUrl: string; path: string; saving: boolean }[]
@@ -310,6 +316,37 @@ export function ChatPanel() {
       inputRef.current?.focus()
     }
   }, [status])
+
+  /** 压缩上下文（6.1 P2）：长会话 → 模型摘要为上下文快照 → 重置为新会话
+   *
+   * 通过 loadSession 替换 messages 为快照 + threadId 置空，下次 run 用 exec 开新 thread，
+   * 从快照 + 记忆注入继续工作，token 预算清零。
+   */
+  const handleCompact = async () => {
+    if (status === 'running') return
+    const msgs = useCodexStore.getState().messages
+    if (msgs.length === 0) return
+    const text = msgs
+      .map((m) => (typeof m.content === 'string' ? m.content : JSON.stringify(m.content)))
+      .join('\n')
+    try {
+      const summary = await memoryService.compactSummary(text.slice(0, 30000))
+      const snapshot = `[上下文快照]\n${summary}\n\n（原会话已压缩为快照，可在此上下文基础上继续工作）`
+      useCodexStore.getState().loadSession({
+        messages: [
+          {
+            id: `msg_compact_${Date.now()}`,
+            kind: 'system',
+            content: snapshot,
+            timestamp: Date.now(),
+          },
+        ],
+        threadId: null,
+      })
+    } catch (e) {
+      console.error('[compact]', e)
+    }
+  }
 
   const handleRun = async () => {
     if ((!command.trim() && attachments.length === 0) || status === 'running') return
@@ -532,6 +569,11 @@ export function ChatPanel() {
               </option>
             ))}
           </select>
+          {/* 上下文与记忆指示器（6.1）：L1/L2 记忆层 + 会话上下文用量 + 超阈值压缩 */}
+          <MemoryIndicator
+            workdir={currentSessionWorkdir || workspaceCwd}
+            onCompact={handleCompact}
+          />
           <span className={`flex items-center gap-1 text-xs ${statusCfg.color}`}>
             {statusCfg.icon}
             {statusCfg.label}
@@ -561,6 +603,14 @@ export function ChatPanel() {
           >
             <Sparkles className="h-3 w-3" />
             Skills
+          </button>
+          <button
+            onClick={() => setShowMemoryPanel(true)}
+            className="flex items-center gap-1 rounded px-2 py-1 text-xs text-muted-foreground hover:bg-accent hover:text-accent-foreground"
+            title="记忆管理（查看/编辑项目记忆与用户记忆）"
+          >
+            <BookOpen className="h-3 w-3" />
+            记忆
           </button>
           <button
             onClick={newSession}
@@ -671,6 +721,13 @@ export function ChatPanel() {
         />
       )}
 
+      {/* 记忆管理面板（6.1） */}
+      <MemoryPanel
+        workdir={currentSessionWorkdir || workspaceCwd}
+        open={showMemoryPanel}
+        onClose={() => setShowMemoryPanel(false)}
+      />
+
       {/* 输入区域 */}
       <div className="border-t border-border p-3">
         {approval && (
@@ -703,6 +760,8 @@ export function ChatPanel() {
             </div>
           </div>
         )}
+        {/* 记忆沉淀入口（6.1）：会话完成后提炼候选 → 勾选 → 写入项目记忆 */}
+        <MemorySettle workdir={currentSessionWorkdir || workspaceCwd} />
         <div className="mb-2 flex items-center gap-2">
           <button
             onClick={() => useCodexStore.getState().setPlanMode(!planMode)}

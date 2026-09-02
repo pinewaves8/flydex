@@ -29,6 +29,10 @@ use commands::session::{
     list_trashed_sessions, load_session, rename_session, restore_session, save_session,
     search_sessions, trash_session,
 };
+use commands::memory::{
+    append_project_memory, append_user_memory, compact_summary, extract_memory, load_memory,
+    write_project_memory, write_user_memory,
+};
 use commands::skill::{skill_list, skill_read};
 use commands::terminal::resolve_dir;
 
@@ -123,6 +127,14 @@ pub fn run() {
             // skill
             skill_list,
             skill_read,
+            // memory
+            load_memory,
+            extract_memory,
+            compact_summary,
+            append_project_memory,
+            append_user_memory,
+            write_project_memory,
+            write_user_memory,
             // terminal
             resolve_dir,
         ])

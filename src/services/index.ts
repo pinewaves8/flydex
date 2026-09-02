@@ -1,5 +1,6 @@
 export * from './codex'
 export * from './gitService'
+export * from './memoryService'
 export * from './projectService'
 export * from './sessionService'
 export * from './skillService'
