@@ -484,6 +484,15 @@ src-tauri/src/
 
 ### 任务 3.4：Skills 系统
 
+> **状态：✅ 已完成（2026-09-02）**
+> **实现摘要**：融合 Claude Code `/skill-name` + VS Code Command Palette 的双轨设计：
+> - **技能加载**：后端扫描 `<project>/.codex/skills/*/SKILL.md` 解析 YAML frontmatter（name/description/triggers/interface）+ 三源合并（内置 web-search/review/plan + 项目技能 + MCP 衍生）
+> - **三种交互方式**：（1）输入区直接 `/skill-name 需求` 触发；（2）`Ctrl+Shift+P` 或 Skills 按钮打开 Command Palette 搜索执行；（3）自然语言触发词自动匹配注入（"查一下 xxx"→自动调 web-search）
+> - **核心创新 - 强制执行指令**：技能提示词从"软建议"改为"必须立即调用 xxx 工具"，并把用户查询词直接拼接到指令同一行（避免换行被模型当消息边界）。实测成功调起 `web_search` MCP 工具，agent 不再编造 browser/browsers 等不存在的工具
+> - **副作用修复**：补完 MCP web-search server 配置（config.toml 缺 args 导致 server 启动失败）
+> - **设置面板**：在 Settings 新增 Skills 标签，支持搜索/按来源筛选/启用禁用
+> **说明**：MCP 衍生技能的 tool description 未自动捕获（需动态调 tools/list），现用 server 名做泛化 skill；后续可考虑启动时探测 MCP tool 列表做更精确的 skill 元数据
+
 | 项 | 内容 |
 |----|------|
 | **描述** | 实现 Skills 浏览、调用、管理 |

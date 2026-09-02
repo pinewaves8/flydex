@@ -15,6 +15,7 @@ import {
   Square,
   ShieldAlert,
   ListChecks,
+  Sparkles,
 } from 'lucide-react'
 import { useEffect, useRef, useState } from 'react'
 
@@ -25,11 +26,13 @@ import { PlanCard } from './PlanCard'
 import { ReviewCard } from './ReviewCard'
 
 import { Markdown } from '@/components/ui/Markdown'
+import { SkillPalette } from '@/features/skills/SkillPalette'
 import { sessionService } from '@/services/sessionService'
 import { useCodexStore } from '@/stores/useCodexStore'
 import { useModelStore } from '@/stores/useModelStore'
 import { useProjectStore } from '@/stores/useProjectStore'
 import { useSecurityStore } from '@/stores/useSecurityStore'
+import { useSkillsStore } from '@/stores/useSkillsStore'
 import { useWorkspaceStore } from '@/stores/useWorkspaceStore'
 import type { CodexStatus } from '@/types/codex'
 import type { CodexMessage } from '@/types/codexJson'
@@ -228,6 +231,7 @@ export function ChatPanel() {
   } = useCodexSession()
   const planMode = useCodexStore((s) => s.planMode)
   const [command, setCommand] = useState('')
+  const [showSkillPalette, setShowSkillPalette] = useState(false)
   const messagesRef = useRef<HTMLDivElement>(null)
   const saveTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
   const inputRef = useRef<HTMLTextAreaElement>(null)
@@ -269,6 +273,14 @@ export function ChatPanel() {
   useEffect(() => {
     void loadModels()
   }, [loadModels])
+
+  // 加载技能（工作目录变化时重新加载项目技能）
+  const loadSkills = useSkillsStore((s) => s.load)
+  useEffect(() => {
+    if (workspaceCwd) {
+      void loadSkills(workspaceCwd)
+    }
+  }, [workspaceCwd, loadSkills])
 
   // 切换会话时加载会话数据
   useEffect(() => {
@@ -323,7 +335,7 @@ export function ChatPanel() {
 
   const handleRun = async () => {
     if (!command.trim() || status === 'running') return
-    const cmd = command.trim()
+    let cmd = command.trim()
     setCommand('')
     // 发送后保持焦点在输入框，便于继续输入下一条
     requestAnimationFrame(() => inputRef.current?.focus())
@@ -344,6 +356,28 @@ export function ChatPanel() {
     // 计划模式开启时传 mode='plan'（后端强制 read-only 沙箱 + 注入计划指令）
     const planModeActive = useCodexStore.getState().planMode
     const workdir = currentSessionWorkdir || workspaceCwd
+
+    // 技能注入：检测 /skill-name 前缀或自然语言触发词匹配
+    const skillsStore = useSkillsStore.getState()
+    // 检测 /skill-name 前缀
+    const slashSkillMatch = cmd.match(/^\/(\S+)\s*(.*)$/)
+    if (slashSkillMatch) {
+      const skillName = slashSkillMatch[1].toLowerCase()
+      const userInput = slashSkillMatch[2]
+      const skill = skillsStore.find(skillName)
+      if (skill && skill.enabled) {
+        // 找到技能，注入提示词
+        cmd = skillsStore.execute(skillName, userInput || cmd)
+      }
+      // 如果没找到匹配技能，原样发送（不拦截）
+    } else {
+      // 自然语言触发词匹配
+      const matched = skillsStore.matchTriggers(cmd)
+      if (matched.length > 0) {
+        cmd = skillsStore.execute(matched[0].name, cmd)
+      }
+    }
+
     // 审查模式：/review 前缀或"审查"开头 → 取 diff 写临时文件 → read-only 审查
     const reviewIntent = parseReviewCommand(cmd)
     if (reviewIntent && workdir) {
@@ -386,6 +420,13 @@ export function ChatPanel() {
   }
 
   const handleKeyDown = (e: React.KeyboardEvent) => {
+    // Ctrl+Shift+P: 打开技能面板
+    if (e.ctrlKey && e.shiftKey && e.key === 'P') {
+      e.preventDefault()
+      setShowSkillPalette(true)
+      return
+    }
+    // Enter 发送（Shift+Enter 换行）
     if (e.key === 'Enter' && !e.shiftKey) {
       e.preventDefault()
       handleRun()
@@ -440,6 +481,14 @@ export function ChatPanel() {
               Stop
             </button>
           )}
+          <button
+            onClick={() => setShowSkillPalette(true)}
+            className="flex items-center gap-1 rounded px-2 py-1 text-xs text-muted-foreground hover:bg-accent hover:text-accent-foreground"
+            title="Skills (Ctrl+Shift+P)"
+          >
+            <Sparkles className="h-3 w-3" />
+            Skills
+          </button>
           <button
             onClick={newSession}
             disabled={status === 'running'}
@@ -533,6 +582,20 @@ export function ChatPanel() {
           Input: {usage.input_tokens ?? 0} tokens · Output: {usage.output_tokens ?? 0} tokens ·
           Reasoning: {usage.reasoning_output_tokens ?? 0}
         </div>
+      )}
+
+      {/* 技能面板 */}
+      {showSkillPalette && (
+        <SkillPalette
+          onSelect={(name) => {
+            const skill = useSkillsStore.getState().find(name)
+            if (skill && skill.interface?.displayName) {
+              setCommand(`/${skill.name} `)
+            }
+            inputRef.current?.focus()
+          }}
+          onClose={() => setShowSkillPalette(false)}
+        />
       )}
 
       {/* 输入区域 */}

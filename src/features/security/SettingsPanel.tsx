@@ -5,6 +5,7 @@ import {
   Clock,
   Cpu,
   ShieldCheck,
+  Sparkles,
   Trash2,
   XCircle,
 } from 'lucide-react'
@@ -12,6 +13,7 @@ import { useEffect } from 'react'
 
 import { McpSettings } from '@/features/mcp/McpSettings'
 import { ModelSettings } from '@/features/model/ModelSettings'
+import { SkillSettings } from '@/features/skills/SkillSettings'
 import { useSecurityStore } from '@/stores/useSecurityStore'
 import { useUIStore } from '@/stores/useUIStore'
 import { APPROVAL_POLICIES, SANDBOX_MODES } from '@/types/security'
@@ -132,6 +134,17 @@ export function SettingsPanel() {
               <Boxes className="h-4 w-4" />
               MCP 服务
             </button>
+            <button
+              onClick={() => openSettings('skills')}
+              className={`flex items-center gap-1.5 rounded-t-md border-b-2 px-3 py-2 text-sm transition-colors ${
+                settingsTab === 'skills'
+                  ? 'border-primary text-foreground'
+                  : 'border-transparent text-muted-foreground hover:text-foreground'
+              }`}
+            >
+              <Sparkles className="h-4 w-4" />
+              Skills
+            </button>
           </div>
         </div>
 
@@ -251,10 +264,13 @@ export function SettingsPanel() {
         ) : settingsTab === 'model' ? (
           /* 模型配置 tab */
           <ModelSettings />
-        ) : (
+        ) : settingsTab === 'mcp' ? (
           /* MCP tab */
           <McpSettings />
-        )}
+        ) : settingsTab === 'skills' ? (
+          /* Skills tab */
+          <SkillSettings />
+        ) : null}
       </div>
     </div>
   )

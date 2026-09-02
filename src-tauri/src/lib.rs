@@ -27,6 +27,7 @@ use commands::security::{
 use commands::session::{
     create_session, delete_session, list_sessions, load_session, rename_session, save_session,
 };
+use commands::skill::{skill_list, skill_read};
 use commands::terminal::resolve_dir;
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
@@ -109,6 +110,9 @@ pub fn run() {
             mcp_save,
             mcp_remove,
             mcp_test,
+            // skill
+            skill_list,
+            skill_read,
             // terminal
             resolve_dir,
         ])

@@ -27,6 +27,7 @@ portable-pty = "0.8"
 ureq = { version = "2", features = ["json"] }
 # 读取 ~/.codex/config.toml 继承已配置的供应商
 toml = "0.8"
+serde_yaml = "0.9"
 
 [features]
 default = ["custom-protocol"]
