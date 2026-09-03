@@ -187,20 +187,37 @@ export function useCodexSession() {
             store.markFileChangesSeen(changes.map((c) => `${c.path}|${c.kind}`))
           }
         } else if (item.type === 'approval_request') {
+          const decision = item.decision ?? 'ask'
           const approvalItem: CodexApproval = {
             id: item.id,
             command: item.command,
             description: item.description,
+            decision,
+            reason: item.reason,
           }
-          store.setApproval(approvalItem)
-          store.appendMessage({
-            kind: 'system',
-            content: `需要审批: ${item.command || item.description || '未知操作'}`,
-          })
-          // 审批请求通知：等待用户操作，弹系统通知避免错过
-          if (useSettingsStore.getState().notifyOnApproval) {
-            const desc = item.command || item.description || '未知操作'
-            void notificationService.notify('Flydex · 需要审批', desc)
+          const opText = item.command || item.description || '未知操作'
+          if (decision === 'ask') {
+            // 规则引擎 ask：弹审批卡等用户决定
+            store.setApproval(approvalItem)
+            store.appendMessage({
+              kind: 'system',
+              content: `需要审批: ${opText}`,
+            })
+            if (useSettingsStore.getState().notifyOnApproval) {
+              void notificationService.notify('Flydex · 需要审批', opText)
+            }
+          } else if (decision === 'auto_accept') {
+            // 规则 allow / 全自动：自动放行，仅通知（审计在 Rust 侧记录）
+            store.appendMessage({
+              kind: 'system',
+              content: `▸ 已自动放行: ${opText}${item.reason ? `（${item.reason}）` : ''}`,
+            })
+          } else if (decision === 'auto_deny') {
+            // deny 命中：执行前直接拒绝，仅通知
+            store.appendMessage({
+              kind: 'system',
+              content: `▸ 已自动拒绝: ${opText}${item.reason ? `（${item.reason}）` : ''}`,
+            })
           }
         }
       } else if (event.type === 'turn.completed') {
@@ -394,7 +411,7 @@ export function useCodexSession() {
     if (!runId || !approvalItem) return
     try {
       const cmd = approvalItem.command || approvalItem.description || ''
-      await approveCodex(runId, approve, cmd)
+      await approveCodex(runId, approve, cmd, approvalItem.id)
       store.setApproval(null)
       store.appendMessage({
         kind: 'system',

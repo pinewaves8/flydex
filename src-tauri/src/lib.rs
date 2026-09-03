@@ -22,7 +22,9 @@ use commands::model::{
 };
 use commands::project::{create_project, delete_project, list_projects, update_project};
 use commands::security::{
-    clear_approval_history, get_security, record_approval, set_approval_policy, set_sandbox_mode,
+    add_permission_rule, clear_approval_history, clear_permission_rules, get_security,
+    list_permission_rules, record_approval, remove_permission_rule, set_approval_policy,
+    set_sandbox_mode,
 };
 use commands::session::{
     create_session, delete_session, export_session, fork_session, list_sessions,
@@ -71,6 +73,11 @@ pub fn run() {
             set_approval_policy,
             record_approval,
             clear_approval_history,
+            // permission rules
+            add_permission_rule,
+            remove_permission_rule,
+            list_permission_rules,
+            clear_permission_rules,
             // model
             get_models,
             set_current_model,

@@ -34,6 +34,9 @@ export type CodexItem =
       type: 'approval_request'
       command?: string
       description?: string
+      /** 规则引擎决策：ask / auto_accept / auto_deny */
+      decision?: string
+      reason?: string
     }
   | {
       id?: string

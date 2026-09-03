@@ -2,12 +2,16 @@
 /**
  * flydex 子代理 MCP server (stdio)
  *
- * 提供 spawn_subagent 工具：启动一个独立的 codex exec 子进程执行子任务，
- * 只把"最终结论"作为 tool_result 返回给主会话（对齐 Claude Code 同步 subagent 的通道）。
+ * 提供 spawn_subagent 工具：连接一个独立的 codex app-server daemon，
+ * 创建隔离 thread 执行子任务，只把"最终结论"作为 tool_result 返回给主会话
+ * （对齐 Claude Code 同步 subagent 的通道）。
  *
- * 对齐 Claude Code 的设计：
+ * 6.2 迁移（对齐 Claude Code）：
  *  - 通道：tool_result 回填 —— 子代理的最终回答 = 本工具的返回值，codex 自动喂回父模型
- *  - 上下文隔离：子代理是独立 codex 进程、独立上下文，中间过程全部丢弃，不占父上下文
+ *  - 上下文隔离：子代理是独立 thread（独立上下文），中间过程全部丢弃，不占父上下文
+ *  - 生命周期：thread/start → turn/start → 等 turn/completed → thread/delete 回收资源
+ *    （"在需要的时候增加子任务，拿到结果后自动删除子任务"）
+ *  - 审批：子代理无审批 UI，requestApproval 到达时自动 accept（受 sandbox 硬约束保护）
  *  - 截断：只回最终结论 → 30K 字符上限 → >100K 字符(≈25K token)落盘 + 2KB 预览
  *  - 递归保护：FLYDEX_SUBAGENT_DEPTH>=1 时不再暴露本工具（子代理无法再派生子代理）
  *
@@ -20,7 +24,7 @@ import path from 'path';
 import { pathToFileURL } from 'url';
 
 const SERVER_NAME = 'flydex-subagent';
-const VERSION = '1.0.0';
+const VERSION = '2.0.0';
 const PROTOCOL_VERSION = '2024-11-05';
 
 // ── 截断策略（对齐 Claude Code 标准）──
@@ -30,7 +34,7 @@ const PREVIEW_CHARS = 2048; // 落盘后返回的 2KB 预览
 const DEFAULT_TIMEOUT = 600; // 默认超时秒数（对齐 flydex 后端 600s）
 const MIN_TIMEOUT = 30;
 const MAX_TIMEOUT = 1800;
-const MAX_PROMPT_LEN = 30000; // prompt 过长报错，避免 Windows 命令行长度限制
+const MAX_PROMPT_LEN = 30000; // prompt 过长报错，避免上下文爆炸
 
 // ── 搜索纪律：自动注入到"联网搜索型"子代理的 prompt（对齐 web-search 技能纪律）──
 // 当子代理 prompt 命中搜索意图词时追加，确保搜索深度（次数/抓详情页/不编造），
@@ -75,17 +79,266 @@ function resolveCodexEntry() {
 }
 const CODEX_ENTRY = resolveCodexEntry();
 
-/** spawn 子 codex：优先 node <entry>（shell 安全），回退 cmd /c codex */
-function spawnSubprocess(codexArgs, workdir) {
+// ══════════════════════════════════════════════════════════════════════
+// app-server JSON-RPC 客户端（子代理专用，进程级单例 daemon）
+// ══════════════════════════════════════════════════════════════════════
+const pending = new Map(); // id -> {resolve, reject}
+const turnListeners = new Set(); // { onAgentText, onError, onTurnCompleted }
+let daemon = null;
+let initPromise = null;
+let nextId = 1;
+
+function spawnDaemon() {
+  if (daemon && !daemon.killed) return daemon;
+  if (!CODEX_ENTRY) throw new Error('未找到 codex 入口，无法启动 app-server');
   const env = { ...process.env, FLYDEX_SUBAGENT_DEPTH: String(SUBAGENT_DEPTH + 1) };
-  const opts = { cwd: workdir, env, stdio: ['pipe', 'pipe', 'pipe'] };
-  if (CODEX_ENTRY) {
-    return spawn(process.execPath, [CODEX_ENTRY, ...codexArgs], opts);
-  }
-  return spawn('cmd.exe', ['/c', 'codex', ...codexArgs], opts);
+  const child = spawn(process.execPath, [CODEX_ENTRY, 'app-server', '--listen', 'stdio://'], {
+    cwd: process.cwd(),
+    env,
+    stdio: ['pipe', 'pipe', 'pipe'],
+  });
+  const rl = readline.createInterface({ input: child.stdout, crlfDelay: Infinity });
+  rl.on('line', (line) => {
+    if (!line.trim()) return;
+    let msg;
+    try {
+      msg = JSON.parse(line);
+    } catch {
+      return;
+    }
+    handleDaemonMessage(msg);
+  });
+  // 必须持续读取 stderr，否则管道缓冲填满会阻塞 daemon 处理 turn 消息
+  child.stderr.on('data', (d) => {
+    process.stderr.write(`[subagent-appserver] ${d}`);
+  });
+  child.on('close', () => {
+    for (const [, p] of pending) p.reject(new Error('子代理 app-server 已退出'));
+    pending.clear();
+    turnListeners.clear();
+  });
+  child.on('error', () => {
+    /* close 会兜底 */
+  });
+  daemon = { child, rl, killed: false };
+
+  // initialize 握手（app-server 要求 clientInfo.version；完成后发 initialized 通知）
+  const rid = nextId++;
+  const initParams = {
+    clientInfo: { name: SERVER_NAME, title: null, version: VERSION },
+    capabilities: { experimentalApi: true },
+  };
+  child.stdin.write(JSON.stringify({ id: rid, method: 'initialize', params: initParams }) + '\n');
+  initPromise = new Promise((resolve, reject) => {
+    const timer = setTimeout(() => reject(new Error('子代理 app-server initialize 超时')), 15000);
+    pending.set(rid, {
+      resolve: (v) => {
+        clearTimeout(timer);
+        resolve(v);
+      },
+      reject: (e) => {
+        clearTimeout(timer);
+        reject(e);
+      },
+      method: 'initialize',
+    });
+  });
+  initPromise
+    .then(() => {
+      if (!daemon || daemon.killed) return;
+      daemon.child.stdin.write(JSON.stringify({ method: 'initialized' }) + '\n');
+    })
+    .catch(() => {
+      /* 调用方会收到 initialize 错误 */
+    });
+  return daemon;
 }
 
-/** Windows 进程树强杀（子 codex 可能衍生 MCP node 子进程） */
+function killDaemon() {
+  if (!daemon || daemon.killed) return;
+  daemon.killed = true;
+  try {
+    spawnSync('taskkill', ['/PID', String(daemon.child.pid), '/T', '/F'], { stdio: 'ignore' });
+  } catch {
+    /* ignore */
+  }
+}
+
+async function daemonRequest(method, params, timeoutMs = 30000) {
+  const d = spawnDaemon();
+  await (initPromise || Promise.resolve()).catch(() => {});
+  if (daemon.killed) throw new Error('子代理 app-server 已退出');
+  const id = nextId++;
+  return new Promise((resolve, reject) => {
+    const timer = setTimeout(() => {
+      pending.delete(id);
+      reject(new Error(`${method} 超时(${Math.round(timeoutMs / 1000)}s)`));
+    }, timeoutMs);
+    pending.set(id, {
+      resolve: (v) => {
+        clearTimeout(timer);
+        resolve(v);
+      },
+      reject: (e) => {
+        clearTimeout(timer);
+        reject(e);
+      },
+      method,
+    });
+    d.child.stdin.write(JSON.stringify({ id, method, params: params || {} }) + '\n');
+  });
+}
+
+function daemonNotify(method, params) {
+  const d = spawnDaemon();
+  d.child.stdin.write(JSON.stringify({ method, params: params || {} }) + '\n');
+}
+
+function daemonRespond(id, result) {
+  const d = spawnDaemon();
+  d.child.stdin.write(JSON.stringify({ id, result }) + '\n');
+}
+
+function handleDaemonMessage(msg) {
+  // Response
+  if (msg.id != null && !msg.method && pending.has(msg.id)) {
+    const p = pending.get(msg.id);
+    pending.delete(msg.id);
+    if (msg.error) p.reject(new Error(typeof msg.error === 'string' ? msg.error : JSON.stringify(msg.error)));
+    else p.resolve(msg.result);
+    return;
+  }
+  // ServerRequest（需响应）
+  if (msg.id != null && msg.method) {
+    if (/requestApproval|Approval/.test(msg.method)) {
+      // 子代理无审批 UI：自动 accept（受 sandbox 硬约束保护：read-only 下写操作会被 OS/沙箱拒绝）
+      daemonRespond(msg.id, { decision: 'accept' });
+      return;
+    }
+    daemonRespond(msg.id, null);
+    return;
+  }
+  // Notification
+  if (!msg.method) return;
+  const params = msg.params || {};
+  if (msg.method === 'item/completed' && params.item) {
+    const it = params.item;
+    // app-server 的 item.type 是 camelCase：agentMessage / commandExecution / ...
+    if (it.type === 'agentMessage' && typeof it.text === 'string') {
+      for (const l of turnListeners) l.onAgentText(it.text);
+    } else if (it.type === 'error' && it.message) {
+      for (const l of turnListeners) l.onError(it.message);
+    }
+  } else if (msg.method === 'turn/completed') {
+    for (const l of turnListeners) l.onTurnCompleted();
+  }
+}
+
+/**
+ * 运行子代理 turn（app-server）：
+ *  thread/start → turn/start → 等 turn/completed → thread/delete（回收资源）
+ * 返回：{ lastAgentText, errors[], ok, timeout }
+ */
+function runSubagentTurn(prompt, sandbox, workdir, maxWaitSec) {
+  return new Promise((resolve) => {
+    let settled = false;
+    let lastAgentText = '';
+    const errors = [];
+    let timedOut = false;
+    let timer = null;
+    const listener = {
+      onAgentText(t) {
+        lastAgentText = t;
+      },
+      onError(m) {
+        errors.push(m);
+      },
+      onTurnCompleted() {},
+    };
+    turnListeners.add(listener);
+    const cleanup = () => {
+      turnListeners.delete(listener);
+      if (timer) clearTimeout(timer);
+    };
+    const done = (payload) => {
+      if (settled) return;
+      settled = true;
+      cleanup();
+      resolve(payload);
+    };
+
+    (async () => {
+      let threadId = null;
+      try {
+        // 1. 创建隔离会话（独立上下文；子代理无审批 UI → on-request + 自动 accept）
+        const thread = await daemonRequest(
+          'thread/start',
+          {
+            cwd: workdir,
+            approvalPolicy: 'on-request',
+            approvalsReviewer: 'user',
+            sandbox,
+          },
+          90000
+        );
+        threadId = thread.thread.id;
+
+        // 2. 发送任务
+        const turn = await daemonRequest(
+          'turn/start',
+          {
+            threadId,
+            input: [{ type: 'text', text: prompt }],
+          },
+          90000
+        );
+        const turnId = turn.turn.id;
+
+        // 3. 等 turn/completed（超时则中断 + 删线程）
+        await new Promise((r) => {
+          const orig = listener.onTurnCompleted;
+          listener.onTurnCompleted = () => {
+            orig();
+            r();
+          };
+          timer = setTimeout(() => {
+            timedOut = true;
+            r();
+          }, maxWaitSec * 1000);
+        });
+
+        if (timedOut) {
+          try {
+            await daemonRequest('turn/interrupt', { threadId, turnId }, 15000);
+          } catch {
+            /* ignore */
+          }
+        }
+
+        // 4. 回收资源：删除线程（拿到结果后自动删除子任务）
+        try {
+          await daemonRequest('thread/delete', { threadId }, 15000);
+          threadId = null;
+        } catch {
+          /* ignore */
+        }
+
+        done({ lastAgentText, errors, ok: true, timeout: timedOut });
+      } catch (err) {
+        if (threadId) {
+          try {
+            await daemonRequest('thread/delete', { threadId }, 15000);
+          } catch {
+            /* ignore */
+          }
+        }
+        done({ lastAgentText, errors: [...errors, err.message], ok: false, timeout: false });
+      }
+    })();
+  });
+}
+
+/** Windows 进程树强杀（daemon 兜底） */
 function killTree(pid) {
   if (!pid) return;
   try {
@@ -98,82 +351,6 @@ function killTree(pid) {
   } catch {
     /* ignore */
   }
-}
-
-/**
- * 运行子代理 codex，收集输出直到进程退出/超时。
- * 返回：{ lastAgentText, errors[], stderrTail, exitCode, ok, timeout }
- */
-function runSubagentCodex(codexArgs, workdir, maxWaitSec) {
-  return new Promise((resolve) => {
-    let child;
-    try {
-      child = spawnSubprocess(codexArgs, workdir);
-      // codex exec 会等 stdin EOF 才开始执行（提示 "Reading additional input from stdin..."）；
-      // 子代理 approval_policy=never 无审批交互，立即关闭 stdin 让其开始，避免一直空等
-      try {
-        child.stdin.end();
-      } catch {
-        /* ignore */
-      }
-    } catch (err) {
-      resolve({ lastAgentText: '', errors: [`启动子代理失败: ${err.message}`], stderrTail: '', exitCode: -1, ok: false, timeout: false });
-      return;
-    }
-
-    let lastAgentText = '';
-    const errors = [];
-    let stderrTail = '';
-    let settled = false;
-    let timer = null;
-
-    const done = (payload) => {
-      if (settled) return;
-      settled = true;
-      if (timer) clearTimeout(timer);
-      try {
-        child.stdin.end();
-      } catch {
-        /* ignore */
-      }
-      resolve(payload);
-    };
-
-    timer = setTimeout(() => {
-      killTree(child.pid);
-      const diag = errors.filter(Boolean).join('；') || stderrTail.trim() || '(无输出)';
-      done({ lastAgentText, errors, stderrTail, exitCode: -1, ok: false, timeout: true, diag });
-    }, maxWaitSec * 1000);
-
-    const rl = readline.createInterface({ input: child.stdout, crlfDelay: Infinity });
-    rl.on('line', (line) => {
-      if (!line.trim()) return;
-      let ev;
-      try {
-        ev = JSON.parse(line);
-      } catch {
-        return;
-      }
-      if (ev.type === 'item.completed' && ev.item && ev.item.type === 'agent_message' && typeof ev.item.text === 'string') {
-        // 最终结论 = turn 完成前最后一条 agent_message 文本（中间过程丢弃）
-        lastAgentText = ev.item.text;
-      } else if (ev.type === 'error' && ev.message) {
-        errors.push(ev.message);
-      } else if (ev.type === 'item.completed' && ev.item && ev.item.type === 'error' && ev.item.message) {
-        errors.push(ev.item.message);
-      }
-    });
-    child.stderr.on('data', (c) => {
-      stderrTail = (stderrTail + c.toString()).slice(-2000);
-    });
-    child.on('close', (code) => {
-      done({ lastAgentText, errors, stderrTail, exitCode: code, ok: true, timeout: false });
-    });
-    child.on('error', (err) => {
-      errors.push(`子代理进程错误: ${err.message}`);
-      done({ lastAgentText, errors, stderrTail, exitCode: -1, ok: true, timeout: false });
-    });
-  });
 }
 
 /**
@@ -207,7 +384,7 @@ export function truncateResult(text, workdir, taskId) {
   return { text: text.slice(0, MAX_CHARS) + '\n\n…（结果过长，已截断到前 30000 字符）' };
 }
 
-/** 执行 spawn_subagent：启动子 codex → 等完成 → 截断 → 返回结论 */
+/** 执行 spawn_subagent：app-server 子代理 → 等完成 → 回收线程 → 截断 → 返回结论 */
 async function spawnSubagent(args) {
   const prompt = String((args && args.prompt) || '').trim();
   if (!prompt) {
@@ -231,24 +408,17 @@ async function spawnSubagent(args) {
   const workdir = String((args && args.workdir) || '').trim() || process.cwd();
   const taskId = `sa_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 8)}`;
 
-  // codex exec 命令行（与 flydex 后端一致；模型用 config.toml 默认）
-  const codexArgs = [
-    'exec',
-    '--json',
-    '--skip-git-repo-check',
-    '-c',
-    `sandbox_mode=${sandbox}`,
-    '-c',
-    'approval_policy=never',
-    effectivePrompt,
-  ];
-
-  const result = await runSubagentCodex(codexArgs, workdir, maxWait);
+  let result;
+  try {
+    result = await runSubagentTurn(effectivePrompt, sandbox, workdir, maxWait);
+  } catch (err) {
+    return { text: `子代理执行异常: ${err.message}`, isError: true };
+  }
 
   if (result.timeout) {
-    const diag = result.diag || '';
+    const reason = result.errors.filter(Boolean).join('；') || '(无输出)';
     return {
-      text: `子代理超时（超过 ${maxWait}s，进程已终止）。${diag ? `子进程输出: ${diag}` : ''}`,
+      text: `子代理超时（超过 ${maxWait}s，已中断并回收会话）。${reason ? `子进程输出: ${reason}` : ''}`,
       isError: true,
     };
   }
@@ -257,7 +427,7 @@ async function spawnSubagent(args) {
   }
   // 无最终结论：给出错误原因
   const reason =
-    result.errors.filter(Boolean).join('；') || result.stderrTail.trim() || `退出码 ${result.exitCode}`;
+    result.errors.filter(Boolean).join('；') || '(无最终结论且无错误输出)';
   return { text: `子代理未能产生最终结论。原因: ${reason}`, isError: true };
 }
 
@@ -265,9 +435,10 @@ async function spawnSubagent(args) {
 const SPAWN_SUBAGENT_TOOL = {
   name: 'spawn_subagent',
   description:
-    '启动一个独立的子代理（独立的 codex 进程）执行一个子任务，返回精炼的最终结论。\n' +
+    '启动一个独立的子代理（独立的 codex 会话）执行一个子任务，返回精炼的最终结论。\n' +
     '【何时使用】当任务需要拆分成独立子任务、且子任务会产生大量中间过程（多次搜索、读文件、思考）占用主上下文时，委派给子代理。' +
-    '子代理拥有独立上下文，中间过程全部丢弃，只把最终结论返回给你，不污染你的上下文。\n' +
+    '子代理拥有独立上下文，中间过程全部丢弃，只把最终结论返回给你，不污染你的上下文。' +
+    '子代理完成时其会话自动回收（资源随任务释放）。\n' +
     '【用法】把子任务写成完整、自包含的指令（prompt），子代理在独立沙箱中执行。' +
     '本工具是同步的：调用后会阻塞等待子代理完成再返回，一次处理一个子任务。\n' +
     '【关键要求】在 prompt 中明确要求子代理"只输出最终结论，不要复述中间过程"，' +
@@ -360,7 +531,10 @@ function main() {
       }
     }
   });
-  rl.on('close', () => process.exit(0));
+  rl.on('close', () => {
+    killDaemon();
+    process.exit(0);
+  });
 }
 
 // 仅直接运行时启动 MCP 主循环（被 import 时只暴露函数，便于测试）

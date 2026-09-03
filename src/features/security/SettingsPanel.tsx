@@ -6,12 +6,14 @@ import {
   Clock,
   Cpu,
   ShieldCheck,
+  Plus,
   Sparkles,
   Terminal,
   Trash2,
+  X,
   XCircle,
 } from 'lucide-react'
-import { useEffect } from 'react'
+import { useEffect, useState } from 'react'
 
 import { McpSettings } from '@/features/mcp/McpSettings'
 import { ModelSettings } from '@/features/model/ModelSettings'
@@ -20,7 +22,7 @@ import { terminalService } from '@/services/terminalService'
 import { useSecurityStore } from '@/stores/useSecurityStore'
 import { useSettingsStore, type ShellType } from '@/stores/useSettingsStore'
 import { useUIStore } from '@/stores/useUIStore'
-import { APPROVAL_POLICIES, SANDBOX_MODES } from '@/types/security'
+import { APPROVAL_POLICIES, SANDBOX_MODES, type RuleAction } from '@/types/security'
 
 function formatTime(ts: number): string {
   try {
@@ -41,6 +43,11 @@ export function SettingsPanel() {
   const setSandboxMode = useSecurityStore((s) => s.setSandboxMode)
   const setApprovalPolicy = useSecurityStore((s) => s.setApprovalPolicy)
   const clearHistory = useSecurityStore((s) => s.clearHistory)
+  const rules = useSecurityStore((s) => s.rules)
+  const loadRules = useSecurityStore((s) => s.loadRules)
+  const addRule = useSecurityStore((s) => s.addRule)
+  const removeRule = useSecurityStore((s) => s.removeRule)
+  const clearRules = useSecurityStore((s) => s.clearRules)
   const setCurrentView = useUIStore((s) => s.setCurrentView)
   const settingsTab = useUIStore((s) => s.settingsTab)
   const openSettings = useUIStore((s) => s.openSettings)
@@ -57,7 +64,13 @@ export function SettingsPanel() {
 
   useEffect(() => {
     void load()
-  }, [load])
+    void loadRules()
+  }, [load, loadRules])
+
+  // ── 权限规则管理（hooks 须在 early return 前）──
+  const [rulePattern, setRulePattern] = useState('')
+  const [ruleAction, setRuleAction] = useState<RuleAction>('allow')
+  const [ruleNote, setRuleNote] = useState('')
 
   if (!config) {
     return (
@@ -91,6 +104,27 @@ export function SettingsPanel() {
     const ok = window.confirm('确定清空全部审批历史记录吗？')
     if (!ok) return
     void clearHistory()
+  }
+
+  const handleAddRule = async () => {
+    const pattern = rulePattern.trim()
+    if (!pattern) return
+    const ok = await addRule(pattern, ruleAction, ruleNote.trim() || undefined)
+    if (ok) {
+      setRulePattern('')
+      setRuleNote('')
+    }
+  }
+
+  const handleRemoveRule = async (index: number) => {
+    await removeRule(index)
+  }
+
+  const handleClearRules = () => {
+    if (!rules?.rules.length) return
+    const ok = window.confirm('确定清空全部权限规则吗？')
+    if (!ok) return
+    void clearRules()
   }
 
   /** 切换终端 Shell：更新设置并重置 terminalService 的 shell 缓存 */
@@ -217,14 +251,12 @@ export function SettingsPanel() {
             <section>
               <h2 className="mb-3 text-sm font-medium text-muted-foreground">
                 审批策略
-                <span className="ml-2 text-xs opacity-60">
-                  （预留，当前 exec 模式恒为自动放行）
-                </span>
+                <span className="ml-2 text-xs opacity-60">（决定 AI 何时需要你确认操作）</span>
               </h2>
               <p className="mb-3 text-xs leading-relaxed text-muted-foreground">
-                普通对话基于 Codex
-                headless（exec）模式运行，无法交互式审批，写文件与命令操作是否放行由
-                「沙箱模式」决定：只读=禁止写入，工作区写入=允许项目内写入，完全访问=不限制。审批策略在此模式下暂不生效。
+                结合下方「权限规则」构成完整权限模型：命中 deny 规则自动拒绝、allow
+                规则自动放行，其余按策略处理——按需请求（模型请求时弹卡确认，推荐）、询问不可信操作（更严格）、自动放行（不询问全部执行）。
+                沙箱控制文件访问边界：只读=禁止写入，工作区写入=允许项目内写入，完全访问=不限制。
               </p>
               <div className="grid grid-cols-3 gap-3">
                 {APPROVAL_POLICIES.map((p) => {
@@ -249,6 +281,100 @@ export function SettingsPanel() {
                   )
                 })}
               </div>
+            </section>
+
+            {/* 权限规则 */}
+            <section>
+              <div className="mb-3 flex items-center justify-between">
+                <h2 className="flex items-center gap-2 text-sm font-medium text-muted-foreground">
+                  <ShieldCheck className="h-4 w-4" />
+                  权限规则
+                  <span className="text-xs opacity-60">
+                    （{rules?.rules.length ?? 0} 条 · deny 优先于 allow）
+                  </span>
+                </h2>
+                {(rules?.rules.length ?? 0) > 0 && (
+                  <button
+                    onClick={handleClearRules}
+                    className="flex items-center gap-1 rounded border border-border px-2 py-1 text-xs text-muted-foreground hover:bg-accent"
+                  >
+                    <Trash2 className="h-3 w-3" />
+                    清空
+                  </button>
+                )}
+              </div>
+              <p className="mb-3 text-xs leading-relaxed text-muted-foreground">
+                规则按「命令子串」匹配（不区分大小写）。命中 deny 的操作在执行前自动拒绝；命中 allow
+                自动放行；均未命中则按审批策略处理。内置危险命令白名单不可覆盖。
+              </p>
+              {/* 新增规则表单 */}
+              <div className="mb-3 flex flex-wrap items-center gap-2">
+                <input
+                  value={rulePattern}
+                  onChange={(e) => setRulePattern(e.target.value)}
+                  placeholder="命令子串，如 git / pnpm / powershell"
+                  className="h-9 min-w-0 flex-1 rounded-md border border-border bg-card px-3 font-mono text-xs outline-none focus:border-primary"
+                />
+                <select
+                  value={ruleAction}
+                  onChange={(e) => setRuleAction(e.target.value as RuleAction)}
+                  className="h-9 rounded-md border border-border bg-card px-2 text-xs outline-none focus:border-primary"
+                >
+                  <option value="allow">allow（放行）</option>
+                  <option value="deny">deny（拒绝）</option>
+                </select>
+                <input
+                  value={ruleNote}
+                  onChange={(e) => setRuleNote(e.target.value)}
+                  placeholder="备注（可选）"
+                  className="h-9 w-36 rounded-md border border-border bg-card px-3 text-xs outline-none focus:border-primary"
+                />
+                <button
+                  onClick={() => void handleAddRule()}
+                  disabled={!rulePattern.trim()}
+                  className="flex h-9 items-center gap-1 rounded-md bg-primary px-3 text-xs font-medium text-primary-foreground transition-opacity hover:opacity-90 disabled:opacity-40"
+                >
+                  <Plus className="h-3.5 w-3.5" />
+                  添加
+                </button>
+              </div>
+              {/* 规则列表 */}
+              {!rules || rules.rules.length === 0 ? (
+                <div className="rounded-lg border border-dashed border-border p-6 text-center text-sm text-muted-foreground">
+                  暂无规则。添加 allow 规则可让常用命令自动放行，添加 deny 规则可拦截危险操作。
+                </div>
+              ) : (
+                <div className="divide-y divide-border rounded-lg border border-border">
+                  {rules.rules.map((r, i) => (
+                    <div key={i} className="flex items-center gap-3 px-4 py-3">
+                      <span
+                        className={`shrink-0 rounded px-1.5 py-0.5 font-mono text-[10px] font-semibold ${
+                          r.action === 'deny'
+                            ? 'bg-red-500/10 text-red-600'
+                            : 'bg-green-500/10 text-green-600'
+                        }`}
+                      >
+                        {r.action}
+                      </span>
+                      <span className="min-w-0 flex-1 break-all font-mono text-xs text-foreground">
+                        {r.pattern}
+                      </span>
+                      {r.note && (
+                        <span className="max-w-[200px] shrink-0 truncate text-[10px] text-muted-foreground">
+                          {r.note}
+                        </span>
+                      )}
+                      <button
+                        onClick={() => void handleRemoveRule(i)}
+                        className="shrink-0 rounded p-1 text-muted-foreground hover:bg-accent hover:text-foreground"
+                        title="删除规则"
+                      >
+                        <X className="h-3.5 w-3.5" />
+                      </button>
+                    </div>
+                  ))}
+                </div>
+              )}
             </section>
 
             {/* 审批历史 */}

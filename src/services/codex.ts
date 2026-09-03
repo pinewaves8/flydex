@@ -40,8 +40,14 @@ export async function approveCodex(
   runId: string,
   approve: boolean,
   command?: string,
+  approvalId?: string,
 ): Promise<void> {
-  await invoke('approve_codex', { runId, approve, command: command ?? null })
+  await invoke('approve_codex', {
+    runId,
+    approve,
+    command: command ?? null,
+    approvalId: approvalId ?? null,
+  })
 }
 
 /** 停止运行中的 codex */

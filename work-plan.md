@@ -819,6 +819,37 @@ src-tauri/src/
 | **验收标准** | 1. 审批规则可配置（按命令前缀/工具/文件路径/风险等级自动放行或拦截）2. 规则命中自动放行、不弹窗 3. 未命中规则仍逐条审批 4. 全自动模式（放行全部读写）带醒目"危险模式"提示 + 一键暂停/终止 5. 规则持久化 + 设置页可视化 6. 每次自动放行记录审计日志 |
 | **预估** | 3 天 |
 | **讨论要点** | 规则语法（借鉴 codex `--allowedTools` / Claude Code 权限规则）；危险操作（删文件/装依赖/推送）默认永不自动放行；审计日志 UI |
+> **状态：🔨 Phase 1 完成（2026-09-03）—— app-server 通道迁移（B 方案，一次性，不留 exec）**
+> **实现摘要**：
+> - **通道切换（主会话 + 子代理，全部迁移，exec 不再用于 AI 会话）**：`codex_manager.rs` 的 `run_command` 由 `cmd /c codex exec --json`（PTY 流式）切换为 app-server stdio JSON-RPC；新建 `services/appserver_client.rs`（单例 daemon + 专用 writer 线程独占 stdin + 读线程事件映射 + 审批拦截）。子代理 `mcp/subagent-server.mjs` v2.0.0 同样迁移：自管理 app-server daemon + thread/start → turn/start → 等 turn/completed → **thread/delete 自动回收资源**（对齐 Claude Code 同步 subagent，独立上下文只回最终结论）。
+> - **执行前审批（先判断再执行）**：app-server 的 `item/commandExecution/requestApproval` 等服务端请求在命令执行**前**到达客户端；Rust 读线程/子代理 daemon 先判定再响应 `{decision: accept|decline|...}`。已实测：read-only 沙箱下模型写文件 → 触发 requestApproval → respond accept → 命令**执行成功**（文件落盘）→ 证明审批通道真实有效（exec 模式此通道被源码直接 reject，无法拦截）。
+> - **事件映射（前端零改动）**：app-server notification 由 Rust 端映射为前端已兼容的 exec 风格事件（item.type camelCase→snake_case：`agentMessage→agent_message`、`commandExecution→command_execution`、`mcpToolCall→mcp_tool_call`、`fileChange→file_change`；字段 aggregatedOutput→aggregated_output；status 透传 snake_case）。item 结构（AgentMessage.text / CommandExecution.command+aggregatedOutput+exitCode / FileUpdateChange.path+kind+diff）与 exec 一致，`useCodexSession.ts` 无需修改。
+> - **协议/参数关键事实（实测固话）**：initialize 必须带 `clientInfo.version`（缺省报 -32600）；`thread/start` 的 sandbox 参数须传字符串（`'workspace-write'`），approvalPolicy=`on-request` 时模型自主决定是否请求 escalated（跨沙箱写/网络才触发审批）；审批响应 `{decision:'accept'}`；`thread/delete` 回收线程；`turn/interrupt` 优雅中断。
+> - **验证**：cargo build EXIT=0；协议冒烟 3 类全通（主链路 initialize→thread→turn→completed 模型正确回复 / 子代理 MCP 层全通并返回结论 / 审批 accept 后命令执行）；文件变更字段与 exec 一致（add/delete/update）。
+> - **遗留（Phase 2 待办）**：① 规则引擎（deny/allow/ask + 内置 deny 白名单）替换 Phase 1 默认 accept ② 审批 UI 真实交互（当前审批卡片为"通知性质"，approve_codex 为空操作）③ 全自动模式按需切换（`thread/settings/update` 已具备通道）④ 审计存储 ⑤ 清理 exec 残留 dead code（ActiveCodex/clean_line/portable_pty 等）与 _appserver_schema 临时目录。
+
+> **状态：🔨 Phase 2 完成（2026-09-03）—— 规则引擎 + 审批真实交互 + 全自动 + 审计（对齐 Claude Code 权限模型）**
+> **实现摘要**：
+> - **规则引擎（deny/allow/ask）**：`security.rs` 新增 `SecurityService::decide(command)` —— 决策优先级 = **内置 deny 白名单 > 用户规则 deny > 用户规则 allow > 默认 ask（全自动转 allow）**，对齐 Claude Code 权限模型（deny 优先、不可逆操作默认拒绝）。内置 deny 白名单硬编码（递归删根/家目录/系统盘、磁盘格式化/分区、直接写块设备、关机重启、注册表删除等破坏性命令，用户规则不可覆盖，安全底线）。用户规则持久化 `~/.flydex/permissions.json`，新增命令 `add_permission_rule` / `remove_permission_rule` / `list_permission_rules` / `clear_permission_rules`。
+> - **审批真实交互（先判断再执行）**：`appserver_client.rs` `handle_server_request` 审批分支从"默认 accept"改为规则引擎决策——deny 命中 → **执行前直接 `{decision:'decline'}`**（命令不执行）+ 审计；allow/全自动 → `accept` + 审计；**ask → 挂起**（注册 `PENDING_APPROVALS`，不 respond，daemon 挂起当前 turn 等用户）。用户在前端审批卡点允许/拒绝 → `approve_codex(approval_id,…)` → `AppServerClient::respond_approval` 回 `accept/decline`，turn 继续。前端 `approval_request` item 新增 `decision`（ask/auto_accept/auto_deny）+ `reason`：ask 弹审批卡，auto 仅消息流通知。
+> - **全自动模式（按需开启）**：`approval_policy=never` 时 `decide()` 返回 `AutoAllow`（全部自动放行，等价 Claude Code skipPermissionMode），模型自主决策；用户经设置页切换，与"按需判断开启全自动"对齐。
+> - **审计存储**：规则引擎自动决策（deny/allow）与用户审批响应均写入审批历史（`~/.flydex/security.json` history，保留 200 条），含命令/决策/时间/run_id。
+> - **验证**：`cargo test --lib services::security` 3 单测全过（内置白名单存在性/空命令 ask/普通命令不误伤）；`cargo check` EXIT=0；前端 `tsc --noEmit` EXIT=0；dev watcher 已重编译（exe 21:35）。
+> - **遗留（Phase 3 待办）**：① 清理 exec 残留 dead code（ActiveCodex/clean_line/portable_pty/exec args 构建段）② 删除 _appserver_schema 与 _patch_*.py 临时目录 ③ ~~规则配置可视化 UI（SettingsPanel 接入 add/remove/list 命令）~~ **✅ 已完成（2026-09-03，见下方补充）** ④ deny 命中结果卡片化展示（当前仅消息流系统通知）⑤ debug_log 写文件 GBK 编码修正。
+
+> **Phase 2 补充（2026-09-03 实测定论）—— 审批有效性的关键边界（探针实证）**
+> - **沙箱 × 审批策略 × deny 有效性矩阵（`_smoke_sandbox_probe`/`_smoke_policy_probe` 实测）**：
+>   | 配置 | 写命令 requestApproval | deny 可介入 | 只读命令 |
+>   |---|---|---|---|
+>   | read-only + on-request | ✅ 到达 | ✅ 可靠 + 沙箱兜底 | 模型自主（多数不请求） |
+>   | read-only + untrusted | ✅ 到达 | ✅ 绝对 | ❌ **也请求（弹卡多）** |
+>   | workspace-write + on-request | ❌ 0 次（codex 直接执行） | ❌ 完全失效 | — |
+>   | workspace-write + untrusted | ✅ 到达 | ✅ 绝对 | ❌ 也请求 |
+>   - **结论**：`workspace-write + on-request` 下 codex 把工作区写操作视为普通命令直接执行、不请求审批 → flydex 规则引擎（deny/allow/ask）**无法介入**，这正是"deny 拦不住"的根因；`read-only` 沙箱是最可靠兜底（模型不请求审批时沙箱也在命令执行层拒绝写入）。**推荐默认 `read-only + on-request`**（双保险 + 日常顺畅）。
+> - **手工编辑 permissions.json 的 BOM 陷阱（已踩坑修复）**：PowerShell `Set-Content -Encoding UTF8`（Windows PowerShell 5.1）写入带 UTF-8 BOM → `serde_json::from_str` 解析失败被 `.ok()` 吞掉 → `load_rules()` 返回空规则 → deny 静默失效。**已用无 BOM 方式重写**；后端 `add_permission_rule`（Rust `fs::write`）无此问题。
+> - **协议认知修正（重要）**：v1/v2 schema 均**无**客户端 `thread/settings/update` 方法（仅 daemon→客户端 `thread/settings/updated` 通知）。**会话中途切换沙箱/审批策略无法对已有 thread 生效**（thread/start 时固定），切设置只对新会话生效。**正确通道 = `thread/fork`**（params 支持 sandbox/approvalPolicy/approvalsReviewer/model/cwd 覆盖，保留对话上下文）——"切设置自动 fork 当前会话"列为 Phase 3 待办。
+> - **规则可视化 UI 已实现（2026-09-03）**：设置页「沙箱与权限」tab 新增「权限规则」管理区（deny/allow 增删查 + 清空，前端 types/securityService/useSecurityStore/SettingsPanel 四文件），对接后端 add/remove/list/clear_permission_rule 命令；审批策略过时文案（"exec 恒为自动放行"）同步更新。已写入常用 allow 规则（git/pnpm/npm/cargo/node/python/rustc/mkdir/New-Item/Get-Content/dir/cls）。tsc EXIT=0。
+
 
 ### 6.3 工具生态（web 工具 + 子代理）
 

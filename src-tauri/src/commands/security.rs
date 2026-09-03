@@ -1,7 +1,8 @@
 use tauri::command;
 
 use crate::services::security::{
-    ApprovalPolicy, ApprovalRecord, SandboxMode, SecurityConfig, SecurityService,
+    ApprovalPolicy, ApprovalRecord, PermissionRules, RuleAction, SandboxMode, SecurityConfig,
+    SecurityService,
 };
 
 /// 读取当前安全配置
@@ -64,4 +65,37 @@ pub fn record_approval(
 #[command]
 pub fn clear_approval_history() -> Result<SecurityConfig, String> {
     SecurityService::clear_history().map_err(|e| e.to_string())
+}
+
+/// 新增权限规则（deny/allow）
+#[command]
+pub fn add_permission_rule(
+    pattern: String,
+    action: String,
+    note: Option<String>,
+) -> Result<PermissionRules, String> {
+    let parsed = match action.as_str() {
+        "deny" => RuleAction::Deny,
+        "allow" => RuleAction::Allow,
+        _ => return Err(format!("Unknown rule action: {}", action)),
+    };
+    SecurityService::add_rule(pattern, parsed, note.unwrap_or_default()).map_err(|e| e.to_string())
+}
+
+/// 删除权限规则（按 index）
+#[command]
+pub fn remove_permission_rule(index: usize) -> Result<PermissionRules, String> {
+    SecurityService::remove_rule(index).map_err(|e| e.to_string())
+}
+
+/// 读取全部权限规则
+#[command]
+pub fn list_permission_rules() -> PermissionRules {
+    SecurityService::load_rules()
+}
+
+/// 清空权限规则
+#[command]
+pub fn clear_permission_rules() -> Result<PermissionRules, String> {
+    SecurityService::clear_rules().map_err(|e| e.to_string())
 }

@@ -1,6 +1,12 @@
 import { invoke } from '@tauri-apps/api/core'
 
-import type { ApprovalPolicy, SandboxMode, SecurityConfig } from '@/types/security'
+import type {
+  ApprovalPolicy,
+  PermissionRules,
+  RuleAction,
+  SandboxMode,
+  SecurityConfig,
+} from '@/types/security'
 
 /**
  * 安全配置 Service（沙箱 + 审批策略 + 历史）
@@ -29,5 +35,25 @@ export const securityService = {
   /** 清空审批历史 */
   async clearHistory(): Promise<SecurityConfig> {
     return invoke<SecurityConfig>('clear_approval_history')
+  },
+
+  /** 读取全部权限规则 */
+  async listRules(): Promise<PermissionRules> {
+    return invoke<PermissionRules>('list_permission_rules')
+  },
+
+  /** 新增权限规则（deny/allow） */
+  async addRule(pattern: string, action: RuleAction, note?: string): Promise<PermissionRules> {
+    return invoke<PermissionRules>('add_permission_rule', { pattern, action, note: note ?? '' })
+  },
+
+  /** 删除权限规则（按 index） */
+  async removeRule(index: number): Promise<PermissionRules> {
+    return invoke<PermissionRules>('remove_permission_rule', { index })
+  },
+
+  /** 清空全部权限规则 */
+  async clearRules(): Promise<PermissionRules> {
+    return invoke<PermissionRules>('clear_permission_rules')
   },
 }

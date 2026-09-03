@@ -13,6 +13,21 @@ export interface ApprovalRecord {
   run_id: string
 }
 
+/** 权限规则动作（deny 优先于 allow） */
+export type RuleAction = 'deny' | 'allow'
+
+/** 单条权限规则 */
+export interface PermissionRule {
+  pattern: string
+  action: RuleAction
+  note: string
+}
+
+/** 权限规则集（持久化 ~/.flydex/permissions.json） */
+export interface PermissionRules {
+  rules: PermissionRule[]
+}
+
 /** 安全配置 */
 export interface SecurityConfig {
   sandbox_mode: SandboxMode

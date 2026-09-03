@@ -93,9 +93,10 @@ pub fn approve_codex(
     run_id: String,
     approve: bool,
     command: Option<String>,
+    approval_id: Option<String>,
 ) -> Result<(), String> {
-    // 写入审批响应
-    CodexManager::approve(&run_id, approve)?;
+    // 写入审批响应（approval_id 定位挂起的 ServerRequest，ap-{server_id}）
+    CodexManager::approve(&run_id, approval_id.as_deref().unwrap_or(""), approve)?;
     // 记录审批历史（command 由前端从 approval_request item 传入）
     if let Some(cmd) = command {
         let record = crate::services::security::ApprovalRecord {

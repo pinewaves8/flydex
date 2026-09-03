@@ -10,6 +10,9 @@ export interface CodexApproval {
   id: string
   command?: string
   description?: string
+  /** 规则引擎决策：ask=弹审批卡；auto_accept/auto_deny=自动放行/拒绝（仅通知） */
+  decision?: string
+  reason?: string
 }
 
 /** 正在执行的命令（实时命令看板） */
