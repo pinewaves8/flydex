@@ -835,7 +835,7 @@ src-tauri/src/
 > - **全自动模式（按需开启）**：`approval_policy=never` 时 `decide()` 返回 `AutoAllow`（全部自动放行，等价 Claude Code skipPermissionMode），模型自主决策；用户经设置页切换，与"按需判断开启全自动"对齐。
 > - **审计存储**：规则引擎自动决策（deny/allow）与用户审批响应均写入审批历史（`~/.flydex/security.json` history，保留 200 条），含命令/决策/时间/run_id。
 > - **验证**：`cargo test --lib services::security` 3 单测全过（内置白名单存在性/空命令 ask/普通命令不误伤）；`cargo check` EXIT=0；前端 `tsc --noEmit` EXIT=0；dev watcher 已重编译（exe 21:35）。
-> - **遗留（Phase 3 待办）**：① 清理 exec 残留 dead code（ActiveCodex/clean_line/portable_pty/exec args 构建段）② 删除 _appserver_schema 与 _patch_*.py 临时目录 ③ ~~规则配置可视化 UI（SettingsPanel 接入 add/remove/list 命令）~~ **✅ 已完成（2026-09-03，见下方补充）** ④ deny 命中结果卡片化展示（当前仅消息流系统通知）⑤ debug_log 写文件 GBK 编码修正。
+> - **遗留（Phase 3 待办）**：~~① 清理 exec 残留 dead code~~ **✅ 已完成（cargo 零 warning）**；~~② 删除 _appserver_schema 与 _patch_*.py 临时目录~~ **✅ 已完成**；~~③ 规则配置可视化 UI~~ **✅ 已完成（2026-09-03，见下方补充）**；~~④ deny 命中结果卡片化展示~~ **✅ 已完成**；~~⑤ debug_log 写文件 GBK 编码修正~~ **✅ 已确认无需修改（文件本就 UTF-8，101 行中文正常；乱码仅 GBK 控制台显示层）**。
 
 > **Phase 2 补充（2026-09-03 实测定论）—— 审批有效性的关键边界（探针实证）**
 > - **沙箱 × 审批策略 × deny 有效性矩阵（`_smoke_sandbox_probe`/`_smoke_policy_probe` 实测）**：
@@ -849,6 +849,12 @@ src-tauri/src/
 > - **手工编辑 permissions.json 的 BOM 陷阱（已踩坑修复）**：PowerShell `Set-Content -Encoding UTF8`（Windows PowerShell 5.1）写入带 UTF-8 BOM → `serde_json::from_str` 解析失败被 `.ok()` 吞掉 → `load_rules()` 返回空规则 → deny 静默失效。**已用无 BOM 方式重写**；后端 `add_permission_rule`（Rust `fs::write`）无此问题。
 > - **协议认知修正（重要）**：v1/v2 schema 均**无**客户端 `thread/settings/update` 方法（仅 daemon→客户端 `thread/settings/updated` 通知）。**会话中途切换沙箱/审批策略无法对已有 thread 生效**（thread/start 时固定），切设置只对新会话生效。**正确通道 = `thread/fork`**（params 支持 sandbox/approvalPolicy/approvalsReviewer/model/cwd 覆盖，保留对话上下文）——"切设置自动 fork 当前会话"列为 Phase 3 待办。
 > - **规则可视化 UI 已实现（2026-09-03）**：设置页「沙箱与权限」tab 新增「权限规则」管理区（deny/allow 增删查 + 清空，前端 types/securityService/useSecurityStore/SettingsPanel 四文件），对接后端 add/remove/list/clear_permission_rule 命令；审批策略过时文案（"exec 恒为自动放行"）同步更新。已写入常用 allow 规则（git/pnpm/npm/cargo/node/python/rustc/mkdir/New-Item/Get-Content/dir/cls）。tsc EXIT=0。
+
+> **Phase 3 收尾（2026-09-03 完成）**：
+> - **exec 残留 dead code 全清（cargo 零 warning）**：删除 `codex_manager.rs` 的 `ActiveCodex`/`ACTIVE`/`active()`/`clean_line()`/`ensure_git_safe_directory`/`model_args`（exec 时代 `-c model=` 构建，app-server 用 thread/start 的 model 参数替代）+ **run_command 内 exec args 构建段**（args 变量从未被使用，实际执行已是 app-server `turn_start`；`sandbox`/`session_model` 参数保留——被 thread_start 用）；删 `appserver_client.rs` 的 `ChildStdin` import + 多余 `use debug_log`；删 5 个孤立 dead-code 文件 `types/codex_json.rs`/`types/common.rs`/`types/error.rs`/`utils/platform.rs`/`utils/path.rs`（无任何引用）+ mod 声明；3 处无谓 unsafe 块去除；`skill.rs` 死代码 `prompt`、`storage.rs` 死代码 `role`/`format_ts` 精简；`security.rs`/`model.rs` 未用方法加 `#[allow(dead_code)]`（保留给前端/单测/未来）。
+> - **_appserver_schema 临时目录已删除**（含 schema 冒烟脚本；探针结论已固化到上文）。
+> - **debug_log 编码**：确认文件本就是 UTF-8（101 行中文全部正常），乱码仅发生在 GBK 控制台 eprintln 显示层，无需修改。
+> - **deny 命中卡片化**：前端 `CodexMessage.kind` 新增 `'deny'`，auto_deny 由系统文本改为红色盾牌卡片（命令 + 命中原因 + 时间），ChatPanel 新增渲染分支（`ShieldAlert` icon）。auto_accept 保持系统消息（低频正面事件）。
 
 
 ### 6.3 工具生态（web 工具 + 子代理）

@@ -57,14 +57,12 @@ fn uuid_simple() -> String {
         .duration_since(UNIX_EPOCH)
         .map(|d| d.as_nanos())
         .unwrap_or(0);
-    let rand: u64 = unsafe {
-        // 简单的伪随机
-        let mut x = nanos as u64;
-        x ^= x << 13;
-        x ^= x >> 7;
-        x ^= x << 17;
-        x
-    };
+    // 简单的伪随机
+    let mut x = nanos as u64;
+    x ^= x << 13;
+    x ^= x >> 7;
+    x ^= x << 17;
+    let rand: u64 = x;
     format!("{:x}{:x}", nanos, rand)
 }
 

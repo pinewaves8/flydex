@@ -12,7 +12,7 @@
 
 use std::collections::HashMap;
 use std::io::{BufRead, BufReader, Write};
-use std::process::{Child, ChildStdin, Command, Stdio};
+use std::process::{Child, Command, Stdio};
 use std::sync::atomic::{AtomicI64, Ordering};
 use std::sync::{mpsc, Arc, Mutex, OnceLock};
 use std::time::Duration;
@@ -37,7 +37,6 @@ macro_rules! debug_log {
         }}
     }};
 }
-use debug_log;
 
 /// codex CLI 入口（全局唯一）
 const CODEX_JS: &str = r"C:\Users\peter woo\AppData\Roaming\npm\node_modules\@openai\codex\bin\codex.js";
@@ -62,6 +61,7 @@ pub fn turn_done() -> &'static Mutex<HashMap<String, mpsc::Sender<()>>> {
 static PENDING_APPROVALS: OnceLock<Mutex<HashMap<String, PendingApproval>>> = OnceLock::new();
 
 /// 挂起的审批请求：app-server ServerRequest id + 命令信息
+#[allow(dead_code)]
 pub struct PendingApproval {
     pub server_id: i64,
     pub command: String,
@@ -86,8 +86,9 @@ enum OutMsg {
     Response { id: i64, result: serde_json::Value },
 }
 
-/// 会话元信息（resume 复用）
+/// 会话元信息（resume/fork 复用）
 #[derive(Clone)]
+#[allow(dead_code)]
 pub struct ThreadMeta {
     pub thread_id: String,
     pub model: String,
@@ -104,6 +105,7 @@ pub struct AppServerClient {
     /// thread_id → 最近一次 turn 的 run_id（事件路由到前端用）
     run_registry: Arc<Mutex<HashMap<String, String>>>,
     thread_registry: Mutex<HashMap<String, ThreadMeta>>,
+    #[allow(dead_code)]
     app: AppHandle,
 }
 
@@ -126,6 +128,7 @@ impl AppServerClient {
     }
 
     /// 关闭 daemon（用于重启/清理）
+    #[allow(dead_code)]
     pub fn shutdown() {
         if let Ok(mut guard) = slot().lock() {
             if let Some(c) = guard.take() {
@@ -385,6 +388,7 @@ impl AppServerClient {
     }
 
     /// 动态切换审批模式（thread/settings/update）
+    #[allow(dead_code)]
     pub fn thread_settings_update(&self, thread_id: &str, patch: serde_json::Value) -> Result<(), String> {
         let mut params = serde_json::json!({ "threadId": thread_id });
         if let Some(obj) = patch.as_object() {

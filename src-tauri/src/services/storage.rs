@@ -326,16 +326,6 @@ impl Storage {
                 .get("kind")
                 .and_then(|v| v.as_str())
                 .unwrap_or("unknown");
-            let role = match kind {
-                "agent" => "🤖 Assistant",
-                "user" | "tool" => "🛠 Tool",
-                "file_change" => "📝 File Change",
-                "plan" => "📋 Plan",
-                "review" => "🔍 Review",
-                "system" => "⚙️ System",
-                "error" => "❌ Error",
-                _ => kind,
-            };
             out.push_str(&format!(
                 "## {} ({} · {})\n\n",
                 i + 1,
@@ -403,25 +393,17 @@ fn uuid_simple() -> String {
         .duration_since(UNIX_EPOCH)
         .map(|d| d.as_nanos())
         .unwrap_or(0);
-    let rand: u64 = unsafe {
-        let mut x = nanos as u64;
-        x ^= x << 13;
-        x ^= x >> 7;
-        x ^= x << 17;
-        x
-    };
+    let mut x = nanos as u64;
+    x ^= x << 13;
+    x ^= x >> 7;
+    x ^= x << 17;
+    let rand: u64 = x;
     format!("{:x}{:x}", nanos, rand)
 }
 
 fn format_ts(ts: i64) -> String {
-    use std::time::{Duration, UNIX_EPOCH};
-    let secs = ts / 1000;
-    let nanos = ((ts % 1000) * 1_000_000) as u32;
-    let dt = UNIX_EPOCH + Duration::from_secs(secs as u64);
-    // 简化：只输出 ISO 格式（无 chrono 依赖）
-    let _ = nanos;
-    let secs = secs;
-    chrono_iso(secs)
+    // 简化：秒级 ISO（无 chrono 依赖）
+    chrono_iso(ts / 1000)
 }
 
 /// 极简 ISO 时间格式化（避免引入 chrono 依赖）

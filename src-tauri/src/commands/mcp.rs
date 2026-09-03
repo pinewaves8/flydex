@@ -35,6 +35,7 @@ pub fn mcp_test(server: McpServer) -> Result<String, String> {
 /// 2. 当前可执行文件上级目录 mcp/web-search-server.mjs（target/debug 布局）
 /// 3. 开发固定路径 C:\llm\flydex\mcp\web-search-server.mjs
 #[tauri::command]
+#[allow(dead_code)] // 内置 web 工具 MCP 一键接入（未接线 UI，保留待用）
 pub fn mcp_builtin_web_server() -> Result<crate::services::mcp::McpServer, String> {
     use std::path::PathBuf;
     let file_name = "web-search-server.mjs";

@@ -213,10 +213,11 @@ export function useCodexSession() {
               content: `▸ 已自动放行: ${opText}${item.reason ? `（${item.reason}）` : ''}`,
             })
           } else if (decision === 'auto_deny') {
-            // deny 命中：执行前直接拒绝，仅通知
+            // deny 命中：执行前直接拒绝，卡片化展示（命令 + 命中原因）
             store.appendMessage({
-              kind: 'system',
-              content: `▸ 已自动拒绝: ${opText}${item.reason ? `（${item.reason}）` : ''}`,
+              kind: 'deny',
+              content: opText,
+              reason: item.reason,
             })
           }
         }

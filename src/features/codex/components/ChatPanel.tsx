@@ -152,6 +152,28 @@ function MessageCard({
     return <ReviewCard message={message} />
   }
 
+  // 权限拒绝卡片：规则引擎 deny 命中（命令 + 命中原因）
+  if (message.kind === 'deny') {
+    return (
+      <div className="flex items-start gap-2 rounded-md border border-red-500/40 bg-red-500/5 px-3 py-2">
+        <ShieldAlert className="mt-0.5 h-4 w-4 shrink-0 text-red-500" />
+        <div className="min-w-0 flex-1">
+          <div className="flex items-center gap-1.5 text-xs font-medium text-red-500">
+            已自动拒绝
+            <span className="ml-auto flex items-center gap-0.5 text-[10px] opacity-60">
+              <Clock className="h-2.5 w-2.5" />
+              {timeStr}
+            </span>
+          </div>
+          <div className="mt-1 break-all font-mono text-xs text-foreground">{message.content}</div>
+          {message.reason && (
+            <div className="mt-1 text-xs text-muted-foreground">原因：{message.reason}</div>
+          )}
+        </div>
+      </div>
+    )
+  }
+
   if (message.kind === 'system' || message.kind === 'usage') {
     return (
       <div className={`${kindStyles[message.kind]} flex items-center gap-1 py-0.5`}>

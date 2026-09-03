@@ -231,6 +231,7 @@ impl ModelService {
     }
 
     /// 当前生效的 (模型, 供应商)
+    #[allow(dead_code)]
     pub fn current() -> Option<(ModelConfig, ProviderConfig)> {
         let cfg = Self::load();
         let model = cfg.find_model(&cfg.current_model).cloned()?;

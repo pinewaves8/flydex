@@ -71,12 +71,14 @@ export interface CodexFileChange {
 /** 前端渲染用的结构化消息 */
 export interface CodexMessage {
   id: string
-  kind: 'agent' | 'tool' | 'error' | 'system' | 'usage' | 'file_change' | 'plan' | 'review'
+  kind: 'agent' | 'tool' | 'error' | 'system' | 'usage' | 'file_change' | 'plan' | 'review' | 'deny'
   content: string
   toolName?: string
   toolArgs?: unknown
   usage?: CodexUsage
   /** file_change 消息的文件变更列表 */
   fileChanges?: CodexFileChange[]
+  /** deny 卡片展示的命中原因（用户规则/内置规则说明） */
+  reason?: string
   timestamp: number
 }

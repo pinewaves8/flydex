@@ -17,6 +17,7 @@ pub enum SandboxMode {
     DangerFullAccess,
 }
 
+#[allow(dead_code)] // label() 仅前端/诊断保留；as_codex() 供 app-server sandbox 参数
 impl SandboxMode {
     pub fn as_codex(&self) -> &'static str {
         match self {
@@ -47,6 +48,7 @@ pub enum ApprovalPolicy {
     Never,
 }
 
+#[allow(dead_code)] // as_codex/label 保留（前端展示 & 未来按会话覆盖策略）
 impl ApprovalPolicy {
     pub fn as_codex(&self) -> &'static str {
         match self {
@@ -178,6 +180,7 @@ pub enum RuleAction {
 }
 
 impl RuleAction {
+    #[allow(dead_code)] // 前端展示保留
     pub fn label(&self) -> &'static str {
         match self {
             RuleAction::Deny => "拒绝",
@@ -219,10 +222,12 @@ pub enum RuleDecision {
 
 impl RuleDecision {
     /// 是否放行（命中 allow 或全自动）
+    #[allow(dead_code)] // 单测与前端判断保留
     pub fn is_allow(&self) -> bool {
         matches!(self, RuleDecision::UserAllow(_) | RuleDecision::AutoAllow)
     }
     /// 是否拒绝（deny 命中）
+    #[allow(dead_code)] // 单测与前端判断保留
     pub fn is_deny(&self) -> bool {
         matches!(self, RuleDecision::BuiltinDeny(_) | RuleDecision::UserDeny(_))
     }

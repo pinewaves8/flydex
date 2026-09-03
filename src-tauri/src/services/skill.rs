@@ -112,9 +112,6 @@ fn parse_skill_file(path: &Path) -> Option<SkillDefinition> {
         })
     });
 
-    // 从 frontmatter 之后提取 prompt（直到文件末尾或第一个 ## 之前的正文）
-    let prompt = Some(content.clone());
-
     Some(SkillDefinition {
         name,
         description,

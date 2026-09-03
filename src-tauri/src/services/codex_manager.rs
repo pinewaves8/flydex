@@ -1,7 +1,5 @@
-use portable_pty::{native_pty_system, Child, CommandBuilder, PtySize};
 use std::collections::HashMap;
-use std::io::{BufRead, BufReader, Write};
-use std::sync::{Arc, Mutex, OnceLock};
+use std::sync::{Mutex, OnceLock};
 use std::time::Duration;
 
 use tauri::{AppHandle, Emitter};
@@ -34,61 +32,11 @@ const REVIEW_INSTRUCTION: &str = "【代码审查模式】你正在以资深工�
 
 const PLAN_INSTRUCTION: &str = "【计划模式】你当前的工作目录是只读的，无法创建、修改或删除任何文件。请先充分分析用户需求（可以读取和搜索代码与文件），然后输出一份分步执行计划，不要实际执行任何修改。要求：1) 用编号列表分步列出，每一步【单独一行】，格式为：数字. 具体操作（例如：1. 在根目录创建 demo.txt 并写入 hello）；2) 禁止输出嵌套子列表（不要'涉及文件/具体操作'子项）、禁止加粗标题、禁止计划总结或前言；3) 每步要具体、可执行、覆盖边界情况；4) 只输出计划本身，不要执行任何写操作。";
 
-/// 运行中的 codex 进程句柄（供审批写入与停止）
-pub struct ActiveCodex {
-    /// 伪终端 master 写端（写 "y\n" / "n\n" 响应审批）
-    /// Option：本轮完成后 take() 关闭 stdin（EOF），让 codex 立即退出而非空等
-    pub writer: Option<Box<dyn Write + Send>>,
-    /// 子进程句柄（用于停止/超时 kill）
-    pub child: Arc<Mutex<Box<dyn Child + Send + Sync>>>,
-}
-
 /// 活动 turn 注册表（run_id -> (thread_id, turn_id)），供 stop 中断
 static ACTIVE_TURNS: OnceLock<Mutex<HashMap<String, (String, String)>>> = OnceLock::new();
 
 fn active_turns() -> &'static Mutex<HashMap<String, (String, String)>> {
     ACTIVE_TURNS.get_or_init(|| Mutex::new(HashMap::new()))
-}
-
-/// 全局运行中 codex 注册表（run_id -> ActiveCodex）
-static ACTIVE: OnceLock<Mutex<HashMap<String, ActiveCodex>>> = OnceLock::new();
-
-fn active() -> &'static Mutex<HashMap<String, ActiveCodex>> {
-    ACTIVE.get_or_init(|| Mutex::new(HashMap::new()))
-}
-
-/// 清理 conpty/ANSI 控制序列，恢复纯文本
-///
-/// 处理：OSC 窗口标题（ESC ] ... BEL）、CSI（ESC [ ... 字母）、CR。
-fn clean_line(raw: &str) -> String {
-    let mut out = String::with_capacity(raw.len());
-    let mut chars = raw.chars();
-    while let Some(c) = chars.next() {
-        match c {
-            '\u{1b}' => match chars.next() {
-                Some(']') => {
-                    // OSC 序列：跳到 BEL（内容可能含字母，如路径 C:\...）
-                    for n in chars.by_ref() {
-                        if n == '\u{7}' {
-                            break;
-                        }
-                    }
-                }
-                Some('[') => {
-                    // CSI 序列：跳到终止字母
-                    for n in chars.by_ref() {
-                        if n.is_ascii_alphabetic() {
-                            break;
-                        }
-                    }
-                }
-                _ => {}
-            },
-            '\r' => {}
-            c => out.push(c),
-        }
-    }
-    out
 }
 
 /// Codex CLI 子进程管理器（PTY 伪终端流式）
@@ -98,89 +46,6 @@ fn clean_line(raw: &str) -> String {
 pub struct CodexManager;
 
 impl CodexManager {
-    /// 预配置 git safe.directory
-    ///
-    /// workspace-write 沙箱下，AI 执行 git 命令会因目录所有权检查报
-    /// "detected dubious ownership"，导致 git 操作失败。这里在启动 codex 前
-    /// 用真实用户权限预先信任工作目录（与 codex 沙箱无关，属于 git 客户端层面）。
-    fn ensure_git_safe_directory(workdir: Option<&str>) {
-        let add = |path: &str| {
-            let _ = std::process::Command::new("git")
-                .args(["config", "--global", "--add", "safe.directory", path])
-                .status();
-        };
-        if let Some(dir) = workdir {
-            let dir = dir.trim();
-            if !dir.is_empty() {
-                // 先移除旧条目避免累积，再添加
-                let _ = std::process::Command::new("git")
-                    .args(["config", "--global", "--unset-all", "safe.directory", dir])
-                    .status();
-                add(dir);
-                return;
-            }
-        }
-        // 无明确 workdir 时兜底信任所有目录
-        add("*");
-    }
-
-    /// 生成模型相关 `-c` 覆盖参数
-    ///
-    /// 从 ~/.flydex/models.json 读取当前模型 + 供应商配置，用 `-c` 在运行时覆盖，
-    /// 不修改 ~/.codex/config.toml。优先级：会话级模型 > 全局默认模型。
-    /// 推理强度为 none 时不传（使用模型默认）。
-    fn model_args(session_model: Option<&str>) -> Vec<String> {
-        use crate::services::model::ModelService;
-        let cfg = ModelService::load();
-        // 会话级覆盖：仅当会话指定且存在于模型列表时采用
-        let model_id = session_model
-            .filter(|m| cfg.find_model(m).is_some())
-            .unwrap_or(cfg.current_model.as_str());
-        let Some(model) = cfg.find_model(model_id) else {
-            return Vec::new();
-        };
-        let Some(provider) = cfg.find_provider(&model.provider) else {
-            return Vec::new();
-        };
-        let mut args = Vec::new();
-        // 重要：所有 -c 参数值都**不加引号**。Windows 下 flydex 通过 cmd /c 启动 codex，
-        // 带内嵌双引号（如 -c model="x"）会被 cmd 重新解析并破坏（unexpected argument）。
-        // codex 的 -c 片段解析能接受无引号的裸值。
-        args.push("-c".to_string());
-        args.push(format!("model={}", model.id));
-        args.push("-c".to_string());
-        args.push(format!("model_provider={}", provider.id));
-        // name 必须非空；含中文的 name（如"阿里云 Qwen"、"Ollama（本地）"）在 cmd /c 下
-        // 会解析失败，因此非 ASCII 名称回退为纯 ASCII 的 provider id。
-        let safe_name = if provider.name.is_ascii() {
-            provider.name.clone()
-        } else {
-            provider.id.clone()
-        };
-        args.push("-c".to_string());
-        args.push(format!(
-            "model_providers.{}.name={}",
-            provider.id, safe_name
-        ));
-        args.push("-c".to_string());
-        args.push(format!(
-            "model_providers.{}.base_url={}",
-            provider.id, provider.base_url
-        ));
-        if !provider.api_key.trim().is_empty() {
-            args.push("-c".to_string());
-            args.push(format!(
-                "model_providers.{}.experimental_bearer_token={}",
-                provider.id, provider.api_key
-            ));
-        }
-        if cfg.reasoning_effort != "none" && !cfg.reasoning_effort.is_empty() {
-            args.push("-c".to_string());
-            args.push(format!("model_reasoning_effort={}", cfg.reasoning_effort));
-        }
-        args
-    }
-
     /// 执行一条 codex 命令（阻塞到进程结束，输出流式推送）
     ///
     /// # Arguments
@@ -270,41 +135,9 @@ impl CodexManager {
         images: Option<Vec<String>>,
         sandbox: Option<String>,
     ) -> Result<(), String> {
-        // 构建 codex 参数
-        let mut args: Vec<String> = vec!["exec".to_string()];
-        match mode {
-            CodexExecMode::Exec => {}
-            CodexExecMode::Resume => {
-                args.push("resume".to_string());
-                if let Some(tid) = &thread_id {
-                    args.push(tid.clone());
-                } else {
-                    args.push("--last".to_string());
-                }
-            }
-            CodexExecMode::Plan | CodexExecMode::Review => {
-                // 计划/审查模式：已有会话则 resume 保持对话上下文（仍在只读沙箱下）
-                if let Some(tid) = &thread_id {
-                    args.push("resume".to_string());
-                    args.push(tid.clone());
-                }
-            }
-        }
-        args.push("--json".to_string());
-        // 桌面应用场景：用户主动选择工作目录（常为非 git 项目），跳过 codex 的
-        // "trusted directory" 检查，否则非 git 目录直接报 "Not inside a trusted directory"。
-        // 实际安全边界由 sandbox_mode（read-only / workspace-write / danger-full-access）控制。
-        args.push("--skip-git-repo-check".to_string());
-        // 从安全配置读取沙箱模式，统一用 `-c` 覆盖（exec 与 resume 均支持）。
-        // 沙箱：read-only / workspace-write / danger-full-access（真实用户权限，AI 可完成 git 写操作）
-        // 审批策略：exec 模式**强制 approval_policy=never**（headless 下无法交互审批——
-        // codex exec 对 CommandExecutionRequestApproval / FileChangeRequestApproval 一律直接拒绝
-        // （"not supported in exec mode"），on-request/untrusted 只会导致 AI 写文件/跑命令被拒。
-        // 安全边界完全由 sandbox_mode 承担：用户切 read-only 即只读，workspace-write/danger-full-access 即可写。
-        let sec = SecurityService::load();
-        // 所有 -c 值一律不加引号（cmd /c 重新解析会破坏内嵌引号），含连字符的值也可安全裸传
-        // 计划模式强制 read-only 沙箱（模型只能分析出计划，无法修改任何文件）；其余用用户安全配置
         // 沙箱边界：per-run 覆盖（子代理可配）> 计划/审查强制只读 > 全局配置
+        // （通过 app-server thread/start 的 sandbox 参数传递，见下方 thread_start）
+        let sec = SecurityService::load();
         let sandbox = match sandbox {
             Some(s) => s,
             None => match mode {
@@ -312,13 +145,6 @@ impl CodexManager {
                 _ => sec.sandbox_mode.as_codex().to_string(),
             },
         };
-        args.push("-c".to_string());
-        args.push(format!("sandbox_mode={}", sandbox));
-        // exec 模式强制 never（无法交互审批）；后端不再向 exec 传 on-request/untrusted
-        args.push("-c".to_string());
-        args.push("approval_policy=never".to_string());
-        // 模型参数：会话级覆盖 > 全局默认
-        args.extend(Self::model_args(session_model.as_deref()));
         // 计划模式：在用户指令前注入计划指令（配合 read-only 沙箱双重约束）
         let mut final_command = match mode {
             CodexExecMode::Plan => format!(
@@ -354,10 +180,6 @@ impl CodexManager {
         if let Some(prefetch) = Self::prefetch_search(&final_command) {
             final_command = format!("{}\n\n{}", final_command.trim_end(), prefetch);
         }
-// 图像附件：通过 -i 传给 codex（相对路径 ./.flydex-attachments/xxx）。
-        // 注意：-i/--image 是 num_args=1.. 的贪婪多值参数，会吞掉其后的所有非 option 参数（含 prompt），
-        // 因此 prompt 必须先入 args，-i 图片必须排在 prompt 之后，否则 codex 报 "No prompt provided"。
-
         // ── app-server 驱动（6.2）：headless exec → codex app-server（执行前审批）──
         let client = AppServerClient::ensure(app.clone())?;
         // 前端 UX：Started 事件（app-server 无真实 pid，用 0 占位）
