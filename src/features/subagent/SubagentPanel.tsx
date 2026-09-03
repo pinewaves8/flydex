@@ -17,6 +17,7 @@ import {
 import { useEffect, useRef, useState } from 'react'
 
 import { runCodex, stopCodex } from '@/services/codex'
+import { useSkillsStore } from '@/stores/useSkillsStore'
 import type { CodexEvent } from '@/types/codex'
 
 /**
@@ -158,7 +159,26 @@ export function SubagentPanel({ open, onClose, defaultWorkdir, defaultModel }: S
     // 启动所有未完成的子代理（跳过已完成）
     for (const t of tasks) {
       if (t.status === 'done' || t.status === 'running') continue
-      if (!t.instruction.trim()) continue
+      if (!t.instruction.trim()) {
+        // 空指令：不再静默跳过，给用户可见提示，避免"点击没反应"
+        setTasks((prev) =>
+          prev.map((x) =>
+            x.id === t.id
+              ? {
+                  ...x,
+                  lines: [
+                    ...x.lines,
+                    {
+                      kind: 'stderr' as const,
+                      text: '⚠️ 指令为空，已跳过（请先填写该子任务的指令再并行执行）',
+                    },
+                  ],
+                }
+              : x,
+          ),
+        )
+        continue
+      }
       const runId = crypto.randomUUID()
       setTasks((prev) =>
         prev.map((x) =>
@@ -174,7 +194,14 @@ export function SubagentPanel({ open, onClose, defaultWorkdir, defaultModel }: S
             : x,
         ),
       )
-      runCodex(t.instruction, {
+      // 与主聊天一致：指令命中技能触发词时先注入技能纪律（如 web-search 的搜索规则），
+      // 避免子代理模型自由发挥编造背景、乱搜一气导致结果不准确
+      let cmd = t.instruction
+      const matched = useSkillsStore.getState().matchTriggers(cmd)
+      if (matched.length > 0) {
+        cmd = useSkillsStore.getState().execute(matched[0].name, cmd)
+      }
+      runCodex(cmd, {
         workdir: t.workdir,
         runId,
         model: defaultModel,
