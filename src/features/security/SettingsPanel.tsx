@@ -42,6 +42,7 @@ export function SettingsPanel() {
   const load = useSecurityStore((s) => s.load)
   const setSandboxMode = useSecurityStore((s) => s.setSandboxMode)
   const setApprovalPolicy = useSecurityStore((s) => s.setApprovalPolicy)
+  const setAutoCheckpoint = useSecurityStore((s) => s.setAutoCheckpoint)
   const clearHistory = useSecurityStore((s) => s.clearHistory)
   const rules = useSecurityStore((s) => s.rules)
   const loadRules = useSecurityStore((s) => s.loadRules)
@@ -98,6 +99,10 @@ export function SettingsPanel() {
       if (!ok) return
     }
     await setApprovalPolicy(policy)
+  }
+
+  const handleAutoCheckpoint = (enabled: boolean) => {
+    void setAutoCheckpoint(enabled)
   }
 
   const handleClearHistory = () => {
@@ -282,6 +287,37 @@ export function SettingsPanel() {
                   )
                 })}
               </div>
+            </section>
+
+            {/* 自动 git 快照 */}
+            <section>
+              <div className="mb-2 flex items-center justify-between">
+                <h2 className="flex items-center gap-2 text-sm font-medium text-muted-foreground">
+                  自动 git 快照
+                  <span className="text-xs opacity-60">
+                    （对齐 Claude Code：每轮完成后自动 commit 本地快照）
+                  </span>
+                </h2>
+                <button
+                  role="switch"
+                  aria-checked={!!config?.auto_checkpoint}
+                  onClick={() => void handleAutoCheckpoint(!config?.auto_checkpoint)}
+                  className={`relative h-6 w-11 shrink-0 rounded-full transition-colors ${
+                    config?.auto_checkpoint ? 'bg-primary' : 'bg-border'
+                  }`}
+                >
+                  <span
+                    className={`absolute top-0.5 left-0.5 h-5 w-5 rounded-full bg-white shadow transition-transform ${
+                      config?.auto_checkpoint ? 'translate-x-5' : ''
+                    }`}
+                  />
+                </button>
+              </div>
+              <p className="text-xs leading-relaxed text-muted-foreground">
+                开启后，每轮 AI 对话结束时自动对工作区执行 <code>git add -A && git commit</code>
+                （仅本地，不推送）。崩溃或误改后可 <code>git log</code> 找到{' '}
+                <code>flydex-checkpoint</code> 提交并回滚。仅对 git 仓库生效，无变更自动跳过。
+              </p>
             </section>
 
             {/* 权限规则 */}

@@ -27,6 +27,11 @@ export const securityService = {
     return invoke<SecurityConfig>('set_approval_policy', { policy })
   },
 
+  /** 设置 git 自动快照开关 */
+  async setAutoCheckpoint(enabled: boolean): Promise<SecurityConfig> {
+    return invoke<SecurityConfig>('set_auto_checkpoint', { enabled })
+  },
+
   /** 记录一条审批历史 */
   async recordApproval(command: string, approved: boolean, runId: string): Promise<SecurityConfig> {
     return invoke<SecurityConfig>('record_approval', { command, approved, runId })

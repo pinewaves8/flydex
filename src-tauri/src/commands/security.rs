@@ -35,6 +35,12 @@ pub fn set_approval_policy(policy: String) -> Result<SecurityConfig, String> {
     SecurityService::set_approval_policy(parsed).map_err(|e| e.to_string())
 }
 
+/// 设置 git 自动快照开关（turn/completed 后自动 commit 本地快照）
+#[command]
+pub fn set_auto_checkpoint(enabled: bool) -> Result<SecurityConfig, String> {
+    SecurityService::set_auto_checkpoint(enabled).map_err(|e| e.to_string())
+}
+
 /// 记录一条审批历史
 #[command]
 pub fn record_approval(

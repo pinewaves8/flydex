@@ -16,6 +16,7 @@ interface SecurityState {
   loadRules: () => Promise<void>
   setSandboxMode: (mode: SandboxMode) => Promise<boolean>
   setApprovalPolicy: (policy: ApprovalPolicy) => Promise<boolean>
+  setAutoCheckpoint: (enabled: boolean) => Promise<boolean>
   addRule: (pattern: string, action: RuleAction, note?: string) => Promise<boolean>
   removeRule: (index: number) => Promise<boolean>
   clearRules: () => Promise<void>
@@ -59,6 +60,17 @@ export const useSecurityStore = create<SecurityState>((set) => ({
       return true
     } catch (err) {
       console.error('[security] setApprovalPolicy failed', err)
+      return false
+    }
+  },
+
+  setAutoCheckpoint: async (enabled) => {
+    try {
+      const config = await securityService.setAutoCheckpoint(enabled)
+      set({ config })
+      return true
+    } catch (err) {
+      console.error('[security] setAutoCheckpoint failed', err)
       return false
     }
   },

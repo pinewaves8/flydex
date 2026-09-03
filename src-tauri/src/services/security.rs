@@ -262,6 +262,14 @@ impl SecurityService {
         Self::load().auto_checkpoint
     }
 
+    /// 更新 git 自动快照开关
+    pub fn set_auto_checkpoint(enabled: bool) -> std::io::Result<SecurityConfig> {
+        let mut config = Self::load();
+        config.auto_checkpoint = enabled;
+        Self::save(&config)?;
+        Ok(config)
+    }
+
     pub fn load_rules() -> PermissionRules {
         let path = Self::rules_file();
         if !path.exists() {

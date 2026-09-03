@@ -32,6 +32,8 @@ export interface PermissionRules {
 export interface SecurityConfig {
   sandbox_mode: SandboxMode
   approval_policy: ApprovalPolicy
+  /** git 自动快照开关：每轮 turn 完成后自动 commit 本地快照（对齐 Claude Code） */
+  auto_checkpoint: boolean
   history: ApprovalRecord[]
 }
 
