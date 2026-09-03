@@ -6,6 +6,7 @@ export type CodexJsonEvent =
   | { type: 'item.started'; item: CodexItem }
   | { type: 'item.completed'; item: CodexItem }
   | { type: 'turn.completed'; usage?: CodexUsage }
+  | { type: 'error'; message: string }
 
 /** codex 输出的项目 */
 export type CodexItem =

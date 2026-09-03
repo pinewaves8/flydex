@@ -81,7 +81,22 @@ export function SubagentPanel({ open, onClose, defaultWorkdir, defaultModel }: S
           const t = prev.find((x) => x.runId && x.runId === p.run_id)
           if (!t) return prev
           if (p.type === 'Json') {
-            const j = p.data as { type?: string; item?: { type?: string; text?: unknown } }
+            const j = p.data as {
+              type?: string
+              message?: string
+              item?: { type?: string; text?: unknown }
+            }
+            if (j?.type === 'error' && j.message) {
+              // 模型 API 错误/重连提示显示到该子代理输出
+              return prev.map((x) =>
+                x.id === t.id
+                  ? {
+                      ...x,
+                      lines: [...x.lines, { kind: 'stderr' as const, text: `⚠️ ${j.message}` }],
+                    }
+                  : x,
+              )
+            }
             if (j?.type === 'item.completed' && j.item?.type === 'agent_message') {
               // 记录最后一条 agent 消息作为"结论摘要"
               return prev.map((x) =>

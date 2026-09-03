@@ -104,6 +104,10 @@ export function useCodexSession() {
           text: `▸ 会话已创建 (ID: ${event.thread_id.slice(0, 8)}…)`,
           kind: 'system',
         })
+      } else if (event.type === 'error') {
+        // 模型 API 错误/重连提示（如 "Reconnecting... high demand"）：显示给用户，
+        // 避免 codex 卡在重连时前端一直 running 却无任何反馈。
+        store.appendOutput({ text: `⚠️ ${event.message}`, kind: 'stderr' })
       } else if (event.type === 'turn.started') {
         // 新的一轮：重置计划/审查消息追踪（每轮独立）
         lastPlanMsgId = null
