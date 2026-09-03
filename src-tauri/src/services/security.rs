@@ -82,8 +82,15 @@ pub struct ApprovalRecord {
 pub struct SecurityConfig {
     pub sandbox_mode: SandboxMode,
     pub approval_policy: ApprovalPolicy,
+    /// git 自动快照开关（默认开启；对齐 Claude Code 的每轮自动 commit 快照）
+    #[serde(default = "default_true")]
+    pub auto_checkpoint: bool,
     /// 审批历史（最多保留 200 条）
     pub history: Vec<ApprovalRecord>,
+}
+
+fn default_true() -> bool {
+    true
 }
 
 impl Default for SecurityConfig {
@@ -94,6 +101,7 @@ impl Default for SecurityConfig {
         Self {
             sandbox_mode: SandboxMode::DangerFullAccess,
             approval_policy: ApprovalPolicy::OnRequest,
+            auto_checkpoint: true,
             history: Vec::new(),
         }
     }
@@ -249,6 +257,11 @@ impl SecurityService {
     }
 
     /// 读取规则集（文件不存在/损坏 → 空规则集）
+    /// git 自动快照开关（默认开启）
+    pub fn checkpoint_enabled() -> bool {
+        Self::load().auto_checkpoint
+    }
+
     pub fn load_rules() -> PermissionRules {
         let path = Self::rules_file();
         if !path.exists() {

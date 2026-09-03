@@ -888,6 +888,8 @@ src-tauri/src/
 | **预估** | 4 天 |
 | **讨论要点** | checkpoint 落盘频率与开销；沙箱实现方案（Windows 上 Docker/VM 成本高，是否降级为权限最小化）；重试哪些命令安全 |
 
+> **6.4 ① git 自动快照（2026-09-03 已实现）**：对齐 Claude Code 的"每轮自动 commit 快照"→ 每轮 `turn/completed` 后对工作区 `git add -A && git commit`（本地，不 push）。新增 `src-tauri/src/services/git_checkpoint.rs`：`checkpoint_workspace(cwd)` 开关（`~/.flydex/security.json` 的 `auto_checkpoint`，serde default true，兼容旧文件）+ 非 git 仓库/无变更/失败静默跳过 + 独立线程不阻塞 reader。接入：`appserver_client.rs` 静态 `THREAD_CWD`（thread_start 写入 cwd，turn/completed 读后 spawn 线程执行）。**单测 2/2 通过**（有变更提交 + 无变更跳过 / 非 git 跳过）。cargo check EXIT=0。**前端开关 UI 待补**。
+
 ### 6.5 自进化闭环（skill 自动沉淀 + 记忆自动更新 + 配置反馈优化）
 
 | 项 | 内容 |

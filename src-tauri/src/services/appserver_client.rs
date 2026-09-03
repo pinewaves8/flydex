@@ -19,6 +19,7 @@ use std::time::Duration;
 
 use tauri::{AppHandle, Emitter};
 
+use crate::services::git_checkpoint;
 use crate::services::security::{ApprovalRecord, RuleDecision, SecurityService};
 use crate::types::codex::{CodexEvent, CodexEventBody};
 
@@ -52,6 +53,13 @@ fn slot() -> &'static Mutex<Option<Arc<AppServerClient>>> {
 /// 保证 invoke 在 turn 真正结束前不返回（前端 run() 的"invoke 返回即结束"兜底
 /// 因此不会误触发、pendingRunId 不会被提前清空导致事件被丢弃）。
 static TURN_DONE: OnceLock<Mutex<HashMap<String, mpsc::Sender<()>>>> = OnceLock::new();
+
+/// thread_id → cwd：turn/completed 时 git 自动快照用（reader 线程拿不到 &self，用静态旁路）
+static THREAD_CWD: OnceLock<Mutex<HashMap<String, String>>> = OnceLock::new();
+
+fn thread_cwd() -> &'static Mutex<HashMap<String, String>> {
+    THREAD_CWD.get_or_init(|| Mutex::new(HashMap::new()))
+}
 
 pub fn turn_done() -> &'static Mutex<HashMap<String, mpsc::Sender<()>>> {
     TURN_DONE.get_or_init(|| Mutex::new(HashMap::new()))
@@ -344,6 +352,7 @@ impl AppServerClient {
             .and_then(|v| v.as_str())
             .unwrap_or("")
             .to_string();
+        thread_cwd().lock().unwrap().insert(thread_id.clone(), cwd.clone());
         self.thread_registry.lock().unwrap().insert(
             thread_id.clone(),
             ThreadMeta { thread_id: thread_id.clone(), model, cwd },
@@ -590,6 +599,12 @@ impl AppServerClient {
                 // 通知 run_command 的 turn 等待者（invoke 在 turn 结束后才返回）
                 if let Some(tx) = turn_done().lock().unwrap().remove(&run_id) {
                     let _ = tx.send(());
+                }
+                // git 自动快照（独立线程，不阻塞 reader；非 git 仓库/无变更/开关关闭自动跳过）
+                if let Some(cwd) = thread_cwd().lock().unwrap().get(&thread_id).cloned() {
+                    std::thread::spawn(move || {
+                        let _ = git_checkpoint::checkpoint_workspace(&cwd);
+                    });
                 }
                 Some(ev)
             }
