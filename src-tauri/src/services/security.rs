@@ -269,7 +269,13 @@ impl SecurityService {
     /// 新增规则（同 pattern 同 action 去重）
     pub fn add_rule(pattern: String, action: RuleAction, note: String) -> std::io::Result<PermissionRules> {
         let mut rules = Self::load_rules();
-        let pattern_trim = pattern.trim().to_string();
+        // 防呆：剥离误填的 "pattern:"/"pattern " 字段前缀（如 "pattern test_delete" → "test_delete"）
+        let mut pattern_trim = pattern.trim().to_string();
+        if let Some(rest) = pattern_trim.strip_prefix("pattern").map(|s| s.trim_start_matches([':', '：', ' '])) {
+            if !rest.is_empty() {
+                pattern_trim = rest.to_string();
+            }
+        }
         if pattern_trim.is_empty() {
             return Ok(rules);
         }

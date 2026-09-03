@@ -482,7 +482,7 @@ impl AppServerClient {
                     })),
                 },
             );
-            debug_log!("[flydex-appserver] approval id={approval_id} decision={} method={method}", decision.tag());
+            debug_log!("[flydex-appserver] approval id={approval_id} decision={} method={method} command={}", decision.tag(), command.chars().take(200).collect::<String>());
             match &decision {
                 // deny：工具执行前直接拒绝（先判断再执行），并记录审计
                 RuleDecision::BuiltinDeny(reason) | RuleDecision::UserDeny(reason) => {

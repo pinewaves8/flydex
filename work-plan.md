@@ -856,6 +856,11 @@ src-tauri/src/
 > - **debug_log 编码**：确认文件本就是 UTF-8（101 行中文全部正常），乱码仅发生在 GBK 控制台 eprintln 显示层，无需修改。
 > - **deny 命中卡片化**：前端 `CodexMessage.kind` 新增 `'deny'`，auto_deny 由系统文本改为红色盾牌卡片（命令 + 命中原因 + 时间），ChatPanel 新增渲染分支（`ShieldAlert` icon）。auto_accept 保持系统消息（低频正面事件）。
 
+> **6.2 收尾验证（2026-09-03 GUI 实测全绿）**：
+> - **deny 卡片链路完整打通**：规则 `deny test_delete` → 命令 `Out-File test_delete_check.txt` → `decision=auto_deny`（日志）→ 前端红色盾牌卡片「已自动拒绝」+ 命令 + 原因「用户规则：test_delete」→ 审计落盘 `approved=False`（history 8 条）→ 模型感知拒绝并停止。**不再弹审批卡**，实现"先判断再执行"。
+> - **修复规则误填前缀 bug**：用户经 UI 添加规则时把字段前缀也填入 pattern（`pattern test_delete`），导致命令子串匹配失败退化为 ask。**前端 + 后端 `add_rule` 双保险剥离 `pattern:`/`pattern ` 前缀**；规则文件已修正为 `test_delete`（无 BOM）。
+> - **诊断增强**：审批日志加入完整 command（截断 200 字符）：`approval id=... decision=... method=... command=...`，便于排查匹配问题。
+
 
 ### 6.3 工具生态（web 工具 + 子代理）
 

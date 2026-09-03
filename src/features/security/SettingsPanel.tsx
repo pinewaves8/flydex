@@ -107,7 +107,8 @@ export function SettingsPanel() {
   }
 
   const handleAddRule = async () => {
-    const pattern = rulePattern.trim()
+    // 防呆：剥离误填的 "pattern:"/"pattern " 字段前缀（如 "pattern test_delete" → "test_delete"）
+    const pattern = rulePattern.trim().replace(/^pattern[\s:：]*/i, '')
     if (!pattern) return
     const ok = await addRule(pattern, ruleAction, ruleNote.trim() || undefined)
     if (ok) {
