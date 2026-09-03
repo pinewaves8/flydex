@@ -7,7 +7,7 @@ use std::time::Duration;
 use tauri::{AppHandle, Emitter};
 
 use crate::services::security::SecurityService;
-use crate::types::codex::CodexEvent;
+use crate::types::codex::{CodexEvent, CodexEventBody};
 
 /// Codex 执行模式
 #[derive(Debug, Clone, Copy)]
@@ -183,6 +183,74 @@ impl CodexManager {
     /// * `thread_id` - 恢复指定会话（可选）
     /// * `run_id` - 本次运行的唯一标识（审批/停止用）
     /// * `session_model` - 会话级模型覆盖（可选，None 用全局默认）
+    /// 搜索预取（确定性兜底）：命中搜索意图时，由 flydex 代检索一次并注入结果。
+    /// 仅命中搜索触发词的指令生效，不影响其他对话；预取失败/无搜索意图时返回 None。
+    fn prefetch_search(cmd: &str) -> Option<String> {
+        let user_input = Self::extract_instruction(cmd)?;
+        if !Self::is_search_intent(&user_input) {
+            return None;
+        }
+        let query = Self::extract_query(&user_input);
+        if query.is_empty() {
+            return None;
+        }
+        let output = Self::run_search_prefetch(&query)?;
+        Some(format!(
+            "【预取搜索结果·flydex 自动检索，仅供参考，可能含同名/泛化页面，请以 web_search 精确核实为准】\n{}",
+            output
+        ))
+    }
+
+    /// 从前端注入格式中提取【用户指令】后的内容
+    fn extract_instruction(cmd: &str) -> Option<String> {
+        const MARK: &str = "【用户指令】";
+        let start = cmd.find(MARK)? + MARK.len();
+        let rest = &cmd[start..];
+        let end = rest.find('\n').unwrap_or(rest.len());
+        let s = rest[..end].trim();
+        if s.is_empty() {
+            None
+        } else {
+            Some(s.to_string())
+        }
+    }
+
+    /// 检测是否命中搜索意图（与前端 matchTriggers 对齐）
+    fn is_search_intent(s: &str) -> bool {
+        const WORDS: &[&str] = &["搜索", "搜一下", "搜索一下", "查一下", "查找", "查询", "检索", "search", "look up", "find"];
+        let lower = s.to_lowercase();
+        WORDS.iter().any(|w| lower.contains(w))
+    }
+
+    /// 提取搜索查询词：去掉"搜索/查找/查询"等动词与客气词，保留实体
+    fn extract_query(s: &str) -> String {
+        let cleaned = s
+            .replace("搜索一下", " ")
+            .replace("搜索", " ")
+            .replace("搜一下", " ")
+            .replace("查一下", " ")
+            .replace("查找", " ")
+            .replace("查询", " ")
+            .replace("检索", " ")
+            .replace("帮我", " ")
+            .replace("请", " ");
+        cleaned.split_whitespace().collect::<Vec<_>>().join(" ")
+    }
+
+    /// 调用 web-search server 的 CLI 预取模式执行一次搜索
+    fn run_search_prefetch(query: &str) -> Option<String> {
+        // web-search server 固定位于项目 mcp/ 下；预取失败时静默返回 None，不影响原路径
+        let server = r"C:\llm\flydex\mcp\web-search-server.mjs";
+        let out = std::process::Command::new("node")
+            .args([server, "--query", query])
+            .output()
+            .ok()?;
+        if !out.status.success() || out.stdout.is_empty() {
+            return None;
+        }
+        String::from_utf8(out.stdout).ok().filter(|s| !s.trim().is_empty())
+    }
+
     pub fn run_command(
         app: AppHandle,
         command: String,
@@ -192,6 +260,7 @@ impl CodexManager {
         run_id: String,
         session_model: Option<String>,
         images: Option<Vec<String>>,
+        sandbox: Option<String>,
     ) -> Result<(), String> {
         // 构建 codex 参数
         let mut args: Vec<String> = vec!["exec".to_string()];
@@ -227,9 +296,13 @@ impl CodexManager {
         let sec = SecurityService::load();
         // 所有 -c 值一律不加引号（cmd /c 重新解析会破坏内嵌引号），含连字符的值也可安全裸传
         // 计划模式强制 read-only 沙箱（模型只能分析出计划，无法修改任何文件）；其余用用户安全配置
-        let sandbox = match mode {
-            CodexExecMode::Plan | CodexExecMode::Review => "read-only",
-            _ => sec.sandbox_mode.as_codex(),
+        // 沙箱边界：per-run 覆盖（子代理可配）> 计划/审查强制只读 > 全局配置
+        let sandbox = match sandbox {
+            Some(s) => s,
+            None => match mode {
+                CodexExecMode::Plan | CodexExecMode::Review => "read-only".to_string(),
+                _ => sec.sandbox_mode.as_codex().to_string(),
+            },
         };
         args.push("-c".to_string());
         args.push(format!("sandbox_mode={}", sandbox));
@@ -267,6 +340,11 @@ impl CodexManager {
         let memory_block = crate::services::memory::MemoryService::build_inject_block(workdir.as_deref());
         if !memory_block.trim().is_empty() {
             final_command = format!("{}\n\n{}", memory_block.trim_end(), final_command);
+        }
+        // 搜索预取（确定性兜底）：命中搜索意图时，由 flydex 代检索一次并注入结果，
+        // 不依赖模型自觉调用 web_search。仅命中搜索触发词的指令生效，不影响其他对话。
+        if let Some(prefetch) = Self::prefetch_search(&final_command) {
+            final_command = format!("{}\n\n{}", final_command.trim_end(), prefetch);
         }
 // 图像附件：通过 -i 传给 codex（相对路径 ./.flydex-attachments/xxx）。
         // 注意：-i/--image 是 num_args=1.. 的贪婪多值参数，会吞掉其后的所有非 option 参数（含 prompt），
@@ -349,7 +427,10 @@ impl CodexManager {
             },
         );
 
-        app.emit("codex-output", CodexEvent::Started { pid })
+        app.emit(
+            "codex-output",
+            CodexEvent { run_id: run_id.clone(), body: CodexEventBody::Started { pid } },
+        )
             .map_err(|e| format!("Failed to emit started event: {}", e))?;
 
         // 读线程：阻塞读 master（TTY 行缓冲 → 流式），过滤控制序列，解析 JSONL
@@ -389,11 +470,16 @@ impl CodexManager {
                         if json.get("type").and_then(|v| v.as_str()) == Some("turn.completed") {
                             turn_done_reader.store(true, std::sync::atomic::Ordering::Relaxed);
                         }
-                        let _ = app_reader.emit("codex-output", CodexEvent::Json(json));
+                        let _ = app_reader.emit(
+                            "codex-output",
+                            CodexEvent { run_id: run_id_reader.clone(), body: CodexEventBody::Json(json) },
+                        );
                     }
                     Err(_) => {
-                        let _ = app_reader
-                            .emit("codex-output", CodexEvent::Output { text: buf.to_string() });
+                        let _ = app_reader.emit(
+                                "codex-output",
+                                CodexEvent { run_id: run_id_reader.clone(), body: CodexEventBody::Output { text: buf.to_string() } },
+                            );
                     }
                 }
             };
@@ -444,7 +530,10 @@ impl CodexManager {
                     // 保持 stdin 打开，让 codex 自然收尾退出（实测 ~16s 内）。
                     if turn_done.load(std::sync::atomic::Ordering::Relaxed) && !done_sent {
                         done_sent = true;
-                        let _ = app.emit("codex-done", CodexEvent::Done { exit_code: 0 });
+                        let _ = app.emit(
+                            "codex-done",
+                            CodexEvent { run_id: run_id.clone(), body: CodexEventBody::Done { exit_code: 0 } },
+                        );
                     }
                     if start.elapsed() > CODEX_TIMEOUT {
                         let mut g = child.lock().unwrap();
@@ -462,7 +551,10 @@ impl CodexManager {
 
         // 推送完成事件（若 turn.completed 已提前推送过，则不重复）
         if !done_sent {
-            app.emit("codex-done", CodexEvent::Done { exit_code })
+            app.emit(
+                "codex-done",
+                CodexEvent { run_id: run_id.clone(), body: CodexEventBody::Done { exit_code } },
+            )
                 .map_err(|e| format!("Failed to emit codex done event: {}", e))?;
         }
 

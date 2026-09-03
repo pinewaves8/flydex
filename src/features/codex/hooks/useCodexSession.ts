@@ -104,6 +104,10 @@ export function useCodexSession() {
           text: `▸ 会话已创建 (ID: ${event.thread_id.slice(0, 8)}…)`,
           kind: 'system',
         })
+      } else if (event.type === 'error') {
+        // 模型 API 错误/重连提示（如 "Reconnecting... high demand"）：显示给用户，
+        // 避免 codex 卡在重连时前端一直 running 却无任何反馈。
+        store.appendOutput({ text: `⚠️ ${event.message}`, kind: 'stderr' })
       } else if (event.type === 'turn.started') {
         // 新的一轮：重置计划/审查消息追踪（每轮独立）
         lastPlanMsgId = null
@@ -233,6 +237,10 @@ export function useCodexSession() {
         const payload = event.payload
         const store = useCodexStore.getState()
 
+        // 子代理并行（6.3）：只处理本会话自己的 run，避免子代理事件污染主会话
+        const myRunId = useCodexStore.getState().pendingRunId
+        if (payload.run_id && payload.run_id !== myRunId) return
+
         if (payload.type === 'Started') {
           store.appendOutput({
             text: `▸ Codex 已启动 (PID: ${payload.data.pid})，正在思考…`,
@@ -249,6 +257,9 @@ export function useCodexSession() {
 
       const done = await listen<CodexEvent>('codex-done', (event) => {
         const payload = event.payload
+        // 子代理并行（6.3）：只处理本会话自己的 run
+        const myRunId = useCodexStore.getState().pendingRunId
+        if (payload.run_id && payload.run_id !== myRunId) return
         if (payload.type === 'Done') {
           const store = useCodexStore.getState()
           // 兜底：计划/审查模式下若本轮有 agent 消息但未转成卡片（turn.completed

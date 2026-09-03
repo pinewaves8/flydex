@@ -1,5 +1,19 @@
 import { invoke } from '@tauri-apps/api/core'
-import { Boxes, CheckCircle2, Loader2, Pencil, Plus, Plug, Trash2, XCircle } from 'lucide-react'
+import {
+  Boxes,
+  CheckCircle2,
+  Download,
+  FolderGit2,
+  Github,
+  Globe,
+  Loader2,
+  Pencil,
+  Play,
+  Plug,
+  Plus,
+  Trash2,
+  XCircle,
+} from 'lucide-react'
 import { useEffect, useState } from 'react'
 
 /** MCP Server 配置 */
@@ -32,6 +46,77 @@ const APPROVAL_OPTIONS = [
   { value: 'auto', label: '自动允许（免审批）' },
   { value: 'prompt', label: '每次调用询问' },
   { value: 'writes', label: '仅写操作询问' },
+]
+
+/** MCP 模板市场（6.3）：常用 Server 一键接入 */
+interface McpTemplate {
+  key: string
+  name: string
+  label: string
+  desc: string
+  icon: React.ReactNode
+  builtin?: boolean
+  build: (() => Promise<McpServer>) | (() => McpServer)
+}
+
+const MCP_TEMPLATES: McpTemplate[] = [
+  {
+    key: 'web-search',
+    name: 'web-search',
+    label: 'flydex 网络工具',
+    desc: '内置 web_search + web_fetch：联网搜索与网页抓取，零依赖，走本地 node 运行',
+    icon: <Globe className="h-4 w-4" />,
+    builtin: true,
+    build: async () => {
+      const server = await invoke<McpServer>('mcp_builtin_web_server')
+      return server
+    },
+  },
+  {
+    key: 'github',
+    name: 'github',
+    label: 'GitHub',
+    desc: '仓库、Issue、PR、代码搜索等 GitHub 操作。需设置 GITHUB_PERSONAL_ACCESS_TOKEN',
+    icon: <Github className="h-4 w-4" />,
+    build: () => ({
+      name: 'github',
+      transport: 'stdio' as const,
+      command: 'npx',
+      args: ['-y', '@github/mcp-server'],
+      env: { GITHUB_PERSONAL_ACCESS_TOKEN: '' },
+      approval_mode: 'approve',
+    }),
+  },
+  {
+    key: 'filesystem',
+    name: 'filesystem',
+    label: '文件系统',
+    desc: '安全的文件读写与目录操作（限定在指定目录内）。可接入后编辑配置路径',
+    icon: <FolderGit2 className="h-4 w-4" />,
+    build: () => ({
+      name: 'filesystem',
+      transport: 'stdio' as const,
+      command: 'npx',
+      args: ['-y', '@modelcontextprotocol/server-filesystem', 'C:\\'],
+      env: {},
+      approval_mode: 'approve',
+    }),
+  },
+  {
+    key: 'playwright',
+    name: 'playwright',
+    label: 'Playwright 浏览器',
+    desc: '浏览器自动化：打开网页、点击、填写表单、截图等。适合需要真实浏览器交互的场景',
+    icon: <Play className="h-4 w-4" />,
+    build: () => ({
+      name: 'playwright',
+      transport: 'stdio' as const,
+      command: 'npx',
+      args: ['-y', '@playwright/mcp@latest'],
+      env: {},
+      approval_mode: 'approve',
+    }),
+  },
 ]
 
 export function McpSettings() {
@@ -162,6 +247,27 @@ export function McpSettings() {
     }
   }
 
+  const [templateBusy, setTemplateBusy] = useState<string | null>(null)
+
+  /** 一键接入模板：构造 server 配置并写入 */
+  const applyTemplate = async (t: McpTemplate) => {
+    if (servers.some((s) => s.name === t.name)) {
+      setError(`Server「${t.name}」已存在，可直接编辑或删除后重新接入。`)
+      return
+    }
+    setTemplateBusy(t.key)
+    setError('')
+    try {
+      const server = await t.build()
+      const list = await invoke<McpServer[]>('mcp_save', { server })
+      setServers(list)
+    } catch (e) {
+      setError(String(e))
+    } finally {
+      setTemplateBusy(null)
+    }
+  }
+
   if (loading) {
     return <div className="py-10 text-center text-sm text-muted-foreground">加载 MCP 配置…</div>
   }
@@ -179,6 +285,66 @@ export function McpSettings() {
           {error}
         </div>
       )}
+
+      {/* 模板市场（6.3）：一键接入 */}
+      <section>
+        <h2 className="mb-2 text-sm font-medium text-muted-foreground">
+          模板市场
+          <span className="ml-1 text-xs opacity-60">（一键接入常用 Server）</span>
+        </h2>
+        <div className="grid grid-cols-1 gap-2 sm:grid-cols-2">
+          {MCP_TEMPLATES.map((t) => {
+            const connected = servers.some((s) => s.name === t.name)
+            return (
+              <div key={t.key} className="rounded-lg border border-border bg-card p-3">
+                <div className="flex items-center gap-2">
+                  <span className="flex h-7 w-7 items-center justify-center rounded bg-primary/10 text-primary">
+                    {t.icon}
+                  </span>
+                  <div className="min-w-0 flex-1">
+                    <div className="flex items-center gap-1.5 text-sm font-medium">
+                      {t.label}
+                      {t.builtin && (
+                        <span className="rounded bg-primary/10 px-1 py-px text-[10px] text-primary">
+                          内置
+                        </span>
+                      )}
+                    </div>
+                    <div className="truncate font-mono text-[10px] text-muted-foreground">
+                      {t.name}
+                    </div>
+                  </div>
+                  <button
+                    onClick={() => void applyTemplate(t)}
+                    disabled={connected || templateBusy === t.key}
+                    className={`flex items-center gap-1 rounded-md px-2.5 py-1.5 text-xs ${
+                      connected
+                        ? 'cursor-default bg-muted text-muted-foreground'
+                        : 'bg-primary text-primary-foreground hover:opacity-90 disabled:opacity-40'
+                    }`}
+                    title={connected ? '已接入' : '一键写入配置'}
+                  >
+                    {templateBusy === t.key ? (
+                      <Loader2 className="h-3 w-3 animate-spin" />
+                    ) : connected ? (
+                      <CheckCircle2 className="h-3 w-3" />
+                    ) : (
+                      <Download className="h-3 w-3" />
+                    )}
+                    {connected ? '已接入' : '接入'}
+                  </button>
+                </div>
+                <p className="mt-2 text-[11px] leading-relaxed text-muted-foreground">{t.desc}</p>
+              </div>
+            )
+          })}
+        </div>
+        <p className="mt-2 text-[11px] text-muted-foreground">
+          GitHub / Filesystem / Playwright 需本机安装 Node
+          且首次运行会下载依赖；接入后可在下方列表编辑 （如补全
+          Token、修改目录路径），并「测试」验证可启动。
+        </p>
+      </section>
 
       {/* Server 列表 */}
       <section>
