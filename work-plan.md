@@ -1016,9 +1016,15 @@ src-tauri/src/
 
 ### 7.4 扩展与体验（P2）
 
-- **Skills 市场**：从本地 skill 目录导入/导出，低成本获得生态雏形。
+- **Skills 市场** ✅ 已完成 7.4.1（2026-09-04）
 - **Tasks API**：持久任务列表 + 依赖关系。
 - **Session Forking**：并行时间线（深化已有 fork_session + Phase 3 thread/fork 通道）。
+
+> **7.4.1 Skills 市场（已完成 + GUI 实测通过，53b4d4c + fc83631）**：
+> 后端 skill_import：from→to 复制 .codex/skills/<name>（递归含 assets），方向通用（导出=项目→目标目录；导入=目标目录→项目）；目标已存在同名先回收 logs/skill-trash/ 可回滚；单测 8/8（整目录复制/缺源报错/覆盖回收）。
+> 前端：顶部「导入」按钮（选源目录 → 勾选多选面板[全选/多选/取消] → 批量导入）；项目 skill 卡片「导出」按钮（选目标目录）；列表 key 加 source 前缀防同名冲突。
+> **修复「导入成功但看不到」**：根因 store.load 内置同名优先过滤（web-search 为内置名被静默过滤，文件已写入但 UI 不显示项目版）→ Settings 项目来源改为文件系统独立扫描（listProjectSkills），与内置同名也透明可见（带「项目」标签）。
+> **GUI 实测**：导入 flydex 的 web-search 后项目来源可见；勾选多选面板；导出到目标目录 + 覆盖回收均通过。
 
 ### 定位差异（确认不跟）
 
