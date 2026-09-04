@@ -908,6 +908,8 @@ src-tauri/src/
 
 > **6.5 自进化闭环（2026-09-04 开工，已对齐收敛）**：方向对齐 Claude Code + 用户拍板——**显式确认沉淀**（一键触发 + 校验门禁），**不做全自动管线**（不自动调优 system prompt，安全边界要求默认关闭）。范围收敛：① **skill 沉淀**：任务完成后一键触发 + 可复现性校验（SKILL.md 含可复现步骤）+ 显式确认入库，进 `.codex/skills/` 供后续自动命中；② **记忆显式更新**：任务完成后一键把"方案+踩坑"写入项目记忆（复用 6.1 memory.rs append_project_memory）；③ **配置反馈优化默认关闭**：留接口（成功率/耗时统计），不做自动调优。安全：所有自动动作写审计日志 + 可回滚（skill 入库/记忆写入均记录并可撤销）。
 
+> **6.5 skill 沉淀闭环（2026-09-04 已完成 + GUI 实测通过）**：后端 `services/skill.rs` 新增 `skill_validate`（校验门禁：frontmatter 必须含合法 name/description + 正文非空 >= 50 字符 + 可复现结构启发式）+ `create_skill`（校验通过才入库，写 `.codex/skills/<name>/SKILL.md`，同名先备份旧版到 `logs/skill-trash/`）+ `delete_skill`（先备份可回滚）；commands/skill.rs + lib.rs 注册 `skill_validate/skill_create/skill_delete`；单测 5/5。前端 `SkillSettings` 重写：新建技能表单（模板/校验/保存）+ 项目技能删除（回滚）+ 沉淀到项目记忆（复用 memoryService.appendProject）。沉淀的 skill 走 `.codex/skills/` 供 codex 自动命中（同 web-search 机制）；配置反馈优化默认关闭（不自动调优 system prompt）。**GUI 实测（cwd=C:\llm\jint）**：create → delete（备份到 skill-trash）→ 再 create 全链路通过；备份内容与 SKILL.md 完全一致（equal=True）；审计日志 `[flydex] skill create/delete/create` 3 条完整记录；沉淀记忆写入 `jint/.flydex/MEMORY.md` 含 [my-skill] skills 段。
+
 ---
 
 ### 安全边界（阶段6 全局强制）
