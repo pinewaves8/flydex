@@ -277,8 +277,58 @@ impl AppServerClient {
         Ok(client)
     }
 
-    /// 发送请求并等待响应（超时兜底）
+    /// 发送请求并等待响应（超时兜底）。
+    /// 瞬时错误自动重试（6.4 ③）：-32001 Server overloaded（官方建议重试）或
+    /// 只读查询类方法超时；业务失败（thread not found / 审批拒绝 / 参数错误）不重试。
     pub fn request(&self, method: &str, params: Option<serde_json::Value>) -> Result<serde_json::Value, String> {
+        const MAX_RETRY: u32 = 3;
+        let mut attempt: u32 = 0;
+        loop {
+            match self.request_once(method, params.clone()) {
+                Ok(v) => return Ok(v),
+                Err(e) => {
+                    attempt += 1;
+                    if attempt >= MAX_RETRY || !Self::is_retryable_err(&e, method) {
+                        return Err(e);
+                    }
+                    // 指数退避 + jitter：300 / 600 / 1200 ms
+                    let base = 300u64 * (1 << (attempt - 1));
+                    let jitter = std::time::SystemTime::now()
+                        .duration_since(std::time::UNIX_EPOCH)
+                        .map(|d| d.subsec_nanos() as u64 % 150)
+                        .unwrap_or(0);
+                    debug_log!(
+                        "[flydex-appserver] retry {method} attempt={attempt} after {}ms err={}",
+                        base + jitter,
+                        e
+                    );
+                    std::thread::sleep(Duration::from_millis(base + jitter));
+                }
+            }
+        }
+    }
+
+    /// 瞬时错误判定：-32001 Server overloaded / 明确 retry later，或只读查询类方法超时
+    fn is_retryable_err(err: &str, method: &str) -> bool {
+        if err.contains("overloaded") || err.contains("retry later") || err.contains("-32001") {
+            return true;
+        }
+        const RETRYABLE_TIMEOUT_METHODS: &[&str] = &[
+            "model/list",
+            "thread/list",
+            "thread/read",
+            "thread/loaded/list",
+            "config/read",
+            "configRequirements/read",
+            "skills/list",
+            "collaborationMode/list",
+            "mcpServerStatus/list",
+            "experimentalFeature/list",
+        ];
+        err.contains("超时") && RETRYABLE_TIMEOUT_METHODS.contains(&method)
+    }
+
+    fn request_once(&self, method: &str, params: Option<serde_json::Value>) -> Result<serde_json::Value, String> {
         let id = self.next_id.fetch_add(1, Ordering::Relaxed);
         debug_log!("[flydex-appserver] >>> request {method} id={id}");
         let (tx, rx) = mpsc::channel();
@@ -291,9 +341,11 @@ impl AppServerClient {
                 if v.is_null() {
                     debug_log!("[flydex-appserver] <<< request {method} id={id} NULL (daemon exited)");
                     Err(format!("请求 {method} 无响应（daemon 已退出）"))
-                } else if v.get("error").is_some() {
-                    debug_log!("[flydex-appserver] <<< request {method} id={id} ERROR {:?}", v["error"]);
-                    Err(format!("{method} 错误: {}", v["error"]))
+                } else if let Some(err) = v.get("error") {
+                    debug_log!("[flydex-appserver] <<< request {method} id={id} ERROR {:?}", err);
+                    let code = err.get("code").and_then(|c| c.as_i64()).unwrap_or(0);
+                    let msg = err.get("message").and_then(|m| m.as_str()).unwrap_or("");
+                    Err(format!("{method} 错误: code={code} message={msg}"))
                 } else {
                     debug_log!("[flydex-appserver] <<< request {method} id={id} OK");
                     Ok(v.get("result").cloned().unwrap_or(serde_json::Value::Null))

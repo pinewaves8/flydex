@@ -37,6 +37,7 @@ use commands::memory::{
 };
 use commands::skill::{skill_list, skill_read};
 use commands::terminal::resolve_dir;
+use commands::workspace::list_directory;
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
@@ -67,6 +68,8 @@ pub fn run() {
             fork_session,
             search_sessions,
             export_session,
+            // workspace
+            list_directory,
             // security
             get_security,
             set_sandbox_mode,

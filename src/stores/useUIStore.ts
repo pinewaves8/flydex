@@ -1,6 +1,6 @@
 import { create } from 'zustand'
 
-export type View = 'codex' | 'projects' | 'terminal' | 'git' | 'settings'
+export type View = 'codex' | 'projects' | 'terminal' | 'git' | 'files' | 'settings'
 export type SettingsTab = 'security' | 'model' | 'mcp' | 'skills' | 'terminal'
 
 interface UIState {

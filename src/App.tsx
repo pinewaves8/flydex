@@ -3,6 +3,7 @@ import { useEffect } from 'react'
 import { Sidebar } from '@/components/layout/Sidebar'
 import { TitleBar } from '@/components/layout/TitleBar'
 import { ChatPanel } from '@/features/codex'
+import { FilesView } from '@/features/files/FilesView'
 import { GitPanel } from '@/features/git'
 import { ProjectsPanel } from '@/features/project'
 import { SettingsPanel } from '@/features/security/SettingsPanel'
@@ -49,6 +50,7 @@ function App() {
           {currentView === 'projects' && <ProjectsPanel />}
           {currentView === 'terminal' && <TerminalPanel />}
           {currentView === 'git' && <GitPanel />}
+          {currentView === 'files' && <FilesView />}
           {currentView === 'settings' && <SettingsPanel />}
         </section>
       </main>

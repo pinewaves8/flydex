@@ -12,6 +12,7 @@ import {
   Download,
   X,
   RotateCcw,
+  FolderTree,
 } from 'lucide-react'
 import { useEffect, useRef, useState } from 'react'
 
@@ -23,6 +24,7 @@ import type { ExportFormat, SessionSearchHit } from '@/types/project'
 const NAV_ITEMS: { view: View; label: string; icon: typeof MessageSquare }[] = [
   { view: 'codex', label: 'Codex', icon: MessageSquare },
   { view: 'projects', label: 'Projects', icon: FolderOpen },
+  { view: 'files', label: 'Files', icon: FolderTree },
   { view: 'terminal', label: 'Terminal', icon: Terminal },
   { view: 'git', label: 'Git', icon: GitBranch },
 ]
