@@ -7,6 +7,7 @@ pub mod model;
 pub mod project;
 pub mod security;
 pub mod session;
+pub mod task;
 pub mod skill;
 pub mod terminal;
 pub mod workspace;

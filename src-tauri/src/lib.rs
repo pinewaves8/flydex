@@ -37,6 +37,7 @@ use commands::memory::{
     write_project_memory, write_user_memory,
 };
 use commands::skill::{skill_create, skill_delete, skill_import, skill_list, skill_read, skill_validate};
+use commands::task::{task_create, task_delete, task_list, task_update};
 use commands::terminal::resolve_dir;
 use commands::workspace::list_directory;
 
@@ -69,6 +70,11 @@ pub fn run() {
             fork_session,
             search_sessions,
             export_session,
+            // task
+            task_list,
+            task_create,
+            task_update,
+            task_delete,
             // workspace
             list_directory,
             // security

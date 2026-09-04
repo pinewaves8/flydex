@@ -36,6 +36,7 @@ import { ReviewCard } from './ReviewCard'
 import { Markdown } from '@/components/ui/Markdown'
 import { SkillPalette } from '@/features/skills/SkillPalette'
 import { SubagentPanel } from '@/features/subagent/SubagentPanel'
+import { TaskPanel } from '@/features/tasks/TaskPanel'
 import { memoryService } from '@/services/memoryService'
 import { useCodexStore } from '@/stores/useCodexStore'
 import { useModelStore } from '@/stores/useModelStore'
@@ -291,6 +292,7 @@ export function ChatPanel() {
   const [showSkillPalette, setShowSkillPalette] = useState(false)
   const [showMemoryPanel, setShowMemoryPanel] = useState(false)
   const [showSubagent, setShowSubagent] = useState(false)
+  const [showTaskPanel, setShowTaskPanel] = useState(false)
   // 图像附件：{ name: 原始文件名, dataUrl: 预览用 base64 data URL, path: 落盘后的相对路径, saving: 是否保存中 }
   const [attachments, setAttachments] = useState<
     { name: string; dataUrl: string; path: string; saving: boolean }[]
@@ -668,6 +670,14 @@ export function ChatPanel() {
             Skills
           </button>
           <button
+            onClick={() => setShowTaskPanel(true)}
+            className="flex items-center gap-1 rounded px-2 py-1 text-xs text-muted-foreground hover:bg-accent hover:text-accent-foreground"
+            title="任务（持久任务列表，对齐 Claude Code /tasks）"
+          >
+            <ListChecks className="h-3 w-3" />
+            Tasks
+          </button>
+          <button
             onClick={() => setShowMemoryPanel(true)}
             className="flex items-center gap-1 rounded px-2 py-1 text-xs text-muted-foreground hover:bg-accent hover:text-accent-foreground"
             title="记忆管理（查看/编辑项目记忆与用户记忆）"
@@ -804,6 +814,14 @@ export function ChatPanel() {
         onClose={() => setShowSubagent(false)}
         defaultWorkdir={currentSessionWorkdir || workspaceCwd}
         defaultModel={currentSessionModel}
+      />
+
+      {/* 任务面板（7.4.2） */}
+      <TaskPanel
+        open={showTaskPanel}
+        onClose={() => setShowTaskPanel(false)}
+        projectId={sessions.find((ss) => ss.id === currentSessionId)?.projectId ?? null}
+        sessionId={currentSessionId}
       />
 
       {/* 记忆管理面板（6.1） */}
