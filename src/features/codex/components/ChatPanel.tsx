@@ -18,6 +18,7 @@ import {
   ListChecks,
   Sparkles,
   Users,
+  GitFork,
   ImagePlus,
   X,
 } from 'lucide-react'
@@ -90,6 +91,31 @@ const STATUS_CONFIG: Record<CodexStatus, { label: string; icon: React.ReactNode;
     },
     error: { label: 'Error', icon: <AlertCircle className="h-3.5 w-3.5" />, color: 'text-red-400' },
   }
+
+/** 7.4.3 消息级分叉容器：hover 显示「在此分叉」按钮（并行时间线） */
+function MessageForkWrapper({
+  index,
+  onFork,
+  children,
+}: {
+  index: number
+  onFork: (index: number) => void
+  children: React.ReactNode
+}) {
+  return (
+    <div className="group relative">
+      {children}
+      <button
+        onClick={() => onFork(index)}
+        className="absolute right-2 top-1.5 z-10 flex items-center gap-1 rounded border border-border bg-background/90 px-1.5 py-0.5 text-[10px] text-muted-foreground opacity-0 transition-opacity hover:bg-accent hover:text-foreground group-hover:opacity-100"
+        title="在此消息后分叉创建新会话（并行时间线）"
+      >
+        <GitFork className="h-3 w-3" />
+        分叉
+      </button>
+    </div>
+  )
+}
 
 function MessageCard({
   message,
@@ -310,6 +336,15 @@ export function ChatPanel() {
   const currentSessionWorkdir = sessions.find((s) => s.id === currentSessionId)?.workdir ?? ''
   // 会话级模型覆盖（null 表示用全局默认）
   const currentSessionModel = sessions.find((s) => s.id === currentSessionId)?.model ?? null
+  const forkSession = useProjectStore((s) => s.forkSession)
+
+  /** 7.4.3 消息级分叉：在指定消息后 fork 新会话（并行时间线入口） */
+  const handleForkAt = async (index: number) => {
+    if (!currentSessionId) return
+    const ok = window.confirm(`在此消息（第 ${index + 1} 条）后分叉创建新会话？`)
+    if (!ok) return
+    await forkSession(currentSessionId, index)
+  }
 
   // 挂载时加载模型配置（全局默认模型）
   useEffect(() => {
@@ -725,16 +760,17 @@ export function ChatPanel() {
                 ))}
               </div>
             )}
-            {/* 结构化消息 */}
-            {messages.map((msg) => (
-              <MessageCard
-                key={msg.id}
-                message={msg}
-                repo={currentSessionWorkdir || workspaceCwd}
-                onApprovePlan={approvePlan}
-                onCancelPlan={cancelPlan}
-                planDisabled={status === 'running'}
-              />
+            {/* 结构化消息（7.4.3 支持消息级分叉） */}
+            {messages.map((msg, index) => (
+              <MessageForkWrapper key={msg.id} index={index} onFork={handleForkAt}>
+                <MessageCard
+                  message={msg}
+                  repo={currentSessionWorkdir || workspaceCwd}
+                  onApprovePlan={approvePlan}
+                  onCancelPlan={cancelPlan}
+                  planDisabled={status === 'running'}
+                />
+              </MessageForkWrapper>
             ))}
           </div>
         )}
