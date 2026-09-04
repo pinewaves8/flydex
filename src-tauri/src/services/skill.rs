@@ -303,6 +303,68 @@ pub fn delete_skill(base_dir: &str, name: &str) -> Result<String, String> {
     Ok(bak.to_string_lossy().to_string())
 }
 
+/// 递归复制目录（skill 及其 assets）
+fn copy_dir_all(src: &Path, dst: &Path) -> std::io::Result<()> {
+    fs::create_dir_all(dst)?;
+    for entry in fs::read_dir(src)? {
+        let entry = entry?;
+        let path = entry.path();
+        let target = dst.join(entry.file_name());
+        if path.is_dir() {
+            copy_dir_all(&path, &target)?;
+        } else {
+            fs::copy(&path, &target)?;
+        }
+    }
+    Ok(())
+}
+
+/// 7.4.1 导入 skill：从 from_base/.codex/skills/<name> 复制到 to_base/.codex/skills/<name>（含 assets）。
+/// 目标已存在同名 → 整个目录移到 to_base/logs/skill-trash/（回滚，复用 6.5 回收机制）。
+/// 方向通用：from=项目 → to=市场/其他目录 即「导出」；from=市场/其他目录 → to=项目 即「导入」。
+/// 返回 (目标路径, 校验报告)。校验宽松（来源 skill 已是可执行产物，仅提示不阻断）。
+pub fn import_skill(
+    from_base: &str,
+    name: &str,
+    to_base: &str,
+) -> Result<(String, ValidationReport), String> {
+    let name = name.trim();
+    if name.is_empty() || name.contains(['/', '\\', ':', '*', '?', '"', '<', '>', '|']) {
+        return Err("非法技能名".to_string());
+    }
+    let src_dir = Path::new(from_base).join(".codex").join("skills").join(name);
+    let src_md = src_dir.join("SKILL.md");
+    if !src_md.exists() {
+        return Err(format!("源技能不存在: {name}（{}）", src_dir.display()));
+    }
+    let content = fs::read_to_string(&src_md).unwrap_or_default();
+    let report = validate_skill_content(&content);
+
+    let dst_dir = Path::new(to_base).join(".codex").join("skills").join(name);
+    if dst_dir.exists() {
+        let ts = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|d| d.as_millis())
+            .unwrap_or_default();
+        let trash = Path::new(to_base).join("logs").join("skill-trash");
+        let _ = fs::create_dir_all(&trash);
+        let bak = trash.join(format!("{name}-{ts}"));
+        let _ = fs::rename(&dst_dir, &bak);
+        audit_log(&format!(
+            "[flydex] skill import overwrite name={name} backup={}",
+            bak.display()
+        ));
+    }
+    fs::create_dir_all(dst_dir.parent().unwrap()).map_err(|e| format!("创建目录失败: {e}"))?;
+    copy_dir_all(&src_dir, &dst_dir).map_err(|e| format!("复制技能失败: {e}"))?;
+    audit_log(&format!(
+        "[flydex] skill import name={name} from={} to={}",
+        src_dir.display(),
+        dst_dir.display()
+    ));
+    Ok((dst_dir.to_string_lossy().to_string(), report))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -362,5 +424,58 @@ description: 测试技能
             "warnings: {:?}",
             r.warnings
         );
+    }
+
+    #[test]
+    fn import_skill_copies_entire_dir() {
+        // 临时目录构造源/目标项目结构，验证 SKILL.md + assets 一并复制
+        let base = std::env::temp_dir().join(format!("flydex-skill-test-{}", std::process::id()));
+        let from = base.join("src");
+        let to = base.join("dst");
+        let src_dir = from.join(".codex").join("skills").join("web-search");
+        fs::create_dir_all(&src_dir).unwrap();
+        fs::write(src_dir.join("SKILL.md"), VALID).unwrap();
+        fs::write(src_dir.join("helper.md"), "asset").unwrap();
+
+        let (target, report) =
+            import_skill(&from.to_string_lossy(), "web-search", &to.to_string_lossy()).unwrap();
+        assert!(report.ok, "errors: {:?}", report.errors);
+        assert!(Path::new(&target).join("SKILL.md").exists());
+        assert!(Path::new(&target).join("helper.md").exists(), "assets 应一并复制");
+        fs::remove_dir_all(&base).ok();
+    }
+
+    #[test]
+    fn import_skill_missing_source_errors() {
+        let base =
+            std::env::temp_dir().join(format!("flydex-skill-test-missing-{}", std::process::id()));
+        let from = base.join("src");
+        let r = import_skill(&from.to_string_lossy(), "nope", &base.to_string_lossy());
+        assert!(r.is_err(), "源 skill 不存在应报错");
+        fs::remove_dir_all(&base).ok();
+    }
+
+    #[test]
+    fn import_skill_overwrites_backs_up() {
+        let base =
+            std::env::temp_dir().join(format!("flydex-skill-test-ovw-{}", std::process::id()));
+        let from = base.join("src");
+        let to = base.join("dst");
+        let src_dir = from.join(".codex").join("skills").join("my-skill");
+        fs::create_dir_all(&src_dir).unwrap();
+        fs::write(src_dir.join("SKILL.md"), VALID).unwrap();
+        let dst_dir = to.join(".codex").join("skills").join("my-skill");
+        fs::create_dir_all(&dst_dir).unwrap();
+        fs::write(dst_dir.join("SKILL.md"), "---\nname: my-skill\ndescription: old\n---\n# old").unwrap();
+
+        let (target, _) =
+            import_skill(&from.to_string_lossy(), "my-skill", &to.to_string_lossy()).unwrap();
+        assert!(Path::new(&target).join("SKILL.md").exists());
+        let trash = to.join("logs").join("skill-trash");
+        let has_backup = fs::read_dir(&trash)
+            .map(|mut d| d.next().is_some())
+            .unwrap_or(false);
+        assert!(has_backup, "覆盖时应回收旧版");
+        fs::remove_dir_all(&base).ok();
     }
 }

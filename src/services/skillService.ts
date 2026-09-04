@@ -36,3 +36,18 @@ export async function createSkill(
 export async function deleteSkill(baseDir: string, name: string): Promise<string> {
   return invoke<string>('skill_delete', { baseDir, name })
 }
+
+/** 7.4.1 导入结果 */
+export interface ImportResult {
+  target: string
+  report: ValidationReport
+}
+
+/** 7.4.1 导入/导出 skill（跨目录复制，方向通用：from→to 复制 .codex/skills/<name> 含 assets） */
+export async function importSkill(
+  fromDir: string,
+  name: string,
+  toDir: string,
+): Promise<ImportResult> {
+  return invoke<ImportResult>('skill_import', { fromDir, name, toDir })
+}

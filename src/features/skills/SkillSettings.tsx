@@ -1,3 +1,4 @@
+import { open } from '@tauri-apps/plugin-dialog'
 import {
   Brain,
   CheckCircle2,
@@ -7,14 +8,21 @@ import {
   Search,
   ToggleLeft,
   ToggleRight,
+  Download,
   Trash2,
+  Upload,
   Wand2,
   XCircle,
 } from 'lucide-react'
 import { useEffect, useState } from 'react'
 
 import { memoryService } from '@/services/memoryService'
-import { validateSkillContent, type ValidationReport } from '@/services/skillService'
+import {
+  importSkill,
+  listProjectSkills,
+  validateSkillContent,
+  type ValidationReport,
+} from '@/services/skillService'
 import { useSkillsStore } from '@/stores/useSkillsStore'
 import { useWorkspaceStore } from '@/stores/useWorkspaceStore'
 
@@ -172,15 +180,70 @@ export function SkillSettings() {
     }
   }
 
+  /** 7.4.1 导入：选源目录 → 扫描其 .codex/skills → 输入技能名 → 复制到当前项目 */
+  const handleImport = async () => {
+    if (!workspaceCwd) return
+    const dir = await open({
+      directory: true,
+      multiple: false,
+      title: '选择源目录（含 .codex/skills 的目录）',
+    })
+    if (typeof dir !== 'string') return
+    try {
+      const remote = await listProjectSkills(dir)
+      if (!remote.length) {
+        setFormError('源目录未找到 .codex/skills 下的技能')
+        return
+      }
+      const names = remote.map((s) => s.name).join('、')
+      const name = window.prompt(`该目录下可导入的技能：${names}\n\n输入要导入的技能名：`)
+      if (!name?.trim()) return
+      const target = await importSkill(dir, name.trim(), workspaceCwd)
+      setFormError(null)
+      window.alert(`已导入 ${name.trim()} → ${target.target}`)
+      await load(workspaceCwd)
+    } catch (e) {
+      setFormError(e instanceof Error ? e.message : String(e))
+    }
+  }
+
+  /** 7.4.1 导出：选目标目录 → 复制当前项目技能（含 assets）到目标 */
+  const handleExport = async (name: string) => {
+    if (!workspaceCwd) return
+    const dir = await open({
+      directory: true,
+      multiple: false,
+      title: '选择导出目标目录',
+    })
+    if (typeof dir !== 'string') return
+    try {
+      const target = await importSkill(workspaceCwd, name, dir)
+      setFormError(null)
+      window.alert(`已导出 ${name} → ${target.target}`)
+    } catch (e) {
+      setFormError(e instanceof Error ? e.message : String(e))
+    }
+  }
+
   return (
     <div className="space-y-6">
       {/* 顶部提示 */}
-      <div className="rounded-lg border border-primary/20 bg-primary/5 px-3 py-2 text-xs text-primary">
-        Skills 会向 Codex 注入系统提示词，让 AI 知道可用能力和使用场景。项目技能存放在
-        <code className="mx-1 rounded border border-primary/30 bg-primary/10 px-1 font-mono">
-          .codex/skills/*/SKILL.md
-        </code>
-        ，创建时经校验门禁，保存/删除均留备份可回滚。
+      <div className="flex items-start justify-between gap-2 rounded-lg border border-primary/20 bg-primary/5 px-3 py-2 text-xs text-primary">
+        <span>
+          Skills 会向 Codex 注入系统提示词，让 AI 知道可用能力和使用场景。项目技能存放在
+          <code className="mx-1 rounded border border-primary/30 bg-primary/10 px-1 font-mono">
+            .codex/skills/*/SKILL.md
+          </code>
+          ，创建时经校验门禁，保存/删除均留备份可回滚；7.4.1 起支持跨目录导入/导出（含 assets）。
+        </span>
+        <button
+          onClick={() => void handleImport()}
+          className="flex shrink-0 items-center gap-1 rounded-md border border-primary/30 bg-primary/10 px-2 py-1 text-primary transition-colors hover:bg-primary/20"
+          title="从其他目录导入技能"
+        >
+          <Upload className="h-3 w-3" />
+          导入
+        </button>
       </div>
 
       {/* 新建技能 */}
@@ -367,6 +430,13 @@ export function SkillSettings() {
                     <div className="flex shrink-0 items-center gap-1">
                       {isProject && (
                         <>
+                          <button
+                            onClick={() => void handleExport(skill.name)}
+                            className="rounded p-1 text-muted-foreground hover:bg-accent hover:text-foreground"
+                            title="导出到其他目录（含 assets）"
+                          >
+                            <Download className="h-4 w-4" />
+                          </button>
                           <button
                             onClick={() => handleRemember(skill.name, skill.description)}
                             className="rounded p-1 text-muted-foreground hover:bg-accent hover:text-foreground"

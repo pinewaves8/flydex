@@ -36,7 +36,7 @@ use commands::memory::{
     append_project_memory, append_user_memory, compact_summary, extract_memory, load_memory,
     write_project_memory, write_user_memory,
 };
-use commands::skill::{skill_create, skill_delete, skill_list, skill_read, skill_validate};
+use commands::skill::{skill_create, skill_delete, skill_import, skill_list, skill_read, skill_validate};
 use commands::terminal::resolve_dir;
 use commands::workspace::list_directory;
 
@@ -148,6 +148,7 @@ pub fn run() {
             skill_list,
             skill_read,
             skill_validate,
+            skill_import,
             skill_create,
             skill_delete,
             // memory

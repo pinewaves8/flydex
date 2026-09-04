@@ -35,3 +35,19 @@ pub fn skill_create(
 pub fn skill_delete(base_dir: String, name: String) -> Result<String, String> {
     skill::delete_skill(&base_dir, &name)
 }
+
+/// 7.4.1 导入结果
+#[derive(serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ImportResult {
+    pub target: String,
+    pub report: ValidationReport,
+}
+
+/// 7.4.1 导入/导出 skill（跨目录复制，方向通用）：
+/// from_dir → to_dir 复制 .codex/skills/<name>（含 assets）；目标已存在同名先回收备份。
+#[tauri::command]
+pub fn skill_import(from_dir: String, name: String, to_dir: String) -> Result<ImportResult, String> {
+    let (target, report) = skill::import_skill(&from_dir, &name, &to_dir)?;
+    Ok(ImportResult { target, report })
+}
