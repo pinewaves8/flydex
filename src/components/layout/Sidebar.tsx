@@ -19,7 +19,7 @@ import { useEffect, useRef, useState } from 'react'
 import { useProjectStore } from '@/stores/useProjectStore'
 import { useUIStore, type View } from '@/stores/useUIStore'
 import { useWorkspaceStore } from '@/stores/useWorkspaceStore'
-import type { ExportFormat, SessionSearchHit } from '@/types/project'
+import type { ExportFormat, SessionMeta, SessionSearchHit } from '@/types/project'
 
 const NAV_ITEMS: { view: View; label: string; icon: typeof MessageSquare }[] = [
   { view: 'codex', label: 'Codex', icon: MessageSquare },
@@ -51,6 +51,42 @@ function downloadText(text: string, filename: string, mime: string): void {
   a.download = filename
   a.click()
   URL.revokeObjectURL(url)
+}
+
+/** 7.4.3 并行时间线：会话 fork 树展示项 */
+interface DisplaySession extends SessionMeta {
+  /** 树深度（0 = 主线，>0 = 分支层） */
+  depth: number
+}
+
+/** 7.4.3 按 forkedFrom 构建 fork 树（深度优先平铺），主线在前、分支缩进在后，各自按更新时间倒序 */
+function buildForkTree(sessions: SessionMeta[]): DisplaySession[] {
+  const byId = new Map(sessions.map((s) => [s.id, s]))
+  const children = new Map<string, SessionMeta[]>()
+  const roots: SessionMeta[] = []
+  for (const s of sessions) {
+    if (s.forkedFrom && byId.has(s.forkedFrom.sessionId)) {
+      const arr = children.get(s.forkedFrom.sessionId) ?? []
+      arr.push(s)
+      children.set(s.forkedFrom.sessionId, arr)
+    } else {
+      roots.push(s)
+    }
+  }
+  const sortFn = (a: SessionMeta, b: SessionMeta) => b.updatedAt - a.updatedAt
+  roots.sort(sortFn)
+  for (const key of children.keys()) {
+    children.get(key)!.sort(sortFn)
+  }
+  const result: DisplaySession[] = []
+  const walk = (node: SessionMeta, depth: number) => {
+    result.push({ ...node, depth })
+    for (const child of children.get(node.id) ?? []) {
+      walk(child, depth + 1)
+    }
+  }
+  for (const root of roots) walk(root, 0)
+  return result
 }
 
 export function Sidebar() {
@@ -164,13 +200,11 @@ export function Sidebar() {
     }
   }, [showTrash, loadTrashed])
 
-  // 渲染单个会话项
-  const renderSessionItem = (
-    session: { id: string; title: string; updatedAt: number; messageCount?: number },
-    showMeta = false,
-  ) => {
+  // 渲染单个会话项（7.4.3 支持 fork 树缩进与分支徽标）
+  const renderSessionItem = (session: DisplaySession, showMeta = false) => {
     const active = currentSessionId === session.id
     const isRenaming = renamingId === session.id
+    const isFork = !!session.forkedFrom
     return (
       <div
         key={session.id}
@@ -179,8 +213,13 @@ export function Sidebar() {
           setCurrentSession(session.id)
           setCurrentView('codex')
         }}
-        className={`group mb-1 flex cursor-pointer items-center gap-2 rounded-md px-2 py-1.5 transition-colors ${
-          active ? 'bg-accent text-accent-foreground' : 'hover:bg-accent/50'
+        style={{ paddingLeft: 8 + session.depth * 16 }}
+        className={`group mb-1 flex cursor-pointer items-center gap-2 rounded-md py-1.5 pr-2 transition-colors ${
+          active
+            ? 'bg-accent text-accent-foreground'
+            : isFork
+              ? 'hover:bg-primary/10'
+              : 'hover:bg-accent/50'
         }`}
       >
         <MessageSquare
@@ -201,12 +240,25 @@ export function Sidebar() {
               className="w-full rounded border border-input bg-background px-1 py-0.5 text-sm text-foreground focus:outline-none focus:ring-1 focus:ring-ring"
             />
           ) : (
-            <div
-              className="truncate text-sm"
-              title={session.title}
-              onDoubleClick={(e) => startRename(e, session.id, session.title)}
-            >
-              {session.title}
+            <div className="flex min-w-0 items-center gap-1">
+              {isFork && (
+                <span
+                  title={`分支会话（来自 ${
+                    session.forkedFrom?.messageIndex !== undefined
+                      ? `第 ${session.forkedFrom.messageIndex + 1} 条消息`
+                      : ''
+                  }）`}
+                >
+                  <GitFork className="h-3 w-3 shrink-0 text-primary/70" />
+                </span>
+              )}
+              <div
+                className="truncate text-sm"
+                title={session.title}
+                onDoubleClick={(e) => startRename(e, session.id, session.title)}
+              >
+                {session.title}
+              </div>
             </div>
           )}
           <div
@@ -355,7 +407,7 @@ export function Sidebar() {
               点击 + 新建
             </div>
           ) : (
-            sessions.map((session) => renderSessionItem(session))
+            buildForkTree(sessions).map((session) => renderSessionItem(session))
           )}
         </div>
       )}
