@@ -1019,12 +1019,16 @@ src-tauri/src/
 - **Skills 市场** ✅ 已完成 7.4.1（2026-09-04）
 - **Tasks API**：持久任务列表 + 依赖关系。
 - **Session Forking** ✅ 已完成 7.4.3（2026-09-04）
-- **Tasks API**：持久任务列表 + 依赖关系。
+- **Tasks API** ✅ 已完成 7.4.2（2026-09-04）
 
 > **7.4.3 Session Forking 并行时间线（已完成，2341f46 + fa6f4c7，待 GUI 实测）**：
 > Sidebar uildForkTree：按 forkedFrom 递归构建 fork 树（深度优先平铺），主线在前、分支缩进 16px/层，分支会话显示 GitFork 徽标 + hover 显示来源消息序号，递归支持多级分支（fork 的 fork）。
 > ChatPanel 消息级分叉：每条消息 hover 右上角「分叉」按钮，确认后在任意消息位置 fork 新会话（store.forkSession 自动刷新列表 + 跳转）。
 > 交互闭环：会话级 fork（最后一条）+ 消息级 fork（任意位置）+ Sidebar fork 树可见。
+
+> **7.4.2 Tasks API（已完成 + 单测通过，17cebe6，待 GUI 实测）**：
+> 后端：models/task.rs（Task：status[todo/in_progress/done/cancelled] + priority + labels + projectId/sessionId 关联，兼容旧 snake_case）；services/tasks.rs（~/.flydex/tasks.json 持久化 CRUD，按项目过滤 + 按更新时间倒序，支持 data_dir 注入测试隔离）；commands/task.rs（task_list/create/update/delete）。单测 7/7，全量 lib 37 passed。
+> 前端：types/task.ts + taskService.ts（invoke 封装）；features/tasks/TaskPanel.tsx（状态过滤[全部/待办/进行中/已完成/已取消]、新建/内联编辑表单、状态循环切换[待办→进行中→完成]、删除、关联会话标题展示）；ChatPanel 顶栏 Tasks 按钮 + 挂载（自动关联当前项目 + 当前会话）。
 
 > **7.4.1 Skills 市场（已完成 + GUI 实测通过，53b4d4c + fc83631）**：
 > 后端 skill_import：from→to 复制 .codex/skills/<name>（递归含 assets），方向通用（导出=项目→目标目录；导入=目标目录→项目）；目标已存在同名先回收 logs/skill-trash/ 可回滚；单测 8/8（整目录复制/缺源报错/覆盖回收）。
