@@ -2,55 +2,67 @@ use serde::{Deserialize, Serialize};
 
 /// Fork 来源信息
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub struct ForkedFrom {
+    #[serde(alias = "session_id")]
     pub session_id: String,
     /// 从原会话的第几条消息开始（0-based，含）
+    #[serde(alias = "message_index")]
     pub message_index: usize,
 }
 
 /// 对话会话数据模型
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub struct Session {
     pub id: String,
+    #[serde(alias = "project_id")]
     pub project_id: String,
     pub title: String,
     pub workdir: String,
+    #[serde(alias = "thread_id")]
     pub thread_id: Option<String>,
     /// 会话级模型覆盖（None 时用全局默认模型）
     #[serde(default)]
     pub model: Option<String>,
     /// 消息列表，用 serde_json::Value 存储，避免 Rust 端依赖前端类型定义
     pub messages: Vec<serde_json::Value>,
+    #[serde(alias = "created_at")]
     pub created_at: i64,
+    #[serde(alias = "updated_at")]
     pub updated_at: i64,
     /// 软删除时间戳（None = 未删除）
-    #[serde(default)]
+    #[serde(default, alias = "deleted_at")]
     pub deleted_at: Option<i64>,
     /// Fork 来源
-    #[serde(default)]
+    #[serde(default, alias = "forked_from")]
     pub forked_from: Option<ForkedFrom>,
 }
 
 /// 会话元数据（用于列表展示，不包含 messages）
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub struct SessionMeta {
     pub id: String,
+    #[serde(alias = "project_id")]
     pub project_id: String,
     pub title: String,
     pub workdir: String,
     /// 会话级模型覆盖
     #[serde(default)]
     pub model: Option<String>,
+    #[serde(alias = "created_at")]
     pub created_at: i64,
+    #[serde(alias = "updated_at")]
     pub updated_at: i64,
     /// 消息数量（列表展示用）
-    #[serde(default)]
+    #[serde(default, alias = "message_count")]
     pub message_count: usize,
     /// 软删除时间戳
-    #[serde(default)]
+    #[serde(default, alias = "deleted_at")]
     pub deleted_at: Option<i64>,
     /// Fork 来源
-    #[serde(default)]
+    #[serde(default, alias = "forked_from")]
     pub forked_from: Option<ForkedFrom>,
 }
 
@@ -73,9 +85,11 @@ impl From<&Session> for SessionMeta {
 
 /// 搜索结果（带匹配片段）
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub struct SessionSearchHit {
     pub session: SessionMeta,
     /// 匹配的字段（title 或 content）
+    #[serde(alias = "match_field")]
     pub match_field: String,
     /// 匹配的片段（最多 120 字符）
     pub snippet: String,

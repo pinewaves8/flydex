@@ -888,6 +888,8 @@ src-tauri/src/
 | **预估** | 4 天 |
 | **讨论要点** | checkpoint 落盘频率与开销；沙箱实现方案（Windows 上 Docker/VM 成本高，是否降级为权限最小化）；重试哪些命令安全 |
 
+> **6.4 ② 会话恢复（2026-09-04）**：探查发现**会话持久化字段名系统性不匹配 bug**——Rust 模型输出 snake_case（`thread_id`/`project_id`/`created_at`），前端 TS 读 camelCase（`threadId`/`projectId`/`createdAt`）→ `save_session` 反序列化失败 → autosave 静默失败，**消息/thread_id 从未真正持久化**（所有会话 JSON `thread_id: null`），崩溃后无法 resume codex 上下文。**修复**：`models/session.rs` + `models/project.rs` 加 `#[serde(rename_all = "camelCase")]` + `alias` 兼容旧 snake_case 文件（反序列化读旧文件、序列化写 camelCase）。cargo check / tsc 全绿。**待 GUI 实测**：跑一轮 turn 后确认 session JSON 出现 `threadId` 非 null + 新消息 + `updatedAt` 更新，崩溃重开后消息恢复且可 resume。
+
 > **6.4 ① git 自动快照（2026-09-03 已实现）**：对齐 Claude Code 的"每轮自动 commit 快照"→ 每轮 `turn/completed` 后对工作区 `git add -A && git commit`（本地，不 push）。新增 `src-tauri/src/services/git_checkpoint.rs`：`checkpoint_workspace(cwd)` 开关（`~/.flydex/security.json` 的 `auto_checkpoint`，serde default true，兼容旧文件）+ 非 git 仓库/无变更/失败静默跳过 + 独立线程不阻塞 reader。接入：`appserver_client.rs` 静态 `THREAD_CWD`（thread_start 写入 cwd，turn/completed 读后 spawn 线程执行）。**单测 2/2 通过**（有变更提交 + 无变更跳过 / 非 git 跳过）。cargo check EXIT=0。**前端开关 UI 已补**：设置页「自动 git 快照」Toggle（`set_auto_checkpoint` 命令 + store + service）。**GUI 实测通过（2026-09-03）**：在 `C:\llm\glass`（git 仓库）让模型创建 `checkpoint_probe.txt` → turn 完成自动产生 `flydex-checkpoint 1788484335212` commit，文件已提交、工作区干净。快照日志已升级写 `logs/flydex-appserver.log`（`[flydex] git checkpoint cwd=... msg=...`）。
 
 ### 6.5 自进化闭环（skill 自动沉淀 + 记忆自动更新 + 配置反馈优化）
