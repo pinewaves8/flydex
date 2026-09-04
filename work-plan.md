@@ -910,6 +910,8 @@ src-tauri/src/
 
 > **6.5 skill 沉淀闭环（2026-09-04 已完成 + GUI 实测通过）**：后端 `services/skill.rs` 新增 `skill_validate`（校验门禁：frontmatter 必须含合法 name/description + 正文非空 >= 50 字符 + 可复现结构启发式）+ `create_skill`（校验通过才入库，写 `.codex/skills/<name>/SKILL.md`，同名先备份旧版到 `logs/skill-trash/`）+ `delete_skill`（先备份可回滚）；commands/skill.rs + lib.rs 注册 `skill_validate/skill_create/skill_delete`；单测 5/5。前端 `SkillSettings` 重写：新建技能表单（模板/校验/保存）+ 项目技能删除（回滚）+ 沉淀到项目记忆（复用 memoryService.appendProject）。沉淀的 skill 走 `.codex/skills/` 供 codex 自动命中（同 web-search 机制）；配置反馈优化默认关闭（不自动调优 system prompt）。**GUI 实测（cwd=C:\llm\jint）**：create → delete（备份到 skill-trash）→ 再 create 全链路通过；备份内容与 SKILL.md 完全一致（equal=True）；审计日志 `[flydex] skill create/delete/create` 3 条完整记录；沉淀记忆写入 `jint/.flydex/MEMORY.md` 含 [my-skill] skills 段。
 
+> **6.5 记忆 section 去重/合并（2026-09-04 已完成 + GUI 实测通过）**：`memory.rs` append_memory 从"纯追加"改为 `upsert_section`——按 `## <section>` 解析、同名 section 聚合收敛（历史重复段合并为一个）、段内行级去重（同名 section 共享去重集合跨段收敛）、新内容已存在则跳过写入（`dup=true`，审计日志新增 dup 字段可追溯）。**GUI 实测（jint）**：MEMORY.md 从 3 个重复 skills 段收敛为 1 段 1 行；用户再沉淀 3 次全部 `dup:true` 跳过，零新增冗余。单测 5/5（新段/同段追加/重复跳过/历史重复段收敛/多 section 保留）。
+
 ---
 
 ### 安全边界（阶段6 全局强制）
