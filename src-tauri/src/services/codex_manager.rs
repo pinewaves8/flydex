@@ -189,21 +189,37 @@ impl CodexManager {
         );
 
 
-        // 确定 thread：resume 复用传入 thread_id，否则新开会话
+        // 确定 thread：resume 复用传入 thread_id（先 thread/resume 重新 open，
+        // 否则 app-server 重启后 thread 不在内存 → turn/start 报 thread not found），
+        // 恢复失败则降级为新开会话；否则 thread/start 新开会话。
+        let mut tp = serde_json::json!({
+            "cwd": workdir.clone().unwrap_or_default(),
+            "approvalPolicy": "on-request",
+            "approvalsReviewer": "user",
+            "sandbox": sandbox,
+        });
+        if let Some(m) = session_model.clone().filter(|s| !s.is_empty()) {
+            tp["model"] = serde_json::Value::String(m);
+        }
         let tid = match thread_id {
-            Some(tid) if !tid.trim().is_empty() => tid.clone(),
-            _ => {
-                let mut tp = serde_json::json!({
-                    "cwd": workdir.clone().unwrap_or_default(),
-                    "approvalPolicy": "on-request",
-                    "approvalsReviewer": "user",
-                    "sandbox": sandbox,
-                });
-                if let Some(m) = session_model.clone().filter(|s| !s.is_empty()) {
-                    tp["model"] = serde_json::Value::String(m);
+            Some(tid) if !tid.trim().is_empty() => match client.thread_resume(&tid) {
+                Ok(_) => tid.clone(),
+                Err(e) => {
+                    let _ = app.emit(
+                        "codex-output",
+                        CodexEvent {
+                            run_id: run_id.clone(),
+                            body: CodexEventBody::Output {
+                                text: format!(
+                                    "⚠️ 恢复会话失败：{e}；已新建会话（不保留历史上下文）。"
+                                ),
+                            },
+                        },
+                    );
+                    client.thread_start(tp)?
                 }
-                client.thread_start(tp)?
-            }
+            },
+            _ => client.thread_start(tp)?,
         };
 
         // 绑定 run_id（事件路由）

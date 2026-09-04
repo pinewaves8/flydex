@@ -360,6 +360,34 @@ impl AppServerClient {
         Ok(thread_id)
     }
 
+    /// 恢复已有会话 thread（app-server 重启后 thread 需重新 open，否则 turn/start 报 thread not found）
+    pub fn thread_resume(&self, thread_id: &str) -> Result<String, String> {
+        let params = serde_json::json!({ "threadId": thread_id });
+        let resp = self.request("thread/resume", Some(params))?;
+        let tid = resp
+            .get("thread")
+            .and_then(|t| t.get("id"))
+            .and_then(|v| v.as_str())
+            .ok_or_else(|| format!("thread/resume 无 thread.id: {resp}"))?
+            .to_string();
+        let model = resp
+            .get("model")
+            .and_then(|v| v.as_str())
+            .unwrap_or("")
+            .to_string();
+        let cwd = resp
+            .get("cwd")
+            .and_then(|v| v.as_str())
+            .unwrap_or("")
+            .to_string();
+        thread_cwd().lock().unwrap().insert(tid.clone(), cwd.clone());
+        self.thread_registry.lock().unwrap().insert(
+            tid.clone(),
+            ThreadMeta { thread_id: tid.clone(), model, cwd },
+        );
+        Ok(tid)
+    }
+
     /// 记录 thread 的最近 run_id（事件路由）
     pub fn bind_run(&self, thread_id: &str, run_id: &str) {
         self.run_registry.lock().unwrap().insert(thread_id.to_string(), run_id.to_string());
