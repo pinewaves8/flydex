@@ -99,9 +99,9 @@
 阶段7：对齐 Claude Code 补齐项（2026-09-04 规划）
   ├─ 7.0 差距基线（阶段 6 收官后对齐复检）
   ├─ 7.1 Hooks 生命周期钩子（P0 工程自动化）✅ 已完成（2026-09-04）
-  ├─ 7.2 Agent 层三件套（P1：内置专用子代理 / Agent Teams / Background Agents）
-  ├─ 7.3 auto 权限 ML 分类（增强，非必需）
-  └─ 7.4 扩展与体验（P2：Skills 市场 / Tasks API / Session Forking）
+  ├─ 7.2 Agent 层三件套（P1：内置专用子代理 / Agent Teams / Background Agents）✅ 已完成（2026-09-04）
+  ├─ 7.3 auto 权限增强（确定性规则扩充，非 ML）✅ 已完成（2026-09-04）
+  └─ 7.4 扩展与体验（Skills 市场 / Tasks API / Session Forking）✅ 已完成 7.4.1/7.4.2/7.4.3（2026-09-04）
 ```
 
 ---
