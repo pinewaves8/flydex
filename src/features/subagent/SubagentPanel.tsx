@@ -72,6 +72,11 @@ const newTask = (workdir: string): SubAgentTask => ({
   lastAgent: '',
 })
 
+/** 子代理执行超时（7.2.3 健壮性）：running 超过该时长自动终止，防止后台任务卡死永久占用 */
+const SUBAGENT_TIMEOUT_MS = 15 * 60 * 1000
+/** 超时轮询间隔 */
+const TIMEOUT_POLL_MS = 5 * 1000
+
 interface SubagentPanelProps {
   open: boolean
   onClose: () => void
@@ -93,6 +98,41 @@ export function SubagentPanel({ open, onClose, defaultWorkdir, defaultModel }: S
     const running = tasks.filter((t) => t.status === 'running').length
     useSubagentStore.getState().setBackground(running, tasks.length)
   }, [tasks])
+
+  // 7.2.3 健壮性：超时自动终止——running 任务超过 SUBAGENT_TIMEOUT_MS 自动 stop 并标记失败，
+  // 避免模型发出的坏命令（如 PowerShell 引号被上游转义破坏导致挂起）让子代理永久 running
+  useEffect(() => {
+    const iv = setInterval(() => {
+      const now = Date.now()
+      const toStop = tasksRef.current.filter(
+        (t) => t.status === 'running' && t.startedAt && now - t.startedAt > SUBAGENT_TIMEOUT_MS,
+      )
+      if (toStop.length === 0) return
+      for (const t of toStop) {
+        if (t.runId) void stopCodex(t.runId).catch(() => {})
+        setTasks((prev) =>
+          prev.map((x) =>
+            x.id === t.id
+              ? {
+                  ...x,
+                  status: 'error' as const,
+                  exitCode: -1,
+                  endedAt: Date.now(),
+                  lines: [
+                    ...x.lines,
+                    {
+                      kind: 'stderr' as const,
+                      text: `⚠️ 执行超时（${SUBAGENT_TIMEOUT_MS / 60000} 分钟），已自动终止（可能为模型命令转义异常导致挂起）`,
+                    },
+                  ],
+                }
+              : x,
+          ),
+        )
+      }
+    }, TIMEOUT_POLL_MS)
+    return () => clearInterval(iv)
+  }, [])
 
   // 事件路由：按 run_id 分发到对应任务（面板常驻监听，open 控制显隐）
   useEffect(() => {
