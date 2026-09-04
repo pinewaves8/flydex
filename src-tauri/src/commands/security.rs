@@ -1,8 +1,8 @@
 use tauri::command;
 
 use crate::services::security::{
-    ApprovalPolicy, ApprovalRecord, PermissionRules, RuleAction, SandboxMode, SecurityConfig,
-    SecurityService,
+    ApprovalPolicy, ApprovalRecord, PermissionRules, RuleAction, RuleDecision, SandboxMode,
+    SecurityConfig, SecurityService,
 };
 
 /// 读取当前安全配置
@@ -104,4 +104,27 @@ pub fn list_permission_rules() -> PermissionRules {
 #[command]
 pub fn clear_permission_rules() -> Result<PermissionRules, String> {
     SecurityService::clear_rules().map_err(|e| e.to_string())
+}
+
+/// 规则决策测试结果（7.3 GUI 实测入口，不执行命令，仅返回规则引擎判定）
+#[derive(serde::Serialize)]
+pub struct RuleTestResult {
+    /// auto_deny / auto_accept / ask
+    pub tag: String,
+    pub reason: String,
+    pub denied: bool,
+}
+
+/// 输入任意命令，返回规则引擎的决策结果（deny/allow/ask），用于 GUI 实测与规则校验。
+/// 只判定、不执行；模型自觉拒绝对此无影响（这是纯规则层验证入口）。
+#[command]
+pub fn security_test_rule(command: String) -> RuleTestResult {
+    let d = SecurityService::decide(&command);
+    match d {
+        RuleDecision::BuiltinDeny(r) => RuleTestResult { tag: "auto_deny".into(), reason: r, denied: true },
+        RuleDecision::UserDeny(r) => RuleTestResult { tag: "auto_deny".into(), reason: r, denied: true },
+        RuleDecision::UserAllow(r) => RuleTestResult { tag: "auto_accept".into(), reason: r, denied: false },
+        RuleDecision::AutoAllow => RuleTestResult { tag: "auto_accept".into(), reason: "全自动模式（approval_policy=never）放行".into(), denied: false },
+        RuleDecision::Ask => RuleTestResult { tag: "ask".into(), reason: "需要审批（未命中 deny/allow 规则）".into(), denied: false },
+    }
 }

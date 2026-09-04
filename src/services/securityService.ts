@@ -4,6 +4,7 @@ import type {
   ApprovalPolicy,
   PermissionRules,
   RuleAction,
+  RuleTestResult,
   SandboxMode,
   SecurityConfig,
 } from '@/types/security'
@@ -60,5 +61,10 @@ export const securityService = {
   /** 清空全部权限规则 */
   async clearRules(): Promise<PermissionRules> {
     return invoke<PermissionRules>('clear_permission_rules')
+  },
+
+  /** 7.3 规则决策测试：输入命令，返回规则引擎判定（不执行） */
+  async testRule(command: string): Promise<RuleTestResult> {
+    return invoke<RuleTestResult>('security_test_rule', { command })
   },
 }

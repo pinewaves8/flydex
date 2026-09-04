@@ -20,11 +20,18 @@ import { HooksSettings } from '@/features/hooks/HooksSettings'
 import { McpSettings } from '@/features/mcp/McpSettings'
 import { ModelSettings } from '@/features/model/ModelSettings'
 import { SkillSettings } from '@/features/skills/SkillSettings'
+import { securityService } from '@/services/securityService'
 import { terminalService } from '@/services/terminalService'
 import { useSecurityStore } from '@/stores/useSecurityStore'
 import { useSettingsStore, type ShellType } from '@/stores/useSettingsStore'
 import { useUIStore } from '@/stores/useUIStore'
-import { APPROVAL_POLICIES, SANDBOX_MODES, type RuleAction } from '@/types/security'
+import {
+  APPROVAL_POLICIES,
+  RULE_TEST_TAGS,
+  SANDBOX_MODES,
+  type RuleAction,
+  type RuleTestResult,
+} from '@/types/security'
 
 function formatTime(ts: number): string {
   try {
@@ -74,6 +81,9 @@ export function SettingsPanel() {
   const [rulePattern, setRulePattern] = useState('')
   const [ruleAction, setRuleAction] = useState<RuleAction>('allow')
   const [ruleNote, setRuleNote] = useState('')
+  // ── 7.3 规则决策测试（不执行命令，仅返回规则引擎判定）──
+  const [testCmd, setTestCmd] = useState('')
+  const [testResult, setTestResult] = useState<RuleTestResult | null>(null)
 
   if (!config) {
     return (
@@ -133,6 +143,13 @@ export function SettingsPanel() {
     const ok = window.confirm('确定清空全部权限规则吗？')
     if (!ok) return
     void clearRules()
+  }
+
+  const handleTestRule = async () => {
+    const cmd = testCmd.trim()
+    if (!cmd) return
+    const result = await securityService.testRule(cmd)
+    setTestResult(result)
   }
 
   /** 切换终端 Shell：更新设置并重置 terminalService 的 shell 缓存 */
@@ -423,6 +440,53 @@ export function SettingsPanel() {
                       </button>
                     </div>
                   ))}
+                </div>
+              )}
+            </section>
+
+            {/* 7.3 规则决策测试（只判定不执行） */}
+            <section>
+              <div className="mb-3 flex items-center gap-2">
+                <h2 className="flex items-center gap-2 text-sm font-medium text-muted-foreground">
+                  <ShieldCheck className="h-4 w-4" />
+                  规则决策测试
+                </h2>
+                <span className="text-xs opacity-60">
+                  （只判定不执行 · 用于验证 deny/allow 是否按预期命中）
+                </span>
+              </div>
+              <div className="mb-3 flex flex-wrap items-center gap-2">
+                <input
+                  value={testCmd}
+                  onChange={(e) => setTestCmd(e.target.value)}
+                  onKeyDown={(e) => {
+                    if (e.key === 'Enter') void handleTestRule()
+                  }}
+                  placeholder="粘贴任意命令，如 Remove-Item -Path 'C:\Windows\System32\a' -Recurse -Force"
+                  className="h-9 min-w-0 flex-1 rounded-md border border-border bg-card px-3 font-mono text-xs outline-none focus:border-primary"
+                />
+                <button
+                  onClick={() => void handleTestRule()}
+                  disabled={!testCmd.trim()}
+                  className="flex h-9 items-center gap-1 rounded-md bg-primary px-3 text-xs font-medium text-primary-foreground transition-opacity hover:opacity-90 disabled:opacity-40"
+                >
+                  <Terminal className="h-3.5 w-3.5" />
+                  测试
+                </button>
+              </div>
+              {testResult && (
+                <div className="rounded-lg border border-border px-4 py-3">
+                  <div className="flex items-center gap-2">
+                    <span
+                      className={`rounded px-1.5 py-0.5 text-[10px] font-semibold ${
+                        RULE_TEST_TAGS.find((t) => t.value === testResult.tag)?.color ?? ''
+                      }`}
+                    >
+                      {RULE_TEST_TAGS.find((t) => t.value === testResult.tag)?.label ??
+                        testResult.tag}
+                    </span>
+                    <span className="text-xs text-muted-foreground">{testResult.reason}</span>
+                  </div>
                 </div>
               )}
             </section>

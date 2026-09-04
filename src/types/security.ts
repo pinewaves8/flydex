@@ -28,6 +28,44 @@ export interface PermissionRules {
   rules: PermissionRule[]
 }
 
+/** 规则决策测试结果（7.3 security_test_rule） */
+export interface RuleTestResult {
+  tag: 'auto_deny' | 'auto_accept' | 'ask'
+  reason: string
+  denied: boolean
+}
+
+/** 决策标签展示元信息 */
+export const RULE_TEST_TAGS: {
+  value: RuleTestResult['tag']
+  label: string
+  color: string
+  desc: string
+}[] = [
+  {
+    value: 'auto_deny',
+    label: '自动拒绝',
+    color: 'text-red-500 bg-red-500/10',
+    desc: '规则引擎判定危险，工具执行前直接拒绝',
+  },
+  {
+    value: 'auto_accept',
+    label: '自动放行',
+    color: 'text-emerald-500 bg-emerald-500/10',
+    desc: '命中 allow 规则或全自动模式，直接执行',
+  },
+  {
+    value: 'ask',
+    label: '需审批',
+    color: 'text-amber-500 bg-amber-500/10',
+    desc: '未命中 deny/allow 规则，推审批框由你决定',
+  },
+]
+
+export function ruleTestTagLabel(tag: RuleTestResult['tag']): string {
+  return RULE_TEST_TAGS.find((t) => t.value === tag)?.label ?? tag
+}
+
 /** 安全配置 */
 export interface SecurityConfig {
   sandbox_mode: SandboxMode
