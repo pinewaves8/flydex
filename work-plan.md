@@ -1005,6 +1005,13 @@ src-tauri/src/
 > **可选 P2**：设置页规则类别勾选（对齐 Claude Code permission 类别配置），模式模板库化。
 > **长期 P3（默认关）**：主模型预判 + 规则强兜底混合模式，规则永远优先、可审计、可一键关闭。
 
+> **7.3 后端实现（2026-09-04 已完成，0b03a59 + 8c6f125）**：
+> ① **builtin_deny_patterns 扩充**：磁盘/卷管理（format-volume/clear-disk/initialize-disk/remove-partition/diskpart /s）、注册表导入还原（reg import/restore）、混淆执行（-EncodedCommand/certutil -decode/mshta）等。
+> ② **新增 heuristic_deny（确定性 token 组合，非 ML）**：精确 contains 覆盖不到的参数顺序变体/组合链兜底——A. 破坏性删除系统/关键路径（remove-item/del/erase/rd/rmdir + 递归/强制标志 + c:\windows/program files/system32/pagefile.sys/ntuser.dat 等路径，读取不含删除动词不误伤）；B. 下载+执行远程代码链（Invoke-WebRequest/curl/wget + IEX/Start-Process/&）；C. 凭据导出（reg save + SAM/System）。
+> ③ **decide 集成**：内置精确 → 启发式 → 用户规则 → ask。
+> ④ **单测 7/7**：新增系统路径删除（参数顺序变体）/下载执行/凭据工具/良性命令不误伤（Get-Content hosts、单独 curl、git status 均不 deny）。
+> ⑤ **security_test_rule 命令 + 设置页「规则决策测试」section**：输入命令返回规则引擎判定（auto_deny/auto_accept/ask），只判定不执行——解决"模型自觉拒绝危险命令导致无法 GUI 实测 deny 链路"的痛点，绕过模型直接验证规则层。
+
 ### 7.4 扩展与体验（P2）
 
 - **Skills 市场**：从本地 skill 目录导入/导出，低成本获得生态雏形。
