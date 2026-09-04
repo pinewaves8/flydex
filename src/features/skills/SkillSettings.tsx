@@ -12,6 +12,7 @@ import {
   Trash2,
   Upload,
   Wand2,
+  X,
   XCircle,
 } from 'lucide-react'
 import { useEffect, useState } from 'react'
@@ -25,6 +26,7 @@ import {
 } from '@/services/skillService'
 import { useSkillsStore } from '@/stores/useSkillsStore'
 import { useWorkspaceStore } from '@/stores/useWorkspaceStore'
+import type { SkillDefinition } from '@/types/skill'
 
 const SOURCE_LABEL: Record<string, { label: string; color: string }> = {
   builtin: { label: '内置', color: 'border-green-500/30 bg-green-500/10 text-green-400' },
@@ -101,6 +103,13 @@ export function SkillSettings() {
   const [saving, setSaving] = useState(false)
   const [formError, setFormError] = useState<string | null>(null)
   const [remember, setRemember] = useState<Record<string, boolean>>({})
+  // 7.4.1 项目技能独立扫描（绕过 store 内置同名过滤，项目版透明可见）+ 勾选多选导入
+  const [projectSkills, setProjectSkills] = useState<SkillDefinition[]>([])
+  const [reloadTick, setReloadTick] = useState(0)
+  const [importModal, setImportModal] = useState<{ dir: string; skills: SkillDefinition[] } | null>(
+    null,
+  )
+  const [importSelected, setImportSelected] = useState<Set<string>>(new Set())
 
   useEffect(() => {
     if (workspaceCwd) {
@@ -108,7 +117,20 @@ export function SkillSettings() {
     }
   }, [workspaceCwd, load])
 
-  const filtered = skills.filter((s) => {
+  // 7.4.1 项目技能独立扫描：直接用文件系统扫描（含与内置同名的项目版），不受 store 内置优先过滤影响
+  useEffect(() => {
+    if (!workspaceCwd) return
+    listProjectSkills(workspaceCwd)
+      .then(setProjectSkills)
+      .catch(() => setProjectSkills([]))
+  }, [workspaceCwd, reloadTick])
+
+  // 7.4.1 项目来源用独立扫描结果（透明可见），内置/MCP 用 store 合并
+  const displaySkills: SkillDefinition[] = [
+    ...projectSkills.map((p) => ({ ...p, source: 'project' as const })),
+    ...skills.filter((s) => s.source !== 'project'),
+  ]
+  const filtered = displaySkills.filter((s) => {
     if (filterSource !== 'all' && s.source !== filterSource) return false
     if (!filter.trim()) return true
     const q = filter.toLowerCase()
@@ -180,7 +202,7 @@ export function SkillSettings() {
     }
   }
 
-  /** 7.4.1 导入：选源目录 → 扫描其 .codex/skills → 输入技能名 → 复制到当前项目 */
+  /** 7.4.1 导入：选源目录 → 扫描其 .codex/skills → 打开勾选面板 → 多选导入到当前项目 */
   const handleImport = async () => {
     if (!workspaceCwd) return
     const dir = await open({
@@ -195,13 +217,27 @@ export function SkillSettings() {
         setFormError('源目录未找到 .codex/skills 下的技能')
         return
       }
-      const names = remote.map((s) => s.name).join('、')
-      const name = window.prompt(`该目录下可导入的技能：${names}\n\n输入要导入的技能名：`)
-      if (!name?.trim()) return
-      const target = await importSkill(dir, name.trim(), workspaceCwd)
+      setImportModal({ dir, skills: remote })
+      setImportSelected(new Set(remote.map((s) => s.name)))
       setFormError(null)
-      window.alert(`已导入 ${name.trim()} → ${target.target}`)
-      await load(workspaceCwd)
+    } catch (e) {
+      setFormError(e instanceof Error ? e.message : String(e))
+    }
+  }
+
+  /** 7.4.1 执行多选导入 */
+  const handleDoImport = async () => {
+    if (!importModal || !workspaceCwd) return
+    const names = [...importSelected]
+    if (!names.length) return
+    try {
+      for (const name of names) {
+        await importSkill(importModal.dir, name, workspaceCwd)
+      }
+      setImportModal(null)
+      setFormError(null)
+      window.alert(`已导入 ${names.length} 个技能`)
+      setReloadTick((t) => t + 1)
     } catch (e) {
       setFormError(e instanceof Error ? e.message : String(e))
     }
@@ -376,7 +412,7 @@ export function SkillSettings() {
               const isProject = skill.source === 'project'
               return (
                 <div
-                  key={skill.name}
+                  key={`${skill.source}-${skill.name}`}
                   className="rounded-lg border border-border bg-card p-3 transition-colors hover:border-primary/30"
                 >
                   <div className="flex items-start gap-3">
@@ -457,25 +493,99 @@ export function SkillSettings() {
                           </button>
                         </>
                       )}
-                      <button
-                        onClick={() => toggle(skill.name)}
-                        className={`shrink-0 transition-colors ${
-                          skill.enabled ? 'text-primary' : 'text-muted-foreground'
-                        }`}
-                        title={skill.enabled ? '禁用' : '启用'}
-                      >
-                        {skill.enabled ? (
-                          <ToggleRight className="h-5 w-5" />
-                        ) : (
-                          <ToggleLeft className="h-5 w-5" />
-                        )}
-                      </button>
+                      {!isProject && (
+                        <button
+                          onClick={() => toggle(skill.name)}
+                          className={`shrink-0 transition-colors ${
+                            skill.enabled ? 'text-primary' : 'text-muted-foreground'
+                          }`}
+                          title={skill.enabled ? '禁用' : '启用'}
+                        >
+                          {skill.enabled ? (
+                            <ToggleRight className="h-5 w-5" />
+                          ) : (
+                            <ToggleLeft className="h-5 w-5" />
+                          )}
+                        </button>
+                      )}
                     </div>
                   </div>
                 </div>
               )
             })
           )}
+        </div>
+      )}
+
+      {/* 统计 */}
+      {importModal && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50">
+          <div className="max-h-[70vh] w-[480px] overflow-hidden rounded-lg border border-border bg-card shadow-xl">
+            <div className="flex items-center justify-between border-b border-border px-4 py-3">
+              <span className="text-sm font-medium">
+                导入技能（{importModal.skills.length} 个可导入）
+              </span>
+              <button
+                onClick={() => setImportModal(null)}
+                className="rounded p-1 text-muted-foreground hover:bg-accent"
+              >
+                <X className="h-4 w-4" />
+              </button>
+            </div>
+            <div className="max-h-[45vh] overflow-y-auto p-2">
+              <label className="flex cursor-pointer items-center gap-2 border-b border-border px-2 py-2 text-xs text-muted-foreground">
+                <input
+                  type="checkbox"
+                  checked={importSelected.size === importModal.skills.length}
+                  onChange={(e) =>
+                    setImportSelected(
+                      e.target.checked ? new Set(importModal.skills.map((s) => s.name)) : new Set(),
+                    )
+                  }
+                />
+                全选
+              </label>
+              {importModal.skills.map((s) => (
+                <label
+                  key={s.name}
+                  className="flex cursor-pointer items-start gap-2 rounded px-2 py-2 hover:bg-accent/50"
+                >
+                  <input
+                    type="checkbox"
+                    className="mt-0.5"
+                    checked={importSelected.has(s.name)}
+                    onChange={(e) => {
+                      const next = new Set(importSelected)
+                      if (e.target.checked) next.add(s.name)
+                      else next.delete(s.name)
+                      setImportSelected(next)
+                    }}
+                  />
+                  <div className="min-w-0">
+                    <div className="font-mono text-xs text-foreground">{s.name}</div>
+                    <div className="truncate text-[10px] text-muted-foreground">
+                      {s.description}
+                    </div>
+                  </div>
+                </label>
+              ))}
+            </div>
+            <div className="flex justify-end gap-2 border-t border-border px-4 py-3">
+              <button
+                onClick={() => setImportModal(null)}
+                className="rounded-md border border-border px-3 py-1.5 text-xs hover:bg-accent"
+              >
+                取消
+              </button>
+              <button
+                onClick={() => void handleDoImport()}
+                disabled={importSelected.size === 0}
+                className="rounded-md bg-primary px-3 py-1.5 text-xs text-primary-foreground disabled:opacity-40"
+              >
+                导入（{importSelected.size}）
+              </button>
+            </div>
+          </div>
         </div>
       )}
 
