@@ -41,6 +41,7 @@ import { useModelStore } from '@/stores/useModelStore'
 import { useProjectStore } from '@/stores/useProjectStore'
 import { useSecurityStore } from '@/stores/useSecurityStore'
 import { useSkillsStore } from '@/stores/useSkillsStore'
+import { useSubagentStore } from '@/stores/useSubagentStore'
 import { useWorkspaceStore } from '@/stores/useWorkspaceStore'
 import type { CodexStatus } from '@/types/codex'
 import type { CodexMessage } from '@/types/codexJson'
@@ -287,6 +288,8 @@ export function ChatPanel() {
   const securityConfig = useSecurityStore((s) => s.config)
   const modelConfig = useModelStore((s) => s.config)
   const loadModels = useModelStore((s) => s.load)
+  // 7.2.3 后台子代理运行数徽章
+  const subagentRunning = useSubagentStore((s) => s.backgroundRunning)
 
   // 打字机推进：逐字追加显示（16ms/次，每次 3 字符）
   useEffect(() => {
@@ -640,10 +643,15 @@ export function ChatPanel() {
           <button
             onClick={() => setShowSubagent(true)}
             className="flex items-center gap-1 rounded px-2 py-1 text-xs text-muted-foreground hover:bg-accent hover:text-accent-foreground"
-            title="子代理并行：派发多个独立 codex 子任务并行执行"
+            title="子代理并行：派发多个独立 codex 子任务并行执行（角色分派 / 团队接力 / 后台常驻）"
           >
             <Users className="h-3 w-3" />
             子代理
+            {subagentRunning > 0 && (
+              <span className="flex h-4 min-w-4 items-center justify-center rounded-full bg-primary px-1 text-[10px] font-semibold text-primary-foreground">
+                {subagentRunning}
+              </span>
+            )}
           </button>
           <button
             onClick={newSession}
