@@ -147,6 +147,18 @@ impl Storage {
     pub fn save_session(session: &Session) -> std::io::Result<()> {
         Self::ensure_dirs()?;
         let content = serde_json::to_string_pretty(session).unwrap_or_default();
+        // 调试：记录 autosave 链路（保存的会话 id / thread / 消息数）
+        let thread = session.thread_id.clone().unwrap_or_default();
+        let n = session.messages.len();
+        eprintln!("[flydex] save_session id={} thread_id={} messages={}", session.id, thread, n);
+        if let Ok(mut f) = std::fs::OpenOptions::new()
+            .create(true)
+            .append(true)
+            .open(r"C:\llm\flydex\logs\flydex-appserver.log")
+        {
+            use std::io::Write;
+            let _ = writeln!(f, "[flydex] save_session id={} thread_id={} messages={}", session.id, thread, n);
+        }
         fs::write(Self::session_file(&session.id), content)
     }
 

@@ -113,7 +113,10 @@ function setupAutosave(): void {
   const saveNow = async () => {
     const state = useCodexStore.getState()
     const sid = state.currentSessionId
-    if (!sid) return
+    if (!sid) {
+      console.log('[autosave] skip: no currentSessionId')
+      return
+    }
     if (saving) {
       pending = true
       return
@@ -121,11 +124,22 @@ function setupAutosave(): void {
     saving = true
     try {
       const session = await sessionService.load(sid)
-      if (!session) return
+      if (!session) {
+        console.log('[autosave] skip: session not found', sid)
+        return
+      }
       session.messages = state.messages
       session.threadId = state.threadId
       session.updatedAt = Date.now()
       await sessionService.save(session)
+      console.log(
+        '[autosave] saved',
+        sid,
+        'messages=',
+        state.messages.length,
+        'threadId=',
+        state.threadId,
+      )
       // 通知 project store 刷新列表（更新排序）
       void useProjectStore.getState().loadSessions()
     } catch (e) {
@@ -141,7 +155,10 @@ function setupAutosave(): void {
   }
 
   useCodexStore.subscribe((state, prev) => {
-    if (!state.currentSessionId) return
+    if (!state.currentSessionId) {
+      console.log('[autosave] subscribe: no currentSessionId')
+      return
+    }
     if (
       state.messages === prev.messages &&
       state.threadId === prev.threadId &&

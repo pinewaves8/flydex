@@ -105,10 +105,14 @@ export const useProjectStore = create<ProjectState>((set, get) => ({
       const sessions = get().sessions
       const current = get().currentSessionId
       if (!current || !sessions.some((s) => s.id === current)) {
-        set({ currentSessionId: sessions[0]?.id ?? null })
+        const target = sessions[0]?.id ?? null
+        set({ currentSessionId: target })
+        // 同步 codex store（autosave 数据源）+ 加载该会话消息
+        void get().setCurrentSession(target)
       }
     } else {
       set({ sessions: [], currentSessionId: null })
+      useCodexStore.getState().setCurrentSessionId(null)
     }
   },
 
@@ -127,6 +131,9 @@ export const useProjectStore = create<ProjectState>((set, get) => ({
       sessions: [session, ...state.sessions],
       currentSessionId: session.id,
     }))
+    // 同步 codex store（autosave 数据源）+ 清空消息为新会话
+    useCodexStore.getState().setCurrentSessionId(session.id)
+    useCodexStore.getState().loadSession({ messages: [], threadId: null })
     return session.id
   },
 

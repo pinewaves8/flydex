@@ -94,3 +94,30 @@ pub struct SessionSearchHit {
     /// 匹配的片段（最多 120 字符）
     pub snippet: String,
 }
+
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn deserialize_old_snake_case_session() {
+        let old = r#"{"id":"s1","project_id":"p1","title":"t","workdir":"w","thread_id":"th1","model":null,"messages":[],"created_at":1,"updated_at":2,"deleted_at":null,"forked_from":null}"#;
+        let s: Session = serde_json::from_str(old).unwrap();
+        assert_eq!(s.thread_id.as_deref(), Some("th1"));
+        assert_eq!(s.project_id, "p1");
+        assert_eq!(s.updated_at, 2);
+    }
+
+    #[test]
+    fn serialize_camel_case_session() {
+        let s = Session {
+            id: "s1".into(), project_id: "p1".into(), title: "t".into(), workdir: "w".into(),
+            thread_id: Some("th1".into()), model: None, messages: vec![],
+            created_at: 1, updated_at: 2, deleted_at: None, forked_from: None,
+        };
+        let j = serde_json::to_string(&s).unwrap();
+        assert!(j.contains("\"threadId\""), "missing threadId: {j}");
+        assert!(!j.contains("thread_id"), "still snake: {j}");
+    }
+}
