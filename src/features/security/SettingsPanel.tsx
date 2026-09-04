@@ -10,11 +10,13 @@ import {
   Sparkles,
   Terminal,
   Trash2,
+  Workflow,
   X,
   XCircle,
 } from 'lucide-react'
 import { useEffect, useState } from 'react'
 
+import { HooksSettings } from '@/features/hooks/HooksSettings'
 import { McpSettings } from '@/features/mcp/McpSettings'
 import { ModelSettings } from '@/features/model/ModelSettings'
 import { SkillSettings } from '@/features/skills/SkillSettings'
@@ -204,6 +206,17 @@ export function SettingsPanel() {
             >
               <Sparkles className="h-4 w-4" />
               Skills
+            </button>
+            <button
+              onClick={() => openSettings('hooks')}
+              className={`flex items-center gap-1.5 rounded-t-md border-b-2 px-3 py-2 text-sm transition-colors ${
+                settingsTab === 'hooks'
+                  ? 'border-primary text-foreground'
+                  : 'border-transparent text-muted-foreground hover:text-foreground'
+              }`}
+            >
+              <Workflow className="h-4 w-4" />
+              Hooks
             </button>
             <button
               onClick={() => openSettings('terminal')}
@@ -471,6 +484,9 @@ export function SettingsPanel() {
         ) : settingsTab === 'skills' ? (
           /* Skills tab */
           <SkillSettings />
+        ) : settingsTab === 'hooks' ? (
+          /* Hooks tab */
+          <HooksSettings />
         ) : settingsTab === 'terminal' ? (
           /* 终端与通知 tab */
           <>

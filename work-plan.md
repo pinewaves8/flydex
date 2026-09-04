@@ -98,7 +98,7 @@
 
 阶段7：对齐 Claude Code 补齐项（2026-09-04 规划）
   ├─ 7.0 差距基线（阶段 6 收官后对齐复检）
-  ├─ 7.1 Hooks 生命周期钩子（P0 工程自动化）
+  ├─ 7.1 Hooks 生命周期钩子（P0 工程自动化）✅ 已完成（2026-09-04）
   ├─ 7.2 Agent 层三件套（P1：内置专用子代理 / Agent Teams / Background Agents）
   ├─ 7.3 auto 权限 ML 分类（增强，非必需）
   └─ 7.4 扩展与体验（P2：Skills 市场 / Tasks API / Session Forking）
@@ -969,6 +969,13 @@ src-tauri/src/
 - **复用**：现有审批规则引擎做白名单约束；与 checkpoint、审计、子代理协同。
 - **典型场景**：文件变更后自动格式化 / 任务完成通知 / 错误上报 / 压缩后回调。
 - **验收**：GUI 实测任一 hook event 触发 shell 命令生效 + 审计记录 + 白名单拦截。
+
+> **7.1 Hooks 生命周期钩子（2026-09-04 已完成 + GUI 实测通过）**：
+> 后端 `services/hooks.rs`：9 个事件（ThreadStarted / TurnStarted / TurnCompleted / TurnError / MessageReceived / CommandExecuted / FileChanged / ApprovalRequested / Stop）；配置持久化 `~/.flydex/hooks.json`；执行走 `powershell -NoProfile -NonInteractive`，30s 超时 kill，内置/用户 deny 命中跳过并审计（安全底线，hook 配置不可覆盖）；审计追加 `~/.flydex/hooks-audit.jsonl`（ts/event/command/cwd/exit/skipped/reason/ms）。单测 4/4（事件合法性/事件表唯一/非法输入拒绝/危险命令拦截）。
+> `commands/hooks.rs` + lib.rs 注册 `hooks_events / hooks_list / hooks_add / hooks_remove / hooks_clear / hooks_test`（6 命令）。
+> 接线 `appserver_client.rs`：thread/started、turn/started、turn/completed、error 通知 + item/completed（command_execution→CommandExecuted / agent_message→MessageReceived / file_change→FileChanged）+ 审批请求（ApprovalRequested，携带 command+decision）处调用 `HooksService::fire`。
+> 前端新增 `features/hooks/HooksSettings.tsx` + `services/hooksService.ts` + `types/hooks.ts`，设置面板加 Hooks tab（事件下拉 / 命令 / 备注 / 添加 / 测试按钮 / 回填 / 删除 / 清空）。
+> **GUI 实测**：设置页添加 TurnCompleted hook（`Add-Content -Path 'C:\llm\glass\hooks_probe.log' -Value 'turn-done'`）→ 测试按钮 exit 0 → 对话「回复 OK 然后结束」触发 turn/completed → 探针文件 2 行 turn-done（1 次测试 + 1 次真实触发）+ hooks-audit.jsonl 1 条 `TurnCompleted exit 0 / skipped false / 2739ms`，全链路绿。deny 约束由单测 `blocked_denies_dangerous_command` 覆盖。
 
 ### 7.2 Agent 层三件套（P1）
 

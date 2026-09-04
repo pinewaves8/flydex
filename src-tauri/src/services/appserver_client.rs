@@ -20,6 +20,7 @@ use std::time::Duration;
 use tauri::{AppHandle, Emitter};
 
 use crate::services::git_checkpoint;
+use crate::services::hooks::HooksService;
 use crate::services::security::{ApprovalRecord, RuleDecision, SecurityService};
 use crate::types::codex::{CodexEvent, CodexEventBody};
 
@@ -572,6 +573,11 @@ impl AppServerClient {
                 },
             );
             debug_log!("[flydex-appserver] approval id={approval_id} decision={} method={method} command={}", decision.tag(), command.chars().take(200).collect::<String>());
+            // Hooks：审批请求事件（携带命令与决策结果，对齐 Claude Code 权限钩子）
+            HooksService::fire("ApprovalRequested", &serde_json::json!({
+                "command": command,
+                "decision": decision.tag(),
+            }));
             match &decision {
                 // deny：工具执行前直接拒绝（先判断再执行），并记录审计
                 RuleDecision::BuiltinDeny(reason) | RuleDecision::UserDeny(reason) => {
@@ -651,21 +657,44 @@ impl AppServerClient {
         let run_id = run_registry.lock().unwrap().get(&thread_id).cloned().unwrap_or_default();
 
         let event: Option<serde_json::Value> = match method {
-            "thread/started" => Some(serde_json::json!({
-                "type": "thread.started",
-                "thread_id": thread_id,
-            })),
-            "turn/started" => Some(serde_json::json!({
-                "type": "turn.started",
-                "thread_id": thread_id,
-            })),
+            "thread/started" => {
+                HooksService::fire("ThreadStarted", params);
+                Some(serde_json::json!({
+                    "type": "thread.started",
+                    "thread_id": thread_id,
+                }))
+            }
+            "turn/started" => {
+                HooksService::fire("TurnStarted", params);
+                Some(serde_json::json!({
+                    "type": "turn.started",
+                    "thread_id": thread_id,
+                }))
+            }
             "item/started" => params
                 .get("item")
                 .map(|item| serde_json::json!({ "type": "item.started", "item": map_item(item) })),
-            "item/completed" => params
-                .get("item")
-                .map(|item| serde_json::json!({ "type": "item.completed", "item": map_item(item) })),
+            "item/completed" => {
+                // Hooks：按 item 类型触发对应事件（对齐 Claude Code PostToolUse / FileChanged 等）
+                if let Some(item) = params.get("item") {
+                    let itype = item.get("type").and_then(|v| v.as_str()).unwrap_or("");
+                    let ev = match itype {
+                        "commandExecution" => "CommandExecuted",
+                        "agentMessage" => "MessageReceived",
+                        "fileChange" => "FileChanged",
+                        _ => "",
+                    };
+                    if !ev.is_empty() {
+                        HooksService::fire(ev, item);
+                    }
+                }
+                params
+                    .get("item")
+                    .map(|item| serde_json::json!({ "type": "item.completed", "item": map_item(item) }))
+            }
             "turn/completed" => {
+                // Hooks：本轮结束
+                HooksService::fire("TurnCompleted", params);
                 let usage = params.get("usage").cloned().unwrap_or(serde_json::Value::Null);
                 let mut ev = serde_json::json!({ "type": "turn.completed", "thread_id": thread_id });
                 if !usage.is_null() {
@@ -690,9 +719,12 @@ impl AppServerClient {
             }
             // 流式增量暂不单独推（前端用 item.completed 完整文本打字机）
             "item/agentMessage/delta" | "item/commandExecution/outputDelta" | "item/plan/delta" => None,
-            "error" => params.get("message").map(|m| serde_json::json!({
-                "type": "error", "message": m,
-            })),
+            "error" => {
+                HooksService::fire("TurnError", params);
+                params.get("message").map(|m| serde_json::json!({
+                    "type": "error", "message": m,
+                }))
+            }
             // warning（MCP 启动/限流类）不映射为前端 error，避免误报
             "warning" => None,
             _ => None,

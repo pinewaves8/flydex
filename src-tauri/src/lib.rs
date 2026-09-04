@@ -15,6 +15,7 @@ use commands::git::{
     git_stage_hunk, git_status, git_status_changes, git_unstage_all, git_unstage_file,
     git_unstage_hunk, remove_review_diff, write_review_diff,
 };
+use commands::hooks::{hooks_add, hooks_clear, hooks_events, hooks_list, hooks_remove, hooks_test};
 use commands::mcp::{mcp_list, mcp_remove, mcp_save, mcp_test};
 use commands::model::{
     delete_model, delete_provider, get_models, set_current_model, set_reasoning_effort,
@@ -135,6 +136,13 @@ pub fn run() {
             mcp_save,
             mcp_remove,
             mcp_test,
+            // hooks
+            hooks_events,
+            hooks_list,
+            hooks_add,
+            hooks_remove,
+            hooks_clear,
+            hooks_test,
             // skill
             skill_list,
             skill_read,

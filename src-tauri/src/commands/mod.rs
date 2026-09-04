@@ -1,5 +1,6 @@
 pub mod codex;
 pub mod git;
+pub mod hooks;
 pub mod mcp;
 pub mod memory;
 pub mod model;

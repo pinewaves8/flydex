@@ -2,6 +2,7 @@ pub mod appserver_client;
 pub mod codex_manager;
 pub mod git_checkpoint;
 pub mod git_service;
+pub mod hooks;
 pub mod mcp;
 pub mod memory;
 pub mod model;
