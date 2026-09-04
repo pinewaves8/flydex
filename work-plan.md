@@ -95,6 +95,13 @@
   ├─ 6.3 工具生态（web 工具 + 子代理并行）✅ 已完成
   ├─ 6.4 可靠性（checkpoint + 沙箱 + 重试）✅ 已完成（2026-09-04 四项全闭环）
   └─ 6.5 自进化闭环（skill 自动沉淀 + 记忆自动更新 + 配置反馈优化）✅ 已完成（2026-09-04）
+
+阶段7：对齐 Claude Code 补齐项（2026-09-04 规划）
+  ├─ 7.0 差距基线（阶段 6 收官后对齐复检）
+  ├─ 7.1 Hooks 生命周期钩子（P0 工程自动化）
+  ├─ 7.2 Agent 层三件套（P1：内置专用子代理 / Agent Teams / Background Agents）
+  ├─ 7.3 auto 权限 ML 分类（增强，非必需）
+  └─ 7.4 扩展与体验（P2：Skills 市场 / Tasks API / Session Forking）
 ```
 
 ---
@@ -929,6 +936,75 @@ src-tauri/src/
 ```
 
 每个任务按工作原则第 6 条：从 master 切独立分支（`feat/6.x-<name>`），完成并验证后合并回 master 再推送。
+
+---
+
+## 阶段7：对齐 Claude Code 补齐项（2026-09-04 规划）
+
+> **来源**：阶段 6 六块全部收官后的对齐复检（对照 Claude Code 2026 能力全景）。
+> **结论**：flydex 已在记忆 / 执行权限 / 工作流（Skills·MCP）/ 可靠性四条主线对齐；
+> 剩余差距集中在「工程自动化（Hooks）」与「多 Agent 编排（专用子代理 / Teams / 后台）」。
+> 本阶段按 P0→P4 优先级推进。
+
+### 7.0 差距基线（2026-09-04 已完成）
+
+| 维度 | Claude Code 能力 | flydex 现状 | 状态 |
+| --- | --- | --- | --- |
+| 记忆层 | 分层记忆 / Auto-Memory / compact | 6.1 分层 + 6.5 沉淀去重 | ✅ 已对齐 |
+| 执行权限 | 审批规则化 / 全自动 / 逐块 diff | 6.2 规则引擎 deny>allow>ask + 全自动 + 审计 | ✅ 已对齐 |
+| auto 权限 | ML 分类器预判 | 规则匹配（deny 先判断再执行） | 🔶 规则版 |
+| 工作流 | Slash / Plan / Skills / MCP | 6.3 + 6.5 Skills 沉淀校验回滚 | ✅ 已对齐 |
+| Hooks | 24 个 hook events | 无 | ❌ P0 |
+| Skills 市场 / Tasks API | Marketplace / 持久任务 | 无 | ❌ P2 |
+| Agent 层 | 子代理并行 | 6.3 子代理并行 | ✅ 已对齐 |
+| Agent 编排 | 内置专用子代理 / Teams / Background | 无角色分派 / 无团队协调 / 无后台 | ❌ P1 |
+| 可靠性 | Checkpoint / 恢复 / 重试 / Forking | 6.4 全闭环（Forking 未做） | ✅ 已对齐（Forking P2） |
+| 定位差异 | Computer Use / Dynamic Workflows | 桌面客户端意义低 | ⚪ 不跟 |
+
+### 7.1 Hooks 生命周期钩子（P0 最高优先）
+
+- **对齐目标**：Claude Code 注册 24 个生命周期事件执行 shell 命令，实现自动化。
+- **关键事件参考**：CwdChanged / FileChanged / StopFailure / PostCompact / InstructionsLoaded 等。
+- **实现**：appserver 层加 hooks 表（event → shell 命令），在 codex 消息流转对应节点触发。
+- **复用**：现有审批规则引擎做白名单约束；与 checkpoint、审计、子代理协同。
+- **典型场景**：文件变更后自动格式化 / 任务完成通知 / 错误上报 / 压缩后回调。
+- **验收**：GUI 实测任一 hook event 触发 shell 命令生效 + 审计记录 + 白名单拦截。
+
+### 7.2 Agent 层三件套（P1）
+
+- **7.2.1 内置专用子代理**：Explore（快读只读代码分析，可走轻量模型）+ Plan（研究），带角色与模型分派；复用现有子代理通道（subagent-server exec）。
+- **7.2.2 Agent Teams 协调**：TeamCreate / SendMessage 多智能体协作，主会话统一调度。
+- **7.2.3 Background Agents**：后台子代理常驻，主会话继续工作时并行产出。
+- **验收**：GUI 实测"子代理搜索/分析 + 主会话并行"完整链路。
+
+### 7.3 auto 权限 ML 分类（🔶 增强，非必需）
+
+- 规则引擎已实现"deny 先判断再执行"（核心目标达成）。
+- 建议：暂不引入本地 ML；先把规则覆盖面（危险命令白名单）做全，达到同类安全性。
+
+### 7.4 扩展与体验（P2）
+
+- **Skills 市场**：从本地 skill 目录导入/导出，低成本获得生态雏形。
+- **Tasks API**：持久任务列表 + 依赖关系。
+- **Session Forking**：并行时间线（深化已有 fork_session + Phase 3 thread/fork 通道）。
+
+### 定位差异（确认不跟）
+
+Computer Use（远程设备控制）、Dynamic Workflows（数百子代理并行，research preview）——桌面客户端意义低。
+
+### 安全边界（阶段7 全局强制，沿用阶段 6）
+
+1. 全自动 ≠ 无管控：一键暂停/终止 + 危险操作白名单外永不自动放行
+2. 所有自动动作可审计可回滚：Hooks / 子代理 / 审批放行均记录日志
+3. 密钥与权限隔离：子代理/沙箱执行不得泄露 API Key 与工作区外文件
+
+### 建议执行顺序
+
+```
+7.1 Hooks（P0 工程自动化）→ 7.2 Agent 三件套（P1）→ 7.3/7.4 增强项
+```
+
+每个任务按工作原则第 6 条：从 master 切独立分支（`feat/7.x-<name>`），完成并验证后合并回 master 再推送。
 
 ---
 

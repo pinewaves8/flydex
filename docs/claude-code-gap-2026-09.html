@@ -1,0 +1,127 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>flydex × Claude Code 对齐差距报告（2026-09）</title>
+<style>
+  :root {
+    --text: #1A1B1C; --sec: #6B7280; --bg: #F4F3EE; --card: #FFFFFF;
+    --border: #E4E3DD; --ok: #52C41A; --warn: #FAAD14; --bad: #EA6668;
+    --accent: #9EACEA;
+  }
+  * { box-sizing: border-box; }
+  body { margin: 0; font-family: 'Roboto','PingFang SC','Segoe UI',Arial,sans-serif; background: var(--bg); color: var(--text); line-height: 1.6; }
+  .wrap { max-width: 1080px; margin: 0 auto; padding: 24px 16px 48px; }
+  h1 { font-size: 22px; margin: 0 0 4px; }
+  .sub { color: var(--sec); font-size: 13px; margin-bottom: 20px; }
+  .cards { display: flex; gap: 12px; flex-wrap: wrap; margin-bottom: 24px; }
+  .card { flex: 1 1 200px; min-width: 0; background: var(--card); border: 1px solid var(--border); border-radius: 12px; padding: 12px 14px; }
+  .card .k { font-size: 12px; color: var(--sec); }
+  .card .v { font-size: 20px; font-weight: 600; margin-top: 2px; }
+  .ok { color: var(--ok); } .warn { color: var(--warn); } .bad { color: var(--bad); }
+  table { width: 100%; border-collapse: collapse; background: var(--card); border-radius: 12px; overflow: hidden; border: 1px solid var(--border); margin-bottom: 24px; }
+  th, td { text-align: left; padding: 9px 12px; font-size: 13px; border-bottom: 1px solid var(--border); vertical-align: top; }
+  th { background: rgba(158,172,234,0.15); font-weight: 600; font-size: 12px; }
+  tr:last-child td { border-bottom: none; }
+  .grp { background: rgba(158,172,234,0.08); font-weight: 600; }
+  .tag { display: inline-block; padding: 1px 7px; border-radius: 999px; font-size: 11px; font-weight: 600; }
+  .t-ok { background: rgba(82,196,26,0.12); color: #2f9e0f; }
+  .t-half { background: rgba(250,173,20,0.14); color: #b8860b; }
+  .t-bad { background: rgba(234,102,104,0.12); color: #d4380d; }
+  .t-p0 { background: rgba(234,102,104,0.16); color: #d4380d; }
+  .t-p1 { background: rgba(250,173,20,0.16); color: #b8860b; }
+  .t-p2 { background: rgba(139,200,234,0.16); color: #0e7490; }
+  h2 { font-size: 16px; margin: 28px 0 10px; }
+  .item { background: var(--card); border: 1px solid var(--border); border-radius: 12px; padding: 12px 14px; margin-bottom: 10px; }
+  .item .hd { font-weight: 600; font-size: 14px; }
+  .item .why { color: var(--sec); font-size: 13px; margin-top: 4px; }
+  .item .do { font-size: 13px; margin-top: 6px; }
+  .foot { color: var(--sec); font-size: 12px; margin-top: 28px; }
+  @media (max-width: 600px) { .wrap { padding: 16px 10px 32px; } td,th { font-size: 12px; padding: 7px 8px; } }
+</style>
+</head>
+<body>
+<div class="wrap">
+  <h1>flydex × Claude Code 对齐差距报告</h1>
+  <div class="sub">阶段 6 全部收官后复检 ｜ 2026-09-04 ｜ 对齐基线：Claude Code 2026 能力全景</div>
+
+  <div class="cards">
+    <div class="card"><div class="k">能力维度覆盖</div><div class="v ok">≈ 12 / 20 已对齐</div></div>
+    <div class="card"><div class="k">核心差距（高优先）</div><div class="v bad">4 项</div></div>
+    <div class="card"><div class="k">中优先差距</div><div class="v warn">4 项</div></div>
+    <div class="card"><div class="k">定位差异（不建议跟）</div><div class="v">2 项</div></div>
+  </div>
+
+  <table>
+    <thead><tr><th style="width:26%">能力</th><th style="width:34%">Claude Code 做法</th><th style="width:24%">flydex 现状</th><th>状态</th></tr></thead>
+    <tbody>
+      <tr class="grp"><td colspan="4">① 记忆层（6.1 + 6.5）</td></tr>
+      <tr><td>分层记忆 L1 用户 / L2 项目</td><td>CLAUDE.md / MEMORY.md 分层</td><td>~/.flydex + &lt;workdir&gt;/.flydex/MEMORY.md</td><td><span class="tag t-ok">✅ 已对齐</span></td></tr>
+      <tr><td>记忆自动沉淀</td><td>Auto-Memories（前 200 行加载）</td><td>任务后显式确认沉淀 + 去重</td><td><span class="tag t-ok">✅ 已对齐</span></td></tr>
+      <tr><td>自动 compact</td><td>超预算自动压缩</td><td>上下文快照 + 新会话</td><td><span class="tag t-ok">✅ 已对齐</span></td></tr>
+
+      <tr class="grp"><td colspan="4">② 执行 / 权限（6.2）</td></tr>
+      <tr><td>审批规则化</td><td>allow / deny / ask + 规则文件</td><td>deny&gt;allow&gt;ask 规则引擎 + 可视化 UI</td><td><span class="tag t-ok">✅ 已对齐</span></td></tr>
+      <tr><td>全自动模式</td><td>--full-auto</td><td>全自动 + 一键暂停 + 审计</td><td><span class="tag t-ok">✅ 已对齐</span></td></tr>
+      <tr><td>逐块 diff 审批</td><td>文件级 accept-edits</td><td>文件 diff + 逐块审批</td><td><span class="tag t-ok">✅ 已对齐</span></td></tr>
+      <tr><td>auto 权限（ML 分类）</td><td>7 级权限谱系，auto 用 ML 分类器预判</td><td>规则匹配（deny 先判断再执行）</td><td><span class="tag t-half">🔶 部分（规则版）</span></td></tr>
+
+      <tr class="grp"><td colspan="4">③ 工作流 / 扩展（6.3 + 6.5）</td></tr>
+      <tr><td>Slash Commands / Plan</td><td>/plan /review /compact 等</td><td>/plan /review 已内置</td><td><span class="tag t-ok">✅ 已对齐</span></td></tr>
+      <tr><td>Skills 系统</td><td>.claude/skills + 自动命中</td><td>.codex/skills + 沉淀/校验/回滚</td><td><span class="tag t-ok">✅ 已对齐</span></td></tr>
+      <tr><td>MCP 生态</td><td>Client-Server 连接外部服务</td><td>MCP 客户端 + 衍生 skill</td><td><span class="tag t-ok">✅ 已对齐</span></td></tr>
+      <tr><td><b>Hooks 生命周期</b></td><td>24 个 hook events（文件变更/完成/压缩后/指令加载）注册 shell 自动化</td><td>无</td><td><span class="tag t-p0">❌ P0</span></td></tr>
+      <tr><td>Skills 市场 / 插件</td><td>Marketplace + Agent Skills 可安装</td><td>本地 skill 管理，无市场</td><td><span class="tag t-p2">❌ P2</span></td></tr>
+      <tr><td>Tasks API</td><td>持久任务列表 + 依赖</td><td>无</td><td><span class="tag t-p2">❌ P2</span></td></tr>
+
+      <tr class="grp"><td colspan="4">④ Agent 层（6.3）</td></tr>
+      <tr><td>子代理并行</td><td>Task 子代理隔离上下文</td><td>子代理并行（独立 VM/会话）</td><td><span class="tag t-ok">✅ 已对齐</span></td></tr>
+      <tr><td><b>内置专用子代理</b></td><td>Explore（Haiku 快读）/ Plan（研究）/ general</td><td>子代理无角色/模型分派</td><td><span class="tag t-p1">❌ P1</span></td></tr>
+      <tr><td><b>Agent Teams 协调</b></td><td>TeamCreate / SendMessage 多智能体协作</td><td>无团队协调 / 消息传递</td><td><span class="tag t-p1">❌ P1</span></td></tr>
+      <tr><td><b>Background Agents</b></td><td>后台子代理（主会话继续工作时并行）</td><td>子代理为任务式，无后台常驻</td><td><span class="tag t-p1">❌ P1</span></td></tr>
+
+      <tr class="grp"><td colspan="4">⑤ 可靠性（6.4）</td></tr>
+      <tr><td>Checkpoint</td><td>每轮 prompt 前自动快照 + 回滚</td><td>每轮 turn 后 git 自动快照</td><td><span class="tag t-ok">✅ 已对齐</span></td></tr>
+      <tr><td>会话恢复</td><td>崩溃 / 重启恢复上下文</td><td>thread/resume 磁盘 rollout 恢复</td><td><span class="tag t-ok">✅ 已对齐</span></td></tr>
+      <tr><td>失败重试</td><td>瞬时错误自动重试</td><td>app-server 请求层指数退避重试</td><td><span class="tag t-ok">✅ 已对齐</span></td></tr>
+      <tr><td>Session Forking</td><td>回退 + 并行时间线</td><td>会话历史 + restore，无 fork 分叉</td><td><span class="tag t-p2">❌ P2</span></td></tr>
+
+      <tr class="grp"><td colspan="4">⑥ 定位差异（不建议跟随）</td></tr>
+      <tr><td>Computer Use</td><td>远程设备控制（research preview）</td><td>桌面客户端，无远程控制需求</td><td><span class="tag">⚪ 定位差异</span></td></tr>
+      <tr><td>Dynamic Workflows</td><td>数百子代理并行（research preview）</td><td>子代理并行数量有限</td><td><span class="tag">⚪ 定位差异</span></td></tr>
+    </tbody>
+  </table>
+
+  <h2>重点差距与建议</h2>
+
+  <div class="item">
+    <div class="hd"><span class="tag t-p0">P0 高价值</span> Hooks 生命周期钩子</div>
+    <div class="why">Claude Code 注册 24 个生命周期事件（CwdChanged / FileChanged / StopFailure / PostCompact / InstructionsLoaded 等）执行 shell 命令，实现「文件变更后自动格式化 / 任务完成通知 / 错误上报 / 压缩后回调」。这是工程自动化价值最高的缺口。</div>
+    <div class="do">建议：appserver 层加 hooks 表（event → shell 命令），在 codex 消息流转的对应节点触发；复用现有审批规则引擎做白名单约束。</div>
+  </div>
+
+  <div class="item">
+    <div class="hd"><span class="tag t-p1">P1</span> Agent 层三件套：内置专用子代理 / Agent Teams / Background Agents</div>
+    <div class="why">Claude Code 的 Explore（Haiku 快读只读分析）与 Plan（研究）子代理有明确角色与模型分派；Agent Teams 支持多智能体协调（TeamCreate/SendMessage）；Background Agents 后台并行。</div>
+    <div class="do">建议：先做「内置 Explore/Plan 角色」+「模型分派」（成本低、复用现有子代理通道），再做团队协调。</div>
+  </div>
+
+  <div class="item">
+    <div class="hd"><span class="tag t-half">🔶 部分</span> auto 权限的 ML 分类器</div>
+    <div class="why">你多次强调「deny 应该先判断再执行」，flydex 已用规则引擎实现（优于逐条弹窗）；Claude Code 的 auto 模式用 ML 分类器预判危险度。规则版已达成核心目标，ML 是增强项。</div>
+    <div class="do">建议：暂不引入本地 ML；可先把规则覆盖面（危险命令白名单）做全，达到同类安全性。</div>
+  </div>
+
+  <div class="item">
+    <div class="hd"><span class="tag t-p2">P2</span> Skills 市场 / Tasks API / Session Forking</div>
+    <div class="why">Skill 市场带来生态；Tasks API 是持久任务与依赖；Session Forking 是并行时间线。</div>
+    <div class="do">建议：Skills 市场可做成「从本地 skill 目录导入/导出」，低成本获得生态雏形。</div>
+  </div>
+
+  <div class="foot">
+    事实口径：Claude Code 能力清单来自 2026 年公开资料（Anthropic 官方文档 / 社区指南，搜索核验）；flydex 现状来自本项目 work-plan 阶段 6 实际落地记录。矩阵为对齐度评估，非官方认证。
+  </div>
+</div>
+</body>
+</html>
