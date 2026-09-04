@@ -1,6 +1,10 @@
 import { invoke } from '@tauri-apps/api/core'
 import { create } from 'zustand'
 
+import {
+  createSkill as apiCreateSkill,
+  deleteSkill as apiDeleteSkill,
+} from '@/services/skillService'
 import type { SkillDefinition } from '@/types/skill'
 
 /** 内置技能定义 */
@@ -88,6 +92,10 @@ interface SkillsState {
   execute: (name: string, userInput: string) => string
   /** 启用/禁用技能 */
   toggle: (name: string) => void
+  /** 创建/更新项目技能（先校验，已存在同名 skill 时备份旧版可回滚） */
+  createSkill: (baseDir: string, name: string, content: string) => Promise<void>
+  /** 删除项目技能（先备份到 logs/skill-trash/ 可回滚） */
+  deleteSkill: (baseDir: string, name: string) => Promise<void>
   /** 按名称查找技能 */
   find: (name: string) => SkillDefinition | undefined
   /** 搜索技能（模糊匹配名称和描述） */
@@ -174,6 +182,16 @@ export const useSkillsStore = create<SkillsState>((set, get) => ({
     set((state) => ({
       skills: state.skills.map((s) => (s.name === name ? { ...s, enabled: !s.enabled } : s)),
     }))
+  },
+
+  createSkill: async (baseDir, name, content) => {
+    await apiCreateSkill(baseDir, name, content)
+    await get().load(baseDir)
+  },
+
+  deleteSkill: async (baseDir, name) => {
+    await apiDeleteSkill(baseDir, name)
+    await get().load(baseDir)
   },
 
   find: (name: string) => {
