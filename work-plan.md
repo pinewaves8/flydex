@@ -94,7 +94,7 @@
   ├─ 6.2 自主执行（审批规则化 + 全自动模式）✅ 已完成
   ├─ 6.3 工具生态（web 工具 + 子代理并行）✅ 已完成
   ├─ 6.4 可靠性（checkpoint + 沙箱 + 重试）✅ 已完成（2026-09-04 四项全闭环）
-  └─ 6.5 自进化闭环（skill 自动沉淀 + 记忆自动更新 + 配置反馈优化）🚧 进行中
+  └─ 6.5 自进化闭环（skill 自动沉淀 + 记忆自动更新 + 配置反馈优化）✅ 已完成（2026-09-04）
 ```
 
 ---
@@ -896,7 +896,7 @@ src-tauri/src/
 
 对齐 Claude Code 的"每轮自动 commit 快照"→ 每轮 `turn/completed` 后对工作区 `git add -A && git commit`（本地，不 push）。新增 `src-tauri/src/services/git_checkpoint.rs`：`checkpoint_workspace(cwd)` 开关（`~/.flydex/security.json` 的 `auto_checkpoint`，serde default true，兼容旧文件）+ 非 git 仓库/无变更/失败静默跳过 + 独立线程不阻塞 reader。接入：`appserver_client.rs` 静态 `THREAD_CWD`（thread_start 写入 cwd，turn/completed 读后 spawn 线程执行）。**单测 2/2 通过**（有变更提交 + 无变更跳过 / 非 git 跳过）。cargo check EXIT=0。**前端开关 UI 已补**：设置页「自动 git 快照」Toggle（`set_auto_checkpoint` 命令 + store + service）。**GUI 实测通过（2026-09-03）**：在 `C:\llm\glass`（git 仓库）让模型创建 `checkpoint_probe.txt` → turn 完成自动产生 `flydex-checkpoint 1788484335212` commit，文件已提交、工作区干净。快照日志已升级写 `logs/flydex-appserver.log`（`[flydex] git checkpoint cwd=... msg=...`）。
 
-### 6.5 自进化闭环（skill 自动沉淀 + 记忆自动更新 + 配置反馈优化）
+### 6.5 自进化闭环（skill 自动沉淀 + 记忆自动更新 + 配置反馈优化）✅ 已完成（2026-09-04）
 
 | 项 | 内容 |
 |----|------|
