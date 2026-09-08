@@ -1,4 +1,4 @@
-import { invoke } from '@tauri-apps/api/core'
+﻿import { invoke } from '@tauri-apps/api/core'
 import {
   Play,
   Trash2,
@@ -53,9 +53,8 @@ import type { CodexMessage } from '@/types/codexJson'
 import { approvalLabel } from '@/types/security'
 
 /** 审查意图解析：/review、/rv、/cr 前缀或"审查"开头，可选模式参数
- *
  * 支持：/review、/review uncommitted、/review commit <hash>、/review base <branch>，
- * 以及中文"审查未提交的改动"等自然语言形式。
+ * 以及中文"审查未提交的改动"等自然语言触发。
  */
 interface ReviewIntent {
   mode: 'uncommitted' | 'commit' | 'base'
@@ -84,7 +83,7 @@ const STATUS_CONFIG: Record<CodexStatus, { label: string; icon: React.ReactNode;
       color: 'text-muted-foreground',
     },
     running: {
-      label: 'Running…',
+      label: 'Running',
       icon: <Loader2 className="h-3.5 w-3.5 animate-spin" />,
       color: 'text-blue-400',
     },
@@ -150,7 +149,11 @@ function MessageCard({
   }
 
   const kindIcons: Record<string, React.ReactNode> = {
-    agent: <span className="text-green-400">●</span>,
+    agent: (
+      <span className="text-green-400">
+        <Sparkles className="h-3 w-3" />
+      </span>
+    ),
     tool: <Wrench className="h-3 w-3 text-blue-400" />,
     error: <AlertCircle className="h-3 w-3 text-red-400" />,
     system: null,
@@ -163,7 +166,7 @@ function MessageCard({
     second: '2-digit',
   })
 
-  // 文件变更卡片：内联展示 Agent 的修改 + 接受/拒绝回滚
+  // 文件变更卡片：内联展示 Agent 的修改 + 接受/拒绝回调
   if (message.kind === 'file_change') {
     return <FileChangeCard message={message} repo={repo} />
   }
@@ -185,7 +188,7 @@ function MessageCard({
     return <ReviewCard message={message} />
   }
 
-  // 权限拒绝卡片：规则引擎 deny 命中（命令 + 命中原因）
+  // 权限拒绝卡片：规则引用、deny 命中（命令 + 命中原因）
   if (message.kind === 'deny') {
     return (
       <div className="flex items-start gap-2 rounded-md border border-red-500/40 bg-red-500/5 px-3 py-2">
@@ -247,7 +250,7 @@ function MessageCard({
         {expanded && (
           <div className="space-y-1">
             <div className="text-sm text-foreground">{message.content}</div>
-            {/* 结果摘要（Claude Code 风格 — 让用户看到工具做了什么） */}
+            {/* 结果摘要（Claude Code 风格 —— 让用户看到工具做了什么） */}
             {message.toolResult && (
               <div className="rounded border border-sky-500/20 bg-sky-500/5 p-2 text-xs">
                 <span className="mb-0.5 block font-mono text-[10px] uppercase tracking-wide text-sky-400">
@@ -257,9 +260,14 @@ function MessageCard({
               </div>
             )}
             {message.toolArgs != null && (
-              <pre className="overflow-x-auto rounded bg-black/30 p-2 text-xs text-muted-foreground">
-                {JSON.stringify(message.toolArgs, null, 2)}
-              </pre>
+              <details className="group mt-1">
+                <summary className="cursor-pointer text-[10px] text-muted-foreground hover:text-blue-400">
+                  查看参数
+                </summary>
+                <pre className="mt-1 overflow-x-auto rounded bg-black/30 p-2 text-xs text-muted-foreground">
+                  {JSON.stringify(message.toolArgs, null, 2)}
+                </pre>
+              </details>
             )}
           </div>
         )}
@@ -328,7 +336,7 @@ export function ChatPanel() {
   const [showMemoryPanel, setShowMemoryPanel] = useState(false)
   const [showSubagent, setShowSubagent] = useState(false)
   const [showTaskPanel, setShowTaskPanel] = useState(false)
-  // 图像附件：{ name: 原始文件名, dataUrl: 预览用 base64 data URL, path: 落盘后的相对路径, saving: 是否保存中 }
+  // 图片附件：{ name: 原始文件名, dataUrl: 预览用 base64 data URL, path: 落盘后的相对路径, saving: 是否保存中 }
   const [attachments, setAttachments] = useState<
     { name: string; dataUrl: string; path: string; saving: boolean }[]
   >([])
@@ -354,7 +362,7 @@ export function ChatPanel() {
   // 7.2.3 后台子代理运行数徽章
   const subagentRunning = useSubagentStore((s) => s.backgroundRunning)
 
-  // 打字机推进：逐字追加显示（16ms/次，每次 3 字符）
+  // 打字机推进：逐字追加显示（6ms/次，每次 3 字符）
   useEffect(() => {
     if (!streaming) return
     if (streaming.shown >= streaming.full.length) {
@@ -370,7 +378,7 @@ export function ChatPanel() {
   // 当前会话标题
   const currentSessionTitle = sessions.find((s) => s.id === currentSessionId)?.title ?? ''
   // 当前会话绑定的工作目录（遵循 codex：会话绑定创建时的 cwd）
-  const currentSessionWorkdir = sessions.find((s) => s.id === currentSessionId)?.workdir ?? ''
+  const currentSessionWorkdir = sessions.find((s) => s.id === currentSessionId)?.workdir
   // 会话级模型覆盖（null 表示用全局默认）
   const currentSessionModel = sessions.find((s) => s.id === currentSessionId)?.model ?? null
   const forkSession = useProjectStore((s) => s.forkSession)
@@ -419,10 +427,10 @@ export function ChatPanel() {
     }
   }, [status])
 
-  /** 压缩上下文（6.1 P2）：长会话 → 模型摘要为上下文快照 → 重置为新会话
+  /** 压缩上下文（6.1 P2）：长会话时把模型摘要为上下文快照 —— 重置为新会话
    *
-   * 通过 loadSession 替换 messages 为快照 + threadId 置空，下次 run 用 exec 开新 thread，
-   * 从快照 + 记忆注入继续工作，token 预算清零。
+   * 通过 loadSession 替换 messages 为快照 + threadId 置空，下次 run/exec 开启新 thread；
+   * 从快照 + 记忆注入继续工作。
    */
   const handleCompact = async () => {
     if (status === 'running') return
@@ -467,8 +475,8 @@ export function ChatPanel() {
             const hasDiff = diff.trim().length > 0
             await run(
               hasDiff
-                ? '请审查代码变更。diff 内容在 .flydex-review.diff 中，请读取后输出结构化审查报告'
-                : '当前没有检测到代码变更，请说明这一点',
+                ? '请审查代码变更。diff 内容已写入工作目录下 .flydex-review.diff 文件中，请读取后输出结构化审查报告。'
+                : '当前没有检测到代码变更，请说明这一点。',
               workdir,
               currentSessionModel,
               'review',
@@ -491,9 +499,7 @@ export function ChatPanel() {
             currentSessionModel,
           )
         } else {
-          useCodexStore
-            .getState()
-            .appendOutput({ text: '▸ 没有可重跑的上一次输入', kind: 'system' })
+          useCodexStore.getState().appendOutput({ text: '没有可重跑的上一次输入', kind: 'system' })
         }
         break
       case 'export':
@@ -509,7 +515,7 @@ export function ChatPanel() {
           a.download = `session-${sid}.md`
           a.click()
           URL.revokeObjectURL(url)
-          useCodexStore.getState().appendOutput({ text: '▸ 已导出 Markdown', kind: 'system' })
+          useCodexStore.getState().appendOutput({ text: '已导出 Markdown', kind: 'system' })
         } catch (e) {
           useCodexStore.getState().appendOutput({ text: `导出失败: ${String(e)}`, kind: 'stderr' })
         }
@@ -517,7 +523,7 @@ export function ChatPanel() {
       case 'shell':
         // 内部 shell 提示（仅记录到 output）
         useCodexStore.getState().appendOutput({
-          text: `▸ shell 提示: ${action.command}`,
+          text: `[shell 提示] ${action.command}`,
           kind: 'system',
         })
         break
@@ -526,7 +532,7 @@ export function ChatPanel() {
         break
       case 'dismiss':
       default:
-        // 简单 dismiss：把摘要下方建议隐藏（再次发送消息时自动重新出现）
+        // 简易 dismiss：把摘要下方建议隐藏（再次发送消息时自动重新出现）
         break
     }
   }
@@ -557,7 +563,7 @@ export function ChatPanel() {
     }
 
     // 遵循 codex：resume 会话用会话绑定的 cwd，新会话用全局 cwd；模型用会话级覆盖（无则全局默认）
-    // 计划模式开启时传 mode='plan'（后端强制 read-only 沙箱 + 注入计划指令）
+    // 计划模式开启时 mode='plan'（后端强制 read-only 沙箱 + 注入计划指令）
     const planModeActive = useCodexStore.getState().planMode
     const workdir = currentSessionWorkdir || workspaceCwd
 
@@ -582,7 +588,7 @@ export function ChatPanel() {
       }
     }
 
-    // 审查模式：/review 前缀或"审查"开头 → 取 diff 写临时文件 → read-only 审查
+    // 审查模式：/review 前缀或"审查"开头 —— 生成 diff 写入临时文件，read-only 审查
     const reviewIntent = parseReviewCommand(cmd)
     if (reviewIntent && workdir) {
       try {
@@ -594,10 +600,10 @@ export function ChatPanel() {
         await invoke('write_review_diff', { repo: workdir, content: diff })
         useCodexStore.getState().setReviewMode(true)
         const hasDiff = diff.trim().length > 0
-        const prompt = `请审查代码变更。diff 内容已写入工作目录下的 .flydex-review.diff 文件${
+        const prompt = `请审查代码变更。diff 内容已写入工作目录下 .flydex-review.diff 文件${
           hasDiff
-            ? '，请读取后按要求输出结构化审查报告'
-            : '，但当前没有检测到任何代码变更，请直接说明这一点'
+            ? '，请读取后按要求输出结构化审查报告。'
+            : '，但当前没有检测到任何代码变更，请直接说明这一点。'
         }。`
         await run(prompt, workdir, currentSessionModel, 'review')
         await invoke('remove_review_diff', { repo: workdir }).catch(() => {})
@@ -607,7 +613,7 @@ export function ChatPanel() {
         return
       }
     }
-    // 等待图像附件全部落盘完成（pending 归零）后再发送
+    // 等待图片附件全部落盘完成（pending 归零）后再发送
     if (pendingSavesRef.current > 0) {
       const deadline = Date.now() + 5000
       while (pendingSavesRef.current > 0 && Date.now() < deadline) {
@@ -623,7 +629,7 @@ export function ChatPanel() {
     }
   }
 
-  // 切换会话模型覆盖。模型与会话 thread 绑定：若会话已有历史 thread，自动新建（清 threadId），
+  // 切换会话模型覆盖。模型与会话 thread 绑定：若会话已有历史 thread，自动新建（新 threadId），
   // 避免跨模型 resume 触发 codex 的模型不一致警告（也符合 codex"模型绑定会话"语义）
   const handleModelChange = async (modelId: string) => {
     if (!currentSessionId) {
@@ -646,13 +652,13 @@ export function ChatPanel() {
       reader.readAsDataURL(file)
     })
 
-  // 附加一个图片文件：读 base64 → 调后端落盘 → 存入 attachments（path 为相对路径）
+  // 附加一个图片文件：转 base64 → 调后端落盘 → 存入 attachments（path 为相对路径）
   const addImageFile = async (file: File) => {
     if (!file.type.startsWith('image/')) return
     const workdir = currentSessionWorkdir || workspaceCwd
     if (!workdir) {
       useCodexStore.getState().appendOutput({
-        text: '附加图片前请先打开/选择一个工作目录',
+        text: '附加图片前请先打开/选择一个工作目录。',
         kind: 'stderr',
       })
       return
@@ -732,7 +738,7 @@ export function ChatPanel() {
 
   return (
     <div className="flex h-full flex-col">
-      {/* 工具栏 */}
+      {/* 工具 */}
       <div className="flex items-center justify-between border-b border-border px-4 py-2">
         <div className="flex items-center gap-2">
           <Terminal className="h-4 w-4 text-primary" />
@@ -754,7 +760,7 @@ export function ChatPanel() {
               </option>
             ))}
           </select>
-          {/* 上下文与记忆指示器（6.1）：L1/L2 记忆层 + 会话上下文用量 + 超阈值压缩 */}
+          {/* 上下文与记忆指示器（6.1）：L1/L2 记忆用量 + 会话上下文用量 + 超限压缩 */}
           <MemoryIndicator
             workdir={currentSessionWorkdir || workspaceCwd}
             onCompact={handleCompact}
@@ -937,7 +943,7 @@ export function ChatPanel() {
         defaultModel={currentSessionModel}
       />
 
-      {/* 任务面板（7.4.2） */}
+      {/* 任务面板（v4.2） */}
       <TaskPanel
         open={showTaskPanel}
         onClose={() => setShowTaskPanel(false)}
@@ -945,7 +951,7 @@ export function ChatPanel() {
         sessionId={currentSessionId}
       />
 
-      {/* 记忆管理面板（6.1） */}
+      {/* 记忆管理面板（v4.1） */}
       <MemoryPanel
         workdir={currentSessionWorkdir || workspaceCwd}
         open={showMemoryPanel}
@@ -959,7 +965,7 @@ export function ChatPanel() {
             <div className="flex items-center justify-between">
               <div className="flex items-center gap-1.5 text-xs font-medium text-amber-300">
                 <ShieldAlert className="h-3.5 w-3.5" />
-                需要审批
+                需要审查
               </div>
               <span className="text-[10px] text-amber-300/60">
                 策略：{approvalLabel(securityConfig?.approval_policy ?? 'on-request')}
@@ -984,7 +990,7 @@ export function ChatPanel() {
             </div>
           </div>
         )}
-        {/* 记忆沉淀入口（6.1）：会话完成后提炼候选 → 勾选 → 写入项目记忆 */}
+        {/* 记忆沉淀入口（v4.1）：会话完成后提炼候选 → 勾选 → 写入项目记忆 */}
         <MemorySettle workdir={currentSessionWorkdir || workspaceCwd} />
         <div className="mb-2 flex items-center gap-2">
           <button
@@ -1024,7 +1030,7 @@ export function ChatPanel() {
             </span>
           )}
         </div>
-        {/* 图像附件缩略图预览 */}
+        {/* 图片附件缩略图预览 */}
         {attachments.length > 0 && (
           <div className="mb-2 flex flex-wrap gap-2">
             {attachments.map((a) => (
