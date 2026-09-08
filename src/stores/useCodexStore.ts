@@ -33,7 +33,7 @@ export interface CodexStreaming {
 const PLAN_MODE_KEY = 'flydex.planMode'
 
 /** 自动保存 debounce 时间（毫秒） */
-const AUTOSAVE_DEBOUNCE_MS = 500
+const AUTOSAVE_DEBOUNCE_MS = 2000
 
 interface CodexState {
   status: CodexStatus
@@ -109,45 +109,36 @@ function setupAutosave(): void {
   let timer: ReturnType<typeof setTimeout> | null = null
   let saving = false
   let pending = false
+  let consecutiveErrors = 0
 
   const saveNow = async () => {
     const state = useCodexStore.getState()
     const sid = state.currentSessionId
-    if (!sid) {
-      console.log('[autosave] skip: no currentSessionId')
-      return
-    }
+    if (!sid) return
     if (saving) {
       pending = true
       return
     }
     saving = true
     try {
+      // 重要：保存前先抓取当前状态快照，避免 await 期间被修改
+      const messagesSnapshot = state.messages
+      const threadSnapshot = state.threadId
       const session = await sessionService.load(sid)
-      if (!session) {
-        console.log('[autosave] skip: session not found', sid)
-        return
-      }
-      session.messages = state.messages
-      session.threadId = state.threadId
+      if (!session) return
+      session.messages = messagesSnapshot
+      session.threadId = threadSnapshot
       session.updatedAt = Date.now()
       await sessionService.save(session)
-      console.log(
-        '[autosave] saved',
-        sid,
-        'messages=',
-        state.messages.length,
-        'threadId=',
-        state.threadId,
-      )
+      consecutiveErrors = 0
       // 通知 project store 刷新列表（更新排序）
       void useProjectStore.getState().loadSessions()
     } catch (e) {
+      consecutiveErrors++
       console.error('[autosave] failed:', e)
     } finally {
       saving = false
-      // 如果在等待期间又有变更，再跑一轮
-      if (pending) {
+      if (pending && consecutiveErrors < 3) {
         pending = false
         void saveNow()
       }
@@ -155,10 +146,8 @@ function setupAutosave(): void {
   }
 
   useCodexStore.subscribe((state, prev) => {
-    if (!state.currentSessionId) {
-      console.log('[autosave] subscribe: no currentSessionId')
-      return
-    }
+    if (!state.currentSessionId) return
+    if (consecutiveErrors >= 3) return
     if (
       state.messages === prev.messages &&
       state.threadId === prev.threadId &&

@@ -8,7 +8,27 @@ import { useCodexStore, type CodexApproval } from '@/stores/useCodexStore'
 import { useSecurityStore } from '@/stores/useSecurityStore'
 import { useSettingsStore } from '@/stores/useSettingsStore'
 import type { CodexEvent } from '@/types/codex'
-import type { CodexJsonEvent, CodexFileChange, CodexItem } from '@/types/codexJson'
+import type { CodexFileChange, CodexItem, CodexJsonEvent, TurnStats } from '@/types/codexJson'
+
+/** 从 MCP/工具 result 提取摘要（首行 200 字） */
+function summarizeToolResult(result: unknown): string {
+  if (result === null || result === undefined) return ''
+  let text: string
+  if (typeof result === 'string') {
+    text = result
+  } else {
+    try {
+      text = JSON.stringify(result)
+    } catch {
+      text = String(result)
+    }
+  }
+  // 取首行（去掉换行）
+  const firstLine = text.split('\n').find((l) => l.trim().length > 0) ?? text
+  const trimmed = firstLine.trim()
+  if (trimmed.length > 200) return trimmed.slice(0, 200) + '…'
+  return trimmed
+}
 
 /**
  * Codex 会话 Hook
@@ -17,6 +37,8 @@ import type { CodexJsonEvent, CodexFileChange, CodexItem } from '@/types/codexJs
  * 解析 JSONL 输出，管理多轮对话会话。
  */
 export function useCodexSession() {
+  // 跨 useEffect 和 run 回调共享：最近一次用户输入（反思用）
+  let lastUserInputForReflect = ''
   // 只订阅需要触发重渲染的状态
   const status = useCodexStore((s) => s.status)
   const messages = useCodexStore((s) => s.messages)
@@ -38,6 +60,25 @@ export function useCodexSession() {
     let lastPlanMsgId: string | null = null
     // 审查模式同理：记录最后一个 agent_message，turn 结束时转为审查报告卡片
     let lastReviewMsgId: string | null = null
+    // 本轮工作统计（turn_summary 用）
+    const turnStats: TurnStats = {
+      durationMs: 0,
+      toolCalls: 0,
+      mcpCalls: 0,
+      fileChanges: 0,
+      hadErrors: false,
+      inputTokens: 0,
+      outputTokens: 0,
+      reasoningTokens: 0,
+      cacheReadTokens: 0,
+      cacheWriteTokens: 0,
+    }
+    // 上次 turn 结束时的 turnStats 快照（用于反思）
+    let lastTurnStatsForReflect: TurnStats | null = null
+    // 上次 turn 结束时的最近消息（用于反思）
+    let lastRecentMessagesForReflect: typeof messages = []
+    // item id → 开始时间（用于计算耗时）
+    const itemStartedAt = new Map<string, number>()
 
     /** 解析待执行/正在执行的命令（codex 的 command_execution item） */
     const handleCommandItem = (item: CodexItem) => {
@@ -54,10 +95,25 @@ export function useCodexSession() {
       } else if (item.status === 'completed') {
         store.removeRunningCommand(item.id || cmdText)
         const outputText = (item.aggregated_output ?? '').trim()
+        // 计算耗时：从 itemStartedAt map 取，没有就给 0
+        const startedAt = item.id ? itemStartedAt.get(item.id) : undefined
+        const durationMs = startedAt ? Date.now() - startedAt : undefined
+        if (item.id) itemStartedAt.delete(item.id)
+        // 结果摘要：第一行输出，去掉 ANSI
+        const resultSummary = outputText
+          ? (outputText
+              .split('\n')
+              .find((l) => l.trim().length > 0)
+              ?.trim()
+              .slice(0, 200) ?? '')
+          : ''
+        const timeBadge = durationMs != null ? ` · ${(durationMs / 1000).toFixed(1)}s` : ''
         store.appendMessage({
           kind: 'tool',
-          content: outputText ? `$ ${cmdText}\n${outputText}` : `$ ${cmdText}`,
+          content: `$ ${cmdText}${timeBadge}${outputText ? `\n${outputText}` : ''}`,
           toolName: 'command_execution',
+          durationMs,
+          toolResult: resultSummary || undefined,
         })
       }
     }
@@ -86,6 +142,7 @@ export function useCodexSession() {
               !seen.has(`${c.path}|${c.kind}`),
           )
           if (fresh.length === 0) return
+          turnStats.fileChanges += fresh.length
           const s = useCodexStore.getState()
           s.appendMessage({
             kind: 'file_change',
@@ -112,10 +169,19 @@ export function useCodexSession() {
         // 新的一轮：重置计划/审查消息追踪（每轮独立）
         lastPlanMsgId = null
         lastReviewMsgId = null
+        // 重置本轮统计
+        turnStats.toolCalls = 0
+        turnStats.mcpCalls = 0
+        turnStats.fileChanges = 0
+        turnStats.hadErrors = false
       } else if (event.type === 'item.started') {
         // item.started 可能带 tool 或 command 信息
         const item = event.item as CodexItem
         if (item && typeof item === 'object' && 'type' in item) {
+          // 记录开始时间（用于计算耗时）
+          if (item.id) {
+            itemStartedAt.set(item.id, Date.now())
+          }
           handleCommandItem(item)
         }
       } else if (event.type === 'item.completed') {
@@ -153,23 +219,39 @@ export function useCodexSession() {
             return
           }
           store.appendMessage({ kind: 'error', content: item.message })
+          turnStats.hadErrors = true
         } else if (item.type === 'tool_call') {
+          turnStats.toolCalls++
+          // 计算耗时（item.started 到 item.completed）
+          const startedAt = item.id ? itemStartedAt.get(item.id) : undefined
+          const durationMs = startedAt ? Date.now() - startedAt : undefined
+          if (item.id) itemStartedAt.delete(item.id)
           store.appendMessage({
             kind: 'tool',
-            content: `调用工具: ${item.name}`,
+            content: `调用工具: ${item.name}${durationMs != null ? ` · ${(durationMs / 1000).toFixed(1)}s` : ''}`,
             toolName: item.name,
             toolArgs: item.arguments,
+            durationMs,
           })
         } else if (item.type === 'mcp_tool_call') {
-          // MCP 工具调用：简洁展示（server·tool + 参数），不暴露巨大的 result JSON
+          turnStats.mcpCalls++
+          // MCP 工具调用：展示 server·tool + 状态 + 结果摘要 + 耗时
           const toolName = item.server && item.tool ? `${item.server} · ${item.tool}` : 'MCP tool'
           const failed = item.status === 'failed'
           const errMsg = item.error?.message ? `：${item.error.message}` : ''
+          const resultSummary = !failed ? summarizeToolResult(item.result) : ''
+          const startedAt = item.id ? itemStartedAt.get(item.id) : undefined
+          const durationMs = startedAt ? Date.now() - startedAt : undefined
+          if (item.id) itemStartedAt.delete(item.id)
+          const timeBadge = durationMs != null ? ` · ${(durationMs / 1000).toFixed(1)}s` : ''
+          const statusBadge = failed ? `（失败${errMsg}）` : '（完成）'
           store.appendMessage({
             kind: 'tool',
-            content: `调用工具: ${toolName}${failed ? `（失败${errMsg}）` : '（完成）'}`,
+            content: `调用工具: ${toolName}${statusBadge}${timeBadge}`,
             toolName,
             toolArgs: item.arguments,
+            durationMs,
+            toolResult: resultSummary || undefined,
           })
         } else if (item.type === 'command_execution') {
           handleCommandItem(item)
@@ -177,6 +259,7 @@ export function useCodexSession() {
           // 文件变更：对话流插入 diff 卡片（内联展示，可展开看 diff、接受/拒绝回滚）
           const changes = item.changes ?? []
           if (changes.length > 0) {
+            turnStats.fileChanges += changes.length
             const summary = changes.map((c) => `${c.path}（${c.kind}）`).join('，')
             store.appendMessage({
               kind: 'file_change',
@@ -237,13 +320,41 @@ export function useCodexSession() {
         }
         // 写入后审查兜底：git 工作区变化 → 生成文件变更卡片
         void checkFileChanges(store.runWorkdir)
+        // 收集本轮统计 + 生成 turn_summary 卡（Claude Code 风格反馈）
+        const startedAt = store.runStartedAt
+        if (startedAt != null) {
+          turnStats.durationMs = Date.now() - startedAt
+        }
         if (event.usage) {
           store.setUsage(event.usage)
-          const tokens = event.usage.output_tokens ?? 0
-          const startedAt = store.runStartedAt
-          const elapsed = startedAt != null ? ((Date.now() - startedAt) / 1000).toFixed(1) : null
+          turnStats.inputTokens = event.usage.input_tokens ?? 0
+          turnStats.outputTokens = event.usage.output_tokens ?? 0
+          turnStats.reasoningTokens = event.usage.reasoning_output_tokens ?? 0
+          turnStats.cacheReadTokens = event.usage.cached_input_tokens ?? 0
+          turnStats.cacheWriteTokens = event.usage.cache_write_input_tokens ?? 0
+        }
+        // 保存本轮快照给反思用（深拷贝避免后续被覆盖）
+        lastTurnStatsForReflect = { ...turnStats }
+        // 取最近 3 条消息（快照）
+        const allMsgs = useCodexStore.getState().messages
+        lastRecentMessagesForReflect = allMsgs.slice(-3)
+        // 只有产生实际工作（工具调用/文件变更/MCP/错误）才生成摘要卡，
+        // 避免纯对话轮次也弹一张空摘要
+        const hasActivity =
+          turnStats.toolCalls + turnStats.mcpCalls + turnStats.fileChanges > 0 ||
+          turnStats.hadErrors
+        if (hasActivity) {
+          store.appendMessage({
+            kind: 'turn_summary',
+            content: '',
+            turnStats: { ...turnStats },
+          })
+        } else {
+          // 保留向后兼容的 system 输出
+          const tokens = turnStats.outputTokens
+          const elapsed = (turnStats.durationMs / 1000).toFixed(1)
           store.appendOutput({
-            text: `▸ 本轮完成，输出 ${tokens} tokens${elapsed != null ? `，耗时 ${elapsed}s` : ''}`,
+            text: `▸ 本轮完成，输出 ${tokens} tokens，耗时 ${elapsed}s`,
             kind: 'system',
           })
         }
@@ -304,6 +415,32 @@ export function useCodexSession() {
           } else if (payload.data.exit_code === 0 && settings.notifyOnDone) {
             void notificationService.notify('Flydex · 任务完成', '本轮会话已结束')
           }
+          // 自我反思（Phase 1: Self-Reflection）：异步调用当前模型生成反思
+          // 只在成功完成且有活动时触发
+          if (
+            payload.data.exit_code === 0 &&
+            lastTurnStatsForReflect &&
+            (lastTurnStatsForReflect.toolCalls +
+              lastTurnStatsForReflect.mcpCalls +
+              lastTurnStatsForReflect.fileChanges >
+              0 ||
+              lastTurnStatsForReflect.hadErrors)
+          ) {
+            void (async () => {
+              const { reflect } = await import('@/services/reflectService')
+              const content = await reflect({
+                stats: lastTurnStatsForReflect!,
+                lastUserInput: lastUserInputForReflect,
+                recentMessages: lastRecentMessagesForReflect,
+              })
+              if (content) {
+                useCodexStore.getState().appendMessage({
+                  kind: 'reflection',
+                  content,
+                })
+              }
+            })()
+          }
         }
       })
 
@@ -337,6 +474,8 @@ export function useCodexSession() {
       const store = useCodexStore.getState()
       const execMode = mode ?? (store.threadId ? 'resume' : 'exec')
       const runId = crypto.randomUUID()
+      // 记录本轮用户输入（反思需要）
+      lastUserInputForReflect = command
 
       store.setStatus('running')
       store.setExitCode(null)

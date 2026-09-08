@@ -159,7 +159,22 @@ impl Storage {
             use std::io::Write;
             let _ = writeln!(f, "[flydex] save_session id={} thread_id={} messages={}", session.id, thread, n);
         }
-        fs::write(Self::session_file(&session.id), content)
+        // 原子写入：先写 .tmp 再 rename，避免写入过程中崩溃导致文件损坏
+        let final_path = Self::session_file(&session.id);
+        let tmp_path = final_path.with_extension("json.tmp");
+        match fs::write(&tmp_path, &content) {
+            Ok(_) => {
+                // Windows 上 rename 不覆盖已有文件，需要先 remove
+                if final_path.exists() {
+                    let _ = fs::remove_file(&final_path);
+                }
+                fs::rename(&tmp_path, &final_path)
+            }
+            Err(e) => {
+                let _ = fs::remove_file(&tmp_path);
+                Err(e)
+            }
+        }
     }
 
     /// 永久删除会话文件

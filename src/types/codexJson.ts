@@ -71,7 +71,18 @@ export interface CodexFileChange {
 /** 前端渲染用的结构化消息 */
 export interface CodexMessage {
   id: string
-  kind: 'agent' | 'tool' | 'error' | 'system' | 'usage' | 'file_change' | 'plan' | 'review' | 'deny'
+  kind:
+    | 'agent'
+    | 'tool'
+    | 'error'
+    | 'system'
+    | 'usage'
+    | 'file_change'
+    | 'plan'
+    | 'review'
+    | 'deny'
+    | 'turn_summary'
+    | 'reflection'
   content: string
   toolName?: string
   toolArgs?: unknown
@@ -80,5 +91,25 @@ export interface CodexMessage {
   fileChanges?: CodexFileChange[]
   /** deny 卡片展示的命中原因（用户规则/内置规则说明） */
   reason?: string
+  /** 工具/MCP 调用耗时（毫秒） */
+  durationMs?: number
+  /** 工具/MCP 调用的结果摘要（首行/前 200 字） */
+  toolResult?: string
+  /** 本轮统计（仅 turn_summary 使用） */
+  turnStats?: TurnStats
   timestamp: number
+}
+
+/** 本轮工作统计（turn_summary 消息使用） */
+export interface TurnStats {
+  durationMs: number
+  toolCalls: number
+  mcpCalls: number
+  fileChanges: number
+  hadErrors: boolean
+  inputTokens: number
+  outputTokens: number
+  reasoningTokens: number
+  cacheReadTokens: number
+  cacheWriteTokens: number
 }

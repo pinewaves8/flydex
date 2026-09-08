@@ -31,7 +31,10 @@ import { MemoryIndicator } from './MemoryIndicator'
 import { MemoryPanel } from './MemoryPanel'
 import { MemorySettle } from './MemorySettle'
 import { PlanCard } from './PlanCard'
+import { ReflectionCard } from './ReflectionCard'
 import { ReviewCard } from './ReviewCard'
+import { SuggestionChips, type SuggestionAction } from './SuggestionChips'
+import { TurnSummaryCard } from './TurnSummaryCard'
 
 import { Markdown } from '@/components/ui/Markdown'
 import { SkillPalette } from '@/features/skills/SkillPalette'
@@ -124,12 +127,14 @@ function MessageCard({
   onApprovePlan,
   onCancelPlan,
   planDisabled,
+  onSuggestion,
 }: {
   message: CodexMessage
   repo?: string
   onApprovePlan?: (steps: string[]) => void
   onCancelPlan?: () => void
   planDisabled?: boolean
+  onSuggestion?: (action: SuggestionAction) => void
 }) {
   const [expanded, setExpanded] = useState(true)
   // 打字机流式状态：若该消息正在逐字显示，用已渲染文本
@@ -228,6 +233,12 @@ function MessageCard({
           {message.toolName && (
             <span className="font-mono text-blue-400">· {message.toolName}</span>
           )}
+          {/* 耗时徽章 */}
+          {message.durationMs != null && (
+            <span className="rounded bg-muted/50 px-1 py-px font-mono text-[10px] text-muted-foreground">
+              {(message.durationMs / 1000).toFixed(2)}s
+            </span>
+          )}
           <span className="ml-auto flex items-center gap-0.5 text-[10px] opacity-50">
             <Clock className="h-2.5 w-2.5" />
             {timeStr}
@@ -236,6 +247,15 @@ function MessageCard({
         {expanded && (
           <div className="space-y-1">
             <div className="text-sm text-foreground">{message.content}</div>
+            {/* 结果摘要（Claude Code 风格 — 让用户看到工具做了什么） */}
+            {message.toolResult && (
+              <div className="rounded border border-sky-500/20 bg-sky-500/5 p-2 text-xs">
+                <span className="mb-0.5 block font-mono text-[10px] uppercase tracking-wide text-sky-400">
+                  结果摘要
+                </span>
+                <span className="break-all text-foreground/90">{message.toolResult}</span>
+              </div>
+            )}
             {message.toolArgs != null && (
               <pre className="overflow-x-auto rounded bg-black/30 p-2 text-xs text-muted-foreground">
                 {JSON.stringify(message.toolArgs, null, 2)}
@@ -245,6 +265,21 @@ function MessageCard({
         )}
       </div>
     )
+  }
+
+  // 本轮工作总结（仿 Claude Code 风格）
+  if (message.kind === 'turn_summary' && message.turnStats) {
+    return (
+      <div>
+        <TurnSummaryCard stats={message.turnStats} timestamp={message.timestamp} />
+        <SuggestionChips stats={message.turnStats} onAction={(action) => onSuggestion?.(action)} />
+      </div>
+    )
+  }
+
+  // 本轮自我反思（Phase 1: Self-Reflection）
+  if (message.kind === 'reflection') {
+    return <ReflectionCard content={message.content} timestamp={message.timestamp} />
   }
 
   // agent / error 消息
@@ -339,6 +374,8 @@ export function ChatPanel() {
   // 会话级模型覆盖（null 表示用全局默认）
   const currentSessionModel = sessions.find((s) => s.id === currentSessionId)?.model ?? null
   const forkSession = useProjectStore((s) => s.forkSession)
+  const exportSession = useProjectStore((s) => s.exportSession)
+  const lastUserInput = useRef<string>('')
 
   /** 7.4.3 消息级分叉：在指定消息后 fork 新会话（并行时间线入口） */
   const handleForkAt = async (index: number) => {
@@ -413,6 +450,87 @@ export function ChatPanel() {
     }
   }
 
+  const handleSuggestionAction = async (action: SuggestionAction) => {
+    switch (action.type) {
+      case 'review':
+        // 用当前 workdir 触发 review（复用现有 /review 流程）
+        if (currentSessionWorkdir || workspaceCwd) {
+          const workdir = currentSessionWorkdir || workspaceCwd
+          try {
+            const diff = (await invoke('git_review_diff', {
+              repo: workdir,
+              mode: 'uncommitted',
+              ref_: null,
+            })) as string
+            await invoke('write_review_diff', { repo: workdir, content: diff })
+            useCodexStore.getState().setReviewMode(true)
+            const hasDiff = diff.trim().length > 0
+            await run(
+              hasDiff
+                ? '请审查代码变更。diff 内容在 .flydex-review.diff 中，请读取后输出结构化审查报告'
+                : '当前没有检测到代码变更，请说明这一点',
+              workdir,
+              currentSessionModel,
+              'review',
+            )
+            await invoke('remove_review_diff', { repo: workdir }).catch(() => {})
+          } catch (e) {
+            useCodexStore.getState().appendOutput({
+              text: `审查失败: ${String(e)}`,
+              kind: 'stderr',
+            })
+          }
+        }
+        break
+      case 'rerun':
+        // 复用本轮最后一次用户输入（取最近 user/agent 对）
+        if (lastUserInput.current) {
+          await run(
+            lastUserInput.current,
+            currentSessionWorkdir || workspaceCwd,
+            currentSessionModel,
+          )
+        } else {
+          useCodexStore
+            .getState()
+            .appendOutput({ text: '▸ 没有可重跑的上一次输入', kind: 'system' })
+        }
+        break
+      case 'export':
+        // 导出会话为 Markdown 并下载
+        try {
+          const sid = useProjectStore.getState().currentSessionId
+          if (!sid) break
+          const content = await exportSession(sid, 'markdown')
+          const blob = new Blob([content], { type: 'text/markdown' })
+          const url = URL.createObjectURL(blob)
+          const a = document.createElement('a')
+          a.href = url
+          a.download = `session-${sid}.md`
+          a.click()
+          URL.revokeObjectURL(url)
+          useCodexStore.getState().appendOutput({ text: '▸ 已导出 Markdown', kind: 'system' })
+        } catch (e) {
+          useCodexStore.getState().appendOutput({ text: `导出失败: ${String(e)}`, kind: 'stderr' })
+        }
+        break
+      case 'shell':
+        // 内部 shell 提示（仅记录到 output）
+        useCodexStore.getState().appendOutput({
+          text: `▸ shell 提示: ${action.command}`,
+          kind: 'system',
+        })
+        break
+      case 'clear':
+        clear()
+        break
+      case 'dismiss':
+      default:
+        // 简单 dismiss：把摘要下方建议隐藏（再次发送消息时自动重新出现）
+        break
+    }
+  }
+
   const handleRun = async () => {
     if ((!command.trim() && attachments.length === 0) || status === 'running') return
     let cmd = command.trim()
@@ -420,6 +538,8 @@ export function ChatPanel() {
     if (!cmd && attachments.length > 0) {
       cmd = '请描述你看到的图片内容，并结合项目上下文给出分析和建议。'
     }
+    // 记录本次用户输入（"再跑一次" 建议会用到）
+    lastUserInput.current = cmd
     setCommand('')
     // 发送后保持焦点在输入框，便于继续输入下一条
     requestAnimationFrame(() => inputRef.current?.focus())
@@ -779,6 +899,7 @@ export function ChatPanel() {
                   onApprovePlan={approvePlan}
                   onCancelPlan={cancelPlan}
                   planDisabled={status === 'running'}
+                  onSuggestion={handleSuggestionAction}
                 />
               </MessageForkWrapper>
             ))}
