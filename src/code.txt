@@ -1,0 +1,22 @@
+#*+filepath="./src/features/codex/components/ChatPanel.tsx"
+with open(filepath,"r","encoding="utf-8") as f: content=f.read()
+#key old text
+let oldtext='{message.toolArgs != null && ('
+                   <pre className="overflow-x-auto rounded bg-black/30 p-2 text-xs text-muted-foreground">
+                   {JSON.stringify(message.toolArgs, null, 2)}
+                  </pre>
+                )}'
+let newtext='{message.toolArgs != null && (
+                  <details className="group mt-m1">
+                   <summary className="cursor-pointer text-[10px] text-muted-foreground hover:text-blue-400">
+                      涍奸寺>
+                    </summary>
+                   <pre className="mt-1 overflow-x-auto rounded bg-black/30 p-2 text-xs text-muted-foreground">
+                       {JSON.stringify(message.toolArgs, null, 2)}
+                    </pre>
+                 </details>
+              )}'
+
+if (oldtext in content):
+    content=content.replace(oldtext, newtext)
+    print('ĸ꡹���ĸ꡹��롹�Æ÷���ݠ������)��͔�(�����ɥ�Р�9��ѽ��ɝ́��չ���)ݥѠ������������Ѡ��܈�������������ј������́�聘��ɥє����ѕ�Ф()�ɥ�Р�������(
