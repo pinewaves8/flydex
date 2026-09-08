@@ -76,6 +76,9 @@ interface CodexState {
   currentSessionId: string | null
   /** 是否有待保存的变更*/
   dirty: boolean
+  /** 待写入输入框的命令前缀(由 SkillPalette 等外部触发);InputBox 监听后清空 */
+  pendingCommand: string | null
+  setPendingCommand: (cmd: string | null) => void
   setPlanMode: (v: boolean) => void
   reviewMode: boolean
   setReviewMode: (v: boolean) => void
@@ -156,17 +159,20 @@ function scheduleOutputFlush() {
  * 为什么放这里：避免 ChatPanel 读 load+save的竞态，统一在 store 层调度
  * 为什么用 subscribe：zustand store 不应该依赖 React 的批量更新机制
  */
-function setupAutosave(): void {
+function setupAutosave(): () => void {
   let timer: ReturnType<typeof setTimeout> | null = null
   let lastMessages: CodexMessage[] | null = null
   let lastThreadId: string | null = null
+  let cancelled = false
 
-  useCodexStore.subscribe((state, prevState) => {
+  const unsub = useCodexStore.subscribe((state, prevState) => {
+    if (cancelled) return
     // 只关心 dirty 标志和 messages/threadId
     if (!state.dirty && !prevState.dirty) return
     if (state.currentSessionId === null) return
     if (timer) clearTimeout(timer)
     timer = setTimeout(async () => {
+      if (cancelled) return
       const s = useCodexStore.getState()
       if (!s.dirty || !s.currentSessionId) return
       // 跳过无变化
@@ -189,6 +195,16 @@ function setupAutosave(): void {
       }
     }, AUTOSAVE_DEBOUNCE_MS)
   })
+
+  // 返回 unsub:取消订阅 + 清掉 pending timer + 标记 cancelled 防止异步 setState 触发
+  return () => {
+    cancelled = true
+    unsub()
+    if (timer) {
+      clearTimeout(timer)
+      timer = null
+    }
+  }
 }
 
 const useCodexStore = create<CodexState>((set, get) => ({
@@ -217,8 +233,10 @@ const useCodexStore = create<CodexState>((set, get) => ({
   })(),
   currentSessionId: null,
   dirty: false,
+  pendingCommand: null,
   reviewMode: false,
   setReviewMode: (v) => set({ reviewMode: v }),
+  setPendingCommand: (cmd) => set({ pendingCommand: cmd }),
   setPlanMode: (v) => {
     try {
       localStorage.setItem(PLAN_MODE_KEY, v ? '1' : '0')
@@ -358,6 +376,21 @@ const useCodexStore = create<CodexState>((set, get) => ({
 
 // 初始化自动保存调度（必须在 useCodexStore 创建之后调用，
 // 否则 setupAutosave 内部访问 useCodexStore.subscribe 会触发 TDZ）
-setupAutosave()
+const disposeAutosave = setupAutosave()
+
+// 页面/窗口卸载时清理:取消订阅 + 清掉 pending timer,防止异步操作触发
+// "setState on unmounted component" 警告或内存泄漏
+if (typeof window !== 'undefined') {
+  const cleanup = () => {
+    disposeAutosave()
+    if (outputFlushTimer) {
+      clearTimeout(outputFlushTimer)
+      outputFlushTimer = null
+    }
+  }
+  window.addEventListener('beforeunload', cleanup)
+  // Tauri dev 热重载时也会触发 pagehide,加上避免 HMR 期间残留
+  window.addEventListener('pagehide', cleanup)
+}
 
 export { useCodexStore }
