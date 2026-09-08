@@ -59,6 +59,7 @@ function persistProjectId(id: string | null): void {
     // localStorage 不可用时静默忽略
   }
 }
+
 export const useProjectStore = create<ProjectState>((set, get) => ({
   projects: [],
   currentProjectId: loadPersistedProjectId(),
@@ -74,6 +75,24 @@ export const useProjectStore = create<ProjectState>((set, get) => ({
       const projects = await projectService.list()
       set({ projects })
 
+      // 优先匹配 flydex 项目（使用固定路径匹配）
+      const flydexProject = projects.find(
+        (p) =>
+          p.path.toLowerCase() === 'c:\\llm\\flydex' ||
+          p.path.toLowerCase() === 'c:/llm/flydex' ||
+          p.name.toLowerCase() === 'flydex',
+      )
+
+      if (flydexProject) {
+        if (get().currentProjectId !== flydexProject.id) {
+          await get().setCurrentProject(flydexProject.id)
+        } else {
+          await get().loadSessions(flydexProject.id)
+        }
+        return
+      }
+
+      // 回退到持久化的项目
       const persistedId = loadPersistedProjectId()
       const currentId = get().currentProjectId
 
@@ -139,6 +158,7 @@ export const useProjectStore = create<ProjectState>((set, get) => ({
       useCodexStore.getState().setCurrentSessionId(null)
     }
   },
+
   loadSessions: async (projectId) => {
     const pid = projectId ?? get().currentProjectId ?? undefined
     const sessions = await sessionService.list(pid)
