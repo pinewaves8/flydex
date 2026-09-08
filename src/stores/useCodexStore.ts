@@ -1,39 +1,48 @@
-import { create } from 'zustand'
+﻿import { create } from 'zustand'
 
 import { sessionService } from '@/services/sessionService'
 import { useProjectStore } from '@/stores/useProjectStore'
 import type { CodexOutputLine, CodexStatus } from '@/types/codex'
 import type { CodexMessage, CodexFileChange, CodexUsage } from '@/types/codexJson'
 
-/** 待审批的操作（由 codex approval_request 触发） */
+/** 待审批的操作（由 codex approval_request 触发）*/
 export interface CodexApproval {
   id: string
   command?: string
   description?: string
-  /** 规则引擎决策：ask=弹审批卡；auto_accept/auto_deny=自动放行/拒绝（仅通知） */
+  /** 规则引擎决策：ask=审批截屏 auto_accept/auto_deny=自动执行/拒绝（仅通知）*/
   decision?: string
   reason?: string
 }
 
-/** 正在执行的命令（实时命令看板） */
+/** 正在执行的命令（实时命令面板）*/
 export interface CodexRunningCommand {
   id: string
   command: string
   startedAt: number
 }
 
-/** 打字机流式渲染状态 */
+/** 打字机流式覆写状态（agent_message 逐字显示）*/
 export interface CodexStreaming {
   id: string
   full: string
   shown: number
 }
 
-/** 计划模式开关的 localStorage key（跨重启保持开关状态） */
+/** 计划模式开启的 localStorage key（非法重启保持开启状态） */
 const PLAN_MODE_KEY = 'flydex.planMode'
 
 /** 自动保存 debounce 时间（毫秒） */
 const AUTOSAVE_DEBOUNCE_MS = 2000
+
+/** 输出 buffer 节流刷新间隔（毫秒） */
+const OUTPUT_FLUSH_INTERVAL_MS = 60
+
+/** 消息列表最大条数（超出时移除最早的） */
+const MAX_MESSAGES = 200
+
+/** 输出列表最大行数（超出时移除最早的） */
+const MAX_OUTPUT_LINES = 1000
 
 interface CodexState {
   status: CodexStatus
@@ -42,30 +51,30 @@ interface CodexState {
   exitCode: number | null
   threadId: string | null
   usage: CodexUsage | null
-  /** 当前运行 id（用于审批/停止） */
+  /** 当前运行 id（用于计次、停止）*/
   pendingRunId: string | null
-  /** 正在执行的命令（实时看板） */
+  /** 正在执行的命令（实时面板）*/
   runningCommands: CodexRunningCommand[]
   /** 待审批项 */
   approval: CodexApproval | null
-  /** 打字机流式渲染状态（agent_message 逐字显示） */
+  /** 打字机流式覆写状态（agent_message 逐字显示）*/
   streaming: CodexStreaming | null
-  /** 已处理的 codex item id（事件级幂等去重，防监听器泄漏导致重复消息） */
+  /** 已处理的 codex item id（事件级去重等重防止重复） */
   processedItemIds: string[]
   lineId: number
-  /** 本轮开始时间戳（用于显示每轮耗时） */
+  /** 本轮开始时间戳（用于显示每轮耗时）*/
   runStartedAt: number | null
-  /** 当前 run 的工作目录（写入后审查兜底：turn 完成时对比 git 工作区） */
+  /** 当前 run 的工作目录（写入后审计审查：turn 完成后对比 git 工作区） */
   runWorkdir: string | null
   /** 已展示过的文件变更 key（path|kind），避免重复生成文件变更卡片 */
   seenFileChanges: string[]
-  /** 本轮开始时的 git 工作区变更快照（用于只展示本轮新增的变更，避免误报历史遗留文件） */
+  /** 本轮开始时的 git 工作区变更快照（用于只展示本轮新增的变化，避免误刷新历史文件） */
   baselineFileChanges: CodexFileChange[]
-  /** 计划模式开关（开启后发送生成计划而非直接执行，批准后再执行） */
+  /** 计划模式开启（开启后发送生成计划而非直接执行，批准后再执行） */
   planMode: boolean
-  /** 当前会话 id（用于自动保存）；null 表示不保存 */
+  /** 当前会话 id（用于自动保存）；null 表示不保存*/
   currentSessionId: string | null
-  /** 是否有待保存的变更 */
+  /** 是否有待保存的变更*/
   dirty: boolean
   setPlanMode: (v: boolean) => void
   reviewMode: boolean
@@ -93,79 +102,99 @@ interface CodexState {
   reset: () => void
   /** 设置当前会话 id（启用自动保存）；传 null 关闭自动保存 */
   setCurrentSessionId: (id: string | null) => void
-  /** 标记脏并触发自动保存（手动立即保存） */
+  /** 标记脏并触发自动保存（手点立及保存） */
   flushAutosave: () => Promise<void>
-  /** 加载会话数据（切换会话时用） */
+  /** 加载会话数据（切换会话时用）*/
   loadSession: (data: { messages: CodexMessage[]; threadId: string | null }) => void
+  /** 刷新输出 buffer（流结束后调用） */
+  flushOutputBuffer: () => void
+}
+
+/**
+ * 流式输出节流 buffer
+ * - 缓存 appendOutput 调用，每 60ms 批量 flush 到 state
+ * - 避免每个 token 都触发一次 setState 导致重渲染
+ */
+let outputBuffer: Omit<CodexOutputLine, 'id'>[] = []
+let outputFlushTimer: ReturnType<typeof setTimeout> | null = null
+
+function flushOutputBuffer() {
+  if (outputBuffer.length === 0) return
+  const batch = outputBuffer
+  outputBuffer = []
+  if (outputFlushTimer) {
+    clearTimeout(outputFlushTimer)
+    outputFlushTimer = null
+  }
+  // 直接操作 store 内部状态，绕过组件订阅
+  useCodexStore.setState((state) => {
+    let lineId = state.lineId
+    const newLines = batch.map((line) => {
+      const id = lineId++
+      return { ...line, id }
+    })
+    // 容量限制：超出 MAX_OUTPUT_LINES 时移除最早的
+    let output = [...state.output, ...newLines]
+    if (output.length > MAX_OUTPUT_LINES) {
+      output = output.slice(output.length - MAX_OUTPUT_LINES)
+    }
+    return { output, lineId }
+  })
+}
+
+function scheduleOutputFlush() {
+  if (outputFlushTimer) return
+  outputFlushTimer = setTimeout(() => {
+    outputFlushTimer = null
+    flushOutputBuffer()
+  }, OUTPUT_FLUSH_INTERVAL_MS)
 }
 
 /**
  * 自动保存调度：监听 store 状态变化，debounce 后异步写入磁盘
  *
- * 为什么放这里：避免 ChatPanel 里 load+save的竞态，统一在 store 层管理
- * 为什么用 subscribe：zustand store 不应该依赖 React 副作用
+ * 为什么放这里：避免 ChatPanel 读 load+save的竞态，统一在 store 层调度
+ * 为什么用 subscribe：zustand store 不应该依赖 React 的批量更新机制
  */
 function setupAutosave(): void {
   let timer: ReturnType<typeof setTimeout> | null = null
-  let saving = false
-  let pending = false
-  let consecutiveErrors = 0
+  let lastMessages: CodexMessage[] | null = null
+  let lastThreadId: string | null = null
 
-  const saveNow = async () => {
-    const state = useCodexStore.getState()
-    const sid = state.currentSessionId
-    if (!sid) return
-    if (saving) {
-      pending = true
-      return
-    }
-    saving = true
-    try {
-      // 重要：保存前先抓取当前状态快照，避免 await 期间被修改
-      const messagesSnapshot = state.messages
-      const threadSnapshot = state.threadId
-      const session = await sessionService.load(sid)
-      if (!session) return
-      session.messages = messagesSnapshot
-      session.threadId = threadSnapshot
-      session.updatedAt = Date.now()
-      await sessionService.save(session)
-      consecutiveErrors = 0
-      // 通知 project store 刷新列表（更新排序）
-      void useProjectStore.getState().loadSessions()
-    } catch (e) {
-      consecutiveErrors++
-      console.error('[autosave] failed:', e)
-    } finally {
-      saving = false
-      if (pending && consecutiveErrors < 3) {
-        pending = false
-        void saveNow()
-      }
-    }
-  }
-
-  useCodexStore.subscribe((state, prev) => {
-    if (!state.currentSessionId) return
-    if (consecutiveErrors >= 3) return
-    if (
-      state.messages === prev.messages &&
-      state.threadId === prev.threadId &&
-      state.dirty === prev.dirty
-    ) {
-      return
-    }
+  useCodexStore.subscribe((state, prevState) => {
+    // 只关心 dirty 标志和 messages/threadId
+    if (!state.dirty && !prevState.dirty) return
+    if (state.currentSessionId === null) return
     if (timer) clearTimeout(timer)
-    timer = setTimeout(() => {
-      void saveNow()
+    timer = setTimeout(async () => {
+      const s = useCodexStore.getState()
+      if (!s.dirty || !s.currentSessionId) return
+      // 跳过无变化
+      if (s.messages === lastMessages && s.threadId === lastThreadId && s.currentSessionId) {
+        return
+      }
+      lastMessages = s.messages
+      lastThreadId = s.threadId
+      try {
+        const session = await sessionService.load(s.currentSessionId)
+        if (!session) return
+        session.messages = s.messages
+        session.threadId = s.threadId
+        session.updatedAt = Date.now()
+        await sessionService.save(session)
+        useCodexStore.setState({ dirty: false })
+        void useProjectStore.getState().loadSessions()
+      } catch (e) {
+        console.error('[autosave] failed:', e)
+      }
     }, AUTOSAVE_DEBOUNCE_MS)
   })
 }
 
-// 注意：setupAutosave 在模块初始化时执行一次；它从 store 闭包获取 state
-// 由于 store 在 create 之后才存在，subscribe 调用要放到 create 后面
+// 初始化自动保存调度（模块加载时执行一次）
+setupAutosave()
 
-export const useCodexStore = create<CodexState>((set, get) => ({
+const useCodexStore = create<CodexState>((set, get) => ({
   status: 'idle',
   output: [],
   messages: [],
@@ -197,25 +226,31 @@ export const useCodexStore = create<CodexState>((set, get) => ({
     try {
       localStorage.setItem(PLAN_MODE_KEY, v ? '1' : '0')
     } catch {
-      // localStorage 不可用时仅内存态
+      // localStorage 不可用时忽略
     }
     set({ planMode: v })
   },
   setStatus: (status) => set({ status }),
-  appendOutput: (line) =>
-    set((state) => ({
-      output: [...state.output, { ...line, id: state.lineId }],
-      lineId: state.lineId + 1,
-    })),
+
+  /** 流式输出节流：先缓存到 buffer，定时批量 flush */
+  appendOutput: (line) => {
+    outputBuffer.push(line)
+    scheduleOutputFlush()
+  },
+
+  /** 消息容量限制：超出 MAX_MESSAGES 时移除最早的 */
   appendMessage: (message) => {
-    // 全局唯一 id（uuid），避免 reset 后 messageId 归零导致 key 冲突
     const id = `msg-${crypto.randomUUID()}`
-    set((state) => ({
-      messages: [...state.messages, { ...message, id, timestamp: Date.now() }],
-      dirty: true,
-    }))
+    set((state) => {
+      let messages = [...state.messages, { ...message, id, timestamp: Date.now() }]
+      if (messages.length > MAX_MESSAGES) {
+        messages = messages.slice(messages.length - MAX_MESSAGES)
+      }
+      return { messages, dirty: true }
+    })
     return id
   },
+
   updateMessageKind: (id, kind) =>
     set((state) => ({
       messages: state.messages.map((m) => (m.id === id ? { ...m, kind } : m)),
@@ -254,7 +289,7 @@ export const useCodexStore = create<CodexState>((set, get) => ({
     set((state) => ({ processedItemIds: [...state.processedItemIds, id] }))
     return true
   },
-  // 每个 run 内 item id 从 item_0 重新计数，跨 run 必须清空，否则 resume 的新输出被误删
+  // 每个 run 时 item id 从 item_0 重新计数，跨 run 必须清空；否则 resume 的新输出被误删
   clearProcessedItems: () => set({ processedItemIds: [] }),
   advanceStream: (count) =>
     set((state) => {
@@ -285,7 +320,7 @@ export const useCodexStore = create<CodexState>((set, get) => ({
     }),
   setCurrentSessionId: (id) => set({ currentSessionId: id, dirty: false }),
   flushAutosave: async () => {
-    // 立即触发保存（不等 debounce）
+    // 立即触发保存（不缩 debounce）
     const state = get()
     const sid = state.currentSessionId
     if (!sid) return
@@ -321,7 +356,7 @@ export const useCodexStore = create<CodexState>((set, get) => ({
       baselineFileChanges: [],
       dirty: false,
     }),
+  flushOutputBuffer,
 }))
 
-// 初始化自动保存订阅（模块加载时执行一次）
-setupAutosave()
+export { useCodexStore }
