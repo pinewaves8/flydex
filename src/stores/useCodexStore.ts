@@ -191,9 +191,6 @@ function setupAutosave(): void {
   })
 }
 
-// 初始化自动保存调度（模块加载时执行一次）
-setupAutosave()
-
 const useCodexStore = create<CodexState>((set, get) => ({
   status: 'idle',
   output: [],
@@ -358,5 +355,9 @@ const useCodexStore = create<CodexState>((set, get) => ({
     }),
   flushOutputBuffer,
 }))
+
+// 初始化自动保存调度（必须在 useCodexStore 创建之后调用，
+// 否则 setupAutosave 内部访问 useCodexStore.subscribe 会触发 TDZ）
+setupAutosave()
 
 export { useCodexStore }
