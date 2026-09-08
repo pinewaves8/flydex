@@ -1,4 +1,4 @@
-/** codex exec --json 输出的 JSONL 事件 */
+﻿/** codex exec --json 杈撳嚭鐨?JSONL 浜嬩欢 */
 
 export type CodexJsonEvent =
   | { type: 'thread.started'; thread_id: string }
@@ -8,7 +8,7 @@ export type CodexJsonEvent =
   | { type: 'turn.completed'; usage?: CodexUsage }
   | { type: 'error'; message: string }
 
-/** codex 输出的项目 */
+/** codex 杈撳嚭鐨勯」鐩?*/
 export type CodexItem =
   | { id: string; type: 'error'; message: string }
   | { id: string; type: 'agent_message'; text: string }
@@ -34,7 +34,7 @@ export type CodexItem =
       type: 'approval_request'
       command?: string
       description?: string
-      /** 规则引擎决策：ask / auto_accept / auto_deny */
+      /** 瑙勫垯寮曟搸鍐崇瓥锛歛sk / auto_accept / auto_deny */
       decision?: string
       reason?: string
     }
@@ -53,7 +53,7 @@ export type CodexItem =
       status?: string
     }
 
-/** token 使用统计 */
+/** token 浣跨敤缁熻?*/
 export interface CodexUsage {
   input_tokens?: number
   cached_input_tokens?: number
@@ -62,16 +62,17 @@ export interface CodexUsage {
   reasoning_output_tokens?: number
 }
 
-/** 文件变更项（file_change item 内的单个文件） */
+/** 鏂囦欢鍙樻洿椤癸紙file_change item 鍐呯殑鍗曚釜鏂囦欢锛?*/
 export interface CodexFileChange {
   path: string
   kind: 'add' | 'delete' | 'update'
 }
 
-/** 前端渲染用的结构化消息 */
+/** 鍓嶇湪娓叉煋鐢ㄧ殑缁撴瀯鍖栨秷鎭?*/
 export interface CodexMessage {
   id: string
   kind:
+    | 'user'
     | 'agent'
     | 'tool'
     | 'error'
@@ -87,20 +88,20 @@ export interface CodexMessage {
   toolName?: string
   toolArgs?: unknown
   usage?: CodexUsage
-  /** file_change 消息的文件变更列表 */
+  /** file_change 娑堟伅鐨勬枃浠跺彉鏇村垪琛?*/
   fileChanges?: CodexFileChange[]
-  /** deny 卡片展示的命中原因（用户规则/内置规则说明） */
+  /** deny 鍗″榻灞曠ず鐨勫懡涓浠ュ師鍥狅紙鐢ㄦ埛瑙勫垯/鍐呯疆瑙勫垯璇存槑锛?*/
   reason?: string
-  /** 工具/MCP 调用耗时（毫秒） */
+  /** 宸ュ叿/MCP 璋冪敤鑰楁椂锛堟椃绉掞級 */
   durationMs?: number
-  /** 工具/MCP 调用的结果摘要（首行/前 200 字） */
+  /** 宸ュ叿/MCP 璋冪敤鐨勭粨鏋滄憳瑕侊紙棣栬党建200瀛楋級 */
   toolResult?: string
-  /** 本轮统计（仅 turn_summary 使用） */
+  /** 鏈瑁″熀鏁帮紝浠呮Turn_summary 浣跨敤锛?*/
   turnStats?: TurnStats
   timestamp: number
 }
 
-/** 本轮工作统计（turn_summary 消息使用） */
+/** 鏈瑁″仠浣缁熻锛坱urn_summary 娑堟伅浣跨敤锛?*/
 export interface TurnStats {
   durationMs: number
   toolCalls: number
