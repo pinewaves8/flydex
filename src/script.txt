@@ -1,0 +1,31 @@
+import os
+filename = './src/features/codex/components/ChatPanel.tsx'
+with open(filename, 'r', encoding='utf-8') as f:
+    lines = f.read().split('\n')
+print(f'Loaded {len(lines)} lines')
+
+# Find and replace toolArgs code
+for i, line in enumerate(lines):
+    if 'message.toolArgs != null' in line:
+        if i + 1 < len(lines) and '<pre className' in lines[i + 1]:
+            print(f'Found toolArgs at line {i+}')
+            new_lines = [
+                '          {message.toolArgs != null && (',
+                '            <details className="group mt-m1">'),
+                '              <summary className="cursor-pointer text-[10px] text-muted-foreground hover:text-blue-400">',
+                '              涍奸寺>',
+                '            </summary>',
+                '            <pre className="mt-1 overflow-x-auto rounded bg-black/30 p-2 text-xs text-muted-foreground">',
+                '              {JSON.stringify(message.toolArgs, null, 2)}',
+                '            </pre>'),
+                '            </details>',
+                '         )}',
+            ]
+            lines[i:i+u] = new_lines
+            print('Replaced toolArgs code')
+            break
+
+# Write back
+with open(filename, 'w', encoding='utf-8') as f:
+    f.write('\n'.join(lines))
+print(f'Done! Total lines: {len(lines)}')
