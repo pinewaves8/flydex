@@ -1,41 +1,37 @@
-import { create } from 'zustand'
+﻿import { create } from 'zustand'
 
 import { projectService } from '@/services/projectService'
 import { sessionService } from '@/services/sessionService'
 import { useCodexStore } from '@/stores/useCodexStore'
 import type { ExportFormat, Project, SessionMeta, SessionSearchHit } from '@/types/project'
 
+/** 持久化当前项目的 localStorage key */
+const CURRENT_PROJECT_KEY = 'flydex.currentProjectId'
+
 interface ProjectState {
   projects: Project[]
   currentProjectId: string | null
   sessions: SessionMeta[]
-  /** 回收站会话（软删除） */
   trashedSessions: SessionMeta[]
-  /** 搜索结果 */
   searchHits: SessionSearchHit[]
   currentSessionId: string | null
   loading: boolean
 
-  // 项目
   loadProjects: () => Promise<void>
   createProject: (name: string, path: string) => Promise<Project>
   renameProject: (id: string, name: string) => Promise<void>
   deleteProject: (id: string) => Promise<void>
   setCurrentProject: (id: string | null) => Promise<void>
 
-  // 会话基础 CRUD
   loadSessions: (projectId?: string) => Promise<void>
   createSession: (title: string, workdir: string, model?: string | null) => Promise<string>
   deleteSession: (id: string) => Promise<void>
   renameSession: (id: string, title: string) => Promise<void>
   setCurrentSession: (id: string | null) => void
-  /** 更新会话的模型覆盖并持久化 */
   setSessionModel: (id: string, model: string | null) => Promise<void>
 
-  // 3.7 新增
   trashSession: (id: string) => Promise<void>
   restoreSession: (id: string) => Promise<void>
-  /** 永久删除会话（从回收站） */
   purgeSession: (id: string) => Promise<void>
   loadTrashed: () => Promise<void>
   forkSession: (id: string, messageIndex: number) => Promise<string>
@@ -44,27 +40,53 @@ interface ProjectState {
   exportSession: (id: string, format: ExportFormat) => Promise<string>
 }
 
+function loadPersistedProjectId(): string | null {
+  try {
+    return localStorage.getItem(CURRENT_PROJECT_KEY)
+  } catch {
+    return null
+  }
+}
+
+function persistProjectId(id: string | null): void {
+  try {
+    if (id) {
+      localStorage.setItem(CURRENT_PROJECT_KEY, id)
+    } else {
+      localStorage.removeItem(CURRENT_PROJECT_KEY)
+    }
+  } catch {
+    // localStorage 不可用时静默忽略
+  }
+}
 export const useProjectStore = create<ProjectState>((set, get) => ({
   projects: [],
-  currentProjectId: null,
+  currentProjectId: loadPersistedProjectId(),
   sessions: [],
   trashedSessions: [],
   searchHits: [],
   currentSessionId: null,
   loading: false,
 
-  // ── 项目 ──
-
   loadProjects: async () => {
     set({ loading: true })
     try {
       const projects = await projectService.list()
       set({ projects })
-      // 如果没有当前项目，自动选第一个
-      if (!get().currentProjectId && projects.length > 0) {
+
+      const persistedId = loadPersistedProjectId()
+      const currentId = get().currentProjectId
+
+      if (persistedId && projects.some((p) => p.id === persistedId)) {
+        if (currentId !== persistedId) {
+          await get().setCurrentProject(persistedId)
+        } else {
+          await get().loadSessions(persistedId)
+        }
+      } else if (currentId && projects.some((p) => p.id === currentId)) {
+        await get().loadSessions(currentId)
+      } else if (projects.length > 0) {
         await get().setCurrentProject(projects[0].id)
-      } else if (get().currentProjectId) {
-        await get().loadSessions(get().currentProjectId!)
       }
     } finally {
       set({ loading: false })
@@ -94,20 +116,22 @@ export const useProjectStore = create<ProjectState>((set, get) => ({
       currentProjectId: state.currentProjectId === id ? null : state.currentProjectId,
       sessions: state.currentProjectId === id ? [] : state.sessions,
     }))
+    if (get().currentProjectId === id) {
+      persistProjectId(null)
+    }
   },
 
   setCurrentProject: async (id) => {
     set({ currentProjectId: id })
+    persistProjectId(id)
+
     if (id) {
       await get().loadSessions(id)
-      // 确保当前会话指向该项目下有效的会话：
-      // 切回原项目时保留其对话（指向第一个会话），无会话则清空
       const sessions = get().sessions
       const current = get().currentSessionId
       if (!current || !sessions.some((s) => s.id === current)) {
         const target = sessions[0]?.id ?? null
         set({ currentSessionId: target })
-        // 同步 codex store（autosave 数据源）+ 加载该会话消息
         void get().setCurrentSession(target)
       }
     } else {
@@ -115,9 +139,6 @@ export const useProjectStore = create<ProjectState>((set, get) => ({
       useCodexStore.getState().setCurrentSessionId(null)
     }
   },
-
-  // ── 会话 ──
-
   loadSessions: async (projectId) => {
     const pid = projectId ?? get().currentProjectId ?? undefined
     const sessions = await sessionService.list(pid)
@@ -131,7 +152,6 @@ export const useProjectStore = create<ProjectState>((set, get) => ({
       sessions: [session, ...state.sessions],
       currentSessionId: session.id,
     }))
-    // 同步 codex store（autosave 数据源）+ 清空消息为新会话
     useCodexStore.getState().setCurrentSessionId(session.id)
     useCodexStore.getState().loadSession({ messages: [], threadId: null })
     return session.id
@@ -154,9 +174,7 @@ export const useProjectStore = create<ProjectState>((set, get) => ({
 
   setCurrentSession: (id) => {
     set({ currentSessionId: id })
-    // 同步到 codex store（启用 autosave + 加载历史消息）
     if (id) {
-      // 先清空当前 codex 状态，避免新会话加载前显示旧数据
       useCodexStore.getState().loadSession({ messages: [], threadId: null })
       void sessionService.load(id).then((session) => {
         if (session) {
@@ -173,7 +191,6 @@ export const useProjectStore = create<ProjectState>((set, get) => ({
   },
 
   setSessionModel: async (id, model) => {
-    // 从完整会话加载后更新 model 字段再保存
     const loaded = await sessionService.load(id)
     if (!loaded) return
     const updated = { ...loaded, model, updatedAt: Date.now() }
@@ -183,10 +200,7 @@ export const useProjectStore = create<ProjectState>((set, get) => ({
     }))
   },
 
-  // ── 3.7 新增 actions ──
-
   trashSession: async (id) => {
-    // 如果是当前会话，先清空 codex store
     if (get().currentSessionId === id) {
       useCodexStore.getState().setCurrentSessionId(null)
       useCodexStore.getState().reset()
@@ -219,7 +233,6 @@ export const useProjectStore = create<ProjectState>((set, get) => ({
   forkSession: async (id, messageIndex) => {
     const newSession = await sessionService.fork(id, messageIndex)
     await get().loadSessions()
-    // 跳转到新会话
     get().setCurrentSession(newSession.id)
     return newSession.id
   },
