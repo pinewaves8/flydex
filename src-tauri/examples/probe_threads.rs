@@ -124,6 +124,8 @@ impl Drop for Probe {
 
 fn main() {
     let create_project = std::env::args().any(|a| a == "--create-project");
+    // 原始 item JSON 转储:写映射逻辑时才需要,平时刷屏故默认关闭
+    let dump_items = std::env::args().any(|a| a == "--dump-items");
     let mut failures: Vec<String> = Vec::new();
 
     let mut p = match Probe::spawn() {
@@ -197,6 +199,30 @@ fn main() {
         .filter(|r| r.get("modelProvider").and_then(|v| v.as_str()).unwrap_or("").starts_with("flydex_"))
         .count();
     println!("    其中 provider 以 flydex_ 开头(即 Flydex 创建的线程): {flydex_owned} 条");
+
+    // ── 2b. thread/list 带 projectId 过滤(实验性参数,可能是双 Option) ──
+    println!("
+== 2b. thread/list 的 projectId 过滤 ==");
+    if let Ok(pv) = p.request("project/list", Some(json!({ "limit": 100 }))) {
+        if let Some(first) = pv.get("data").and_then(|d| d.as_array()).and_then(|a| a.first()) {
+            let pid = first.get("id").and_then(|v| v.as_str()).unwrap_or("");
+            match p.request("thread/list", Some(json!({
+                "sortKey": "updated_at", "sortDirection": "desc",
+                "limit": 100, "archived": false, "useStateDbOnly": true,
+                "projectId": pid,
+            }))) {
+                Ok(v) => {
+                    let n = v.get("data").and_then(|d| d.as_array()).map(|a| a.len()).unwrap_or(0);
+                    println!("OK  projectId={pid} → {n} 条");
+                    println!("    (不带过滤时是 {} 条)", rows.len());
+                    if n == 0 {
+                        println!("    ⚠ 过滤返回 0 —— 要么该项目确实没有线程,要么参数名/形态不对");
+                    }
+                }
+                Err(e) => println!("FAIL(说明该参数用法有问题): {e}"),
+            }
+        }
+    }
 
     // ── 3. project/list ─────────────────────────────────────────
     println!("\n== 3. project/list ==");
@@ -289,6 +315,31 @@ fn main() {
                         a.iter().filter_map(|it| it.get("type").and_then(|t| t.as_str()).map(str::to_string)).collect()
                     }).unwrap_or_default();
                 println!("    首轮 item 类型: {types:?}");
+                // 原始 JSON 转储 —— 写映射逻辑前先看真实字段名,别靠读源码猜
+                if dump_items {
+                if let Some(items) = turn.get("items").and_then(|i| i.as_array()) {
+                    for it in items {
+                        let t = it.get("type").and_then(|v| v.as_str()).unwrap_or("?");
+                        println!(
+                            "    --- item[{t}] ---
+{}",
+                            serde_json::to_string_pretty(it).unwrap_or_default()
+                        );
+                    }
+                }
+                println!(
+                    "    --- turn 自身字段 ---
+{}",
+                    serde_json::to_string_pretty(
+                        &serde_json::Value::Object(
+                            turn.as_object()
+                                .map(|o| o.iter().filter(|(k, _)| k.as_str() != "items")
+                                    .map(|(k, v)| (k.clone(), v.clone())).collect()
+                                ).unwrap_or_default()
+                        )
+                    ).unwrap_or_default()
+                );
+                }
             }
         }
     }

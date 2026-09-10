@@ -16,7 +16,7 @@ import {
   ShieldAlert,
   Sparkles,
   Users,
-  GitFork,
+  User,
   ListChecks,
 } from 'lucide-react'
 import { memo, useCallback, useEffect, useMemo, useRef, useState } from 'react'
@@ -35,6 +35,7 @@ import { TurnPlanPanel } from './TurnPlanPanel'
 import { TurnSummaryCard } from './TurnSummaryCard'
 
 import { Markdown } from '@/components/ui/Markdown'
+import { hasInjectedContext } from '@/features/codex/threadItems'
 import { SkillPalette } from '@/features/skills/SkillPalette'
 import { SubagentPanel } from '@/features/subagent/SubagentPanel'
 import { TaskPanel } from '@/features/tasks/TaskPanel'
@@ -45,7 +46,7 @@ import {
   getInitStepLabel,
 } from '@/services/initService'
 import { memoryService } from '@/services/memoryService'
-import { useCodexStore } from '@/stores/useCodexStore'
+import { useCodexStore, type ThreadTurnMeta } from '@/stores/useCodexStore'
 import { useModelStore } from '@/stores/useModelStore'
 import { useProjectStore } from '@/stores/useProjectStore'
 import { useSkillsStore } from '@/stores/useSkillsStore'
@@ -100,35 +101,8 @@ const STATUS_CONFIG: Record<CodexStatus, { label: string; icon: React.ReactNode;
     error: { label: 'Error', icon: <AlertCircle className="h-3.5 w-3.5" />, color: 'text-red-400' },
   }
 
-/** 7.4.3 消息级分叉容器：hover 显示「在此分叉」按钮（并行时间线） */
-function MessageForkWrapper({
-  index,
-  onFork,
-  children,
-}: {
-  index: number
-  onFork: (index: number) => void
-  children: React.ReactNode
-}) {
-  return (
-    <div className="group relative">
-      {children}
-      <button
-        onClick={() => onFork(index)}
-        className="absolute right-2 top-1.5 z-10 flex items-center gap-1 rounded border border-border bg-background/90 px-1.5 py-0.5 text-[10px] text-muted-foreground opacity-0 transition-opacity hover:bg-accent hover:text-foreground group-hover:opacity-100"
-        title="在此消息后分叉创建新会话（并行时间线）"
-      >
-        <GitFork className="h-3 w-3" />
-        分叉
-      </button>
-    </div>
-  )
-}
-
 /** 消息流的渲染分组:连续的工具消息合成一「工具段」 */
-type RenderBlock =
-  | { kind: 'single'; msg: CodexMessage; index: number }
-  | { kind: 'tools'; items: { msg: CodexMessage; index: number }[] }
+type RenderBlock = { kind: 'single'; msg: CodexMessage } | { kind: 'tools'; items: CodexMessage[] }
 
 /**
  * 把连续的工具消息归为一段。
@@ -139,42 +113,67 @@ type RenderBlock =
  */
 function buildRenderBlocks(messages: CodexMessage[]): RenderBlock[] {
   const blocks: RenderBlock[] = []
-  let run: { msg: CodexMessage; index: number }[] = []
+  let run: CodexMessage[] = []
   const flush = () => {
-    if (run.length === 1) {
-      blocks.push({ kind: 'single', msg: run[0].msg, index: run[0].index })
-    } else if (run.length > 1) {
-      blocks.push({ kind: 'tools', items: run })
-    }
+    if (run.length === 1) blocks.push({ kind: 'single', msg: run[0] })
+    else if (run.length > 1) blocks.push({ kind: 'tools', items: run })
     run = []
   }
-  messages.forEach((msg, index) => {
-    if (msg.kind === 'tool') {
-      run.push({ msg, index })
-    } else {
+  for (const msg of messages) {
+    if (msg.kind === 'tool') run.push(msg)
+    else {
       flush()
-      blocks.push({ kind: 'single', msg, index })
+      blocks.push({ kind: 'single', msg })
     }
-  })
+  }
   flush()
   return blocks
 }
 
+/** 一轮对话的渲染单元 */
+interface TurnGroup {
+  key: string
+  /** codex 的 turnId;前端合成的卡片不属于任何轮,故可缺省 */
+  turnId?: string
+  blocks: RenderBlock[]
+}
+
+/**
+ * 先按 turn 分组,组内再做「相邻工具归并」
+ *
+ * 为什么要先分组:分支(P6)以轮为单位,「这一轮做了什么」也是用户读对话的自然单位。
+ * 前端合成的卡片(turn_summary / reflection 等)没有 turnId,跟随前一条消息所属的轮,
+ * 否则每张本地卡都会另起一段。
+ */
+function buildTurnGroups(messages: CodexMessage[]): TurnGroup[] {
+  const order: string[] = []
+  const byKey = new Map<string, CodexMessage[]>()
+  let lastKey: string | null = null
+  for (const m of messages) {
+    const key = m.turnId ?? lastKey ?? 'local'
+    if (m.turnId) lastKey = m.turnId
+    let bucket = byKey.get(key)
+    if (!bucket) {
+      bucket = []
+      byKey.set(key, bucket)
+      order.push(key)
+    }
+    bucket.push(m)
+  }
+  return order.map((key) => ({
+    key,
+    turnId: key === 'local' ? undefined : key,
+    blocks: buildRenderBlocks(byKey.get(key)!),
+  }))
+}
+
 /** 一段连续工具调用的汇总卡(折叠时只占一行) */
-function ToolRunCard({
-  items,
-  repo,
-  onFork,
-}: {
-  items: { msg: CodexMessage; index: number }[]
-  repo?: string
-  onFork: (index: number) => void
-}) {
+function ToolRunCard({ items, repo }: { items: CodexMessage[]; repo?: string }) {
   const [open, setOpen] = useState(false)
-  const totalMs = items.reduce((n, it) => n + (it.msg.durationMs ?? 0), 0)
+  const totalMs = items.reduce((n, m) => n + (m.durationMs ?? 0), 0)
   // 按工具名归类,给出 "Read ×3 · Grep ×1" 这样的概览
   const byName = new Map<string, number>()
-  for (const { msg } of items) {
+  for (const msg of items) {
     const name = msg.toolName ?? 'tool'
     byName.set(name, (byName.get(name) ?? 0) + 1)
   }
@@ -206,13 +205,129 @@ function ToolRunCard({
       </button>
       {open && (
         <div className="space-y-0.5 border-t border-border/40 px-2 py-1">
-          {items.map(({ msg, index }) => (
-            <MessageForkWrapper key={msg.id} index={index} onFork={onFork}>
-              <MessageCard message={msg} repo={repo} />
-            </MessageForkWrapper>
+          {items.map((msg) => (
+            <MessageCard key={msg.id} message={msg} repo={repo} />
           ))}
         </div>
       )}
+    </div>
+  )
+}
+
+/** 一轮对话的容器:轮内消息 + 轮边界 */
+function TurnBlockView({
+  group,
+  turnMeta,
+  repo,
+  onApprovePlan,
+  onCancelPlan,
+  planDisabled,
+  onSuggestion,
+  registerRef,
+}: {
+  group: TurnGroup
+  turnMeta?: ThreadTurnMeta
+  repo?: string
+  onApprovePlan?: (steps: string[]) => void
+  onCancelPlan?: () => void
+  planDisabled?: boolean
+  onSuggestion?: (action: SuggestionAction) => void
+  registerRef: (id: string, el: HTMLDivElement | null) => void
+}) {
+  const failed = turnMeta?.status === 'failed' || turnMeta?.status === 'interrupted'
+  return (
+    <div className="border-l border-border/40 pl-3">
+      {/* 轮标题:有 turnId 才显示(前端合成的卡片不构成一轮) */}
+      {group.turnId && (
+        <div className="mb-1 flex items-center gap-2 text-[10px] text-muted-foreground/70">
+          <span className="font-mono">{group.turnId.slice(-6)}</span>
+          {turnMeta?.durationMs != null && <span>{(turnMeta.durationMs / 1000).toFixed(1)}s</span>}
+          {failed && (
+            <span className="text-red-400">
+              {turnMeta?.status === 'interrupted' ? '已中断' : '失败'}
+            </span>
+          )}
+        </div>
+      )}
+      <div className="space-y-3">
+        {group.blocks.map((block) => {
+          if (block.kind === 'tools') {
+            return (
+              <div key={`tools-${block.items[0].id}`}>
+                <ToolRunCard items={block.items} repo={repo} />
+              </div>
+            )
+          }
+          const msg = block.msg
+          return (
+            <div key={msg.id} data-message-id={msg.id} ref={(el) => registerRef(msg.id, el)}>
+              <MessageCard
+                message={msg}
+                repo={repo}
+                onApprovePlan={onApprovePlan}
+                onCancelPlan={onCancelPlan}
+                planDisabled={planDisabled}
+                onSuggestion={onSuggestion}
+              />
+            </div>
+          )
+        })}
+      </div>
+    </div>
+  )
+}
+
+/**
+ * 用户提问卡片
+ *
+ * `injected` 是早期 Flydex 把项目规范拼进 prompt 留下的历史包袱:注入块在提问**前面**,
+ * 而「文件全文在哪结束」无法从数据推断,所以不切割、只折叠成一行 —— 展开即可看到原文。
+ * 新会话不再产生这种消息。
+ */
+function UserMessageCard({ message }: { message: CodexMessage }) {
+  const injected = hasInjectedContext(message.content)
+  const [expanded, setExpanded] = useState(false)
+  const timeStr = new Date(message.timestamp).toLocaleTimeString('zh-CN', {
+    hour: '2-digit',
+    minute: '2-digit',
+  })
+
+  if (injected && !expanded) {
+    return (
+      <div className="flex justify-end">
+        <button
+          onClick={() => setExpanded(true)}
+          className="my-1 flex max-w-[80%] items-center gap-1.5 rounded-lg border border-border bg-muted/40 px-3 py-1.5 text-xs text-muted-foreground transition-colors hover:bg-muted/60 hover:text-foreground"
+          title="这段提问里含有早期 Flydex 自动注入的项目规范,已折叠"
+        >
+          <ChevronRight className="h-3 w-3 shrink-0" />
+          <span className="font-medium">含项目规范注入</span>
+          <span className="opacity-70">· {message.content.length} 字符 · 点击展开</span>
+          <span className="opacity-50">{timeStr}</span>
+        </button>
+      </div>
+    )
+  }
+
+  return (
+    <div className="flex justify-end">
+      <div className="my-1 max-w-[80%] rounded-lg border border-primary/20 bg-primary/10 px-3 py-2">
+        <div className="mb-0.5 flex items-center gap-1.5 text-[10px] text-muted-foreground">
+          <User className="h-2.5 w-2.5" />
+          <span>你</span>
+          <span className="opacity-60">{timeStr}</span>
+          {injected && (
+            <button
+              onClick={() => setExpanded(false)}
+              className="ml-1 rounded px-1 hover:bg-accent"
+              title="折叠注入的项目规范"
+            >
+              折叠注入
+            </button>
+          )}
+        </div>
+        <div className="whitespace-pre-wrap break-words text-sm">{message.content}</div>
+      </div>
     </div>
   )
 }
@@ -318,6 +433,11 @@ const MessageCard = memo(function MessageCard({
         </div>
       </div>
     )
+  }
+
+  // 用户提问(迁移后首次出现 —— 以前 Flydex 从不持久化用户输入)
+  if (message.kind === 'user') {
+    return <UserMessageCard message={message} />
   }
 
   if (message.kind === 'system' || message.kind === 'usage') {
@@ -577,17 +697,23 @@ export function ChatPanel() {
   // 关键:messages 是 useCodexSession 状态,异步加载(先清空再填)。
   // 用 messages.find 验证目标 ID 已加载,再用 ref Map 找 DOM 节点
   const pendingScrollToMessageId = useCodexStore((s) => s.pendingScrollToMessageId)
-  // 同时监听 currentSessionId 变化,新会话加载时重置 scrollTop(避免显示旧会话的滚动位置)
-  const currentSessionId = useProjectStore((s) => s.currentSessionId)
+  // 同时监听会话变化,新会话加载时重置滚动位置 / 播切换动画
+  const currentThreadId = useProjectStore((s) => s.currentThreadId)
 
   // session 切换流畅动画:切会话时先 opacity=0,200ms 后恢复 1
   const [switchFading, setSwitchFading] = useState(false)
   useEffect(() => {
-    if (!currentSessionId) return
+    if (!currentThreadId) return
     setSwitchFading(true)
     const t = setTimeout(() => setSwitchFading(false), 200)
     return () => clearTimeout(t)
-  }, [currentSessionId])
+  }, [currentThreadId])
+
+  // 更早历史的分页游标 + thread 元信息(轮标题/耗时/失败态)
+  const turnsCursor = useCodexStore((s) => s.turnsCursor)
+  const turnMetas = useCodexStore((s) => s.turns)
+  const loadEarlierTurns = useProjectStore((s) => s.loadEarlierTurns)
+  const turnMetaById = useMemo(() => new Map(turnMetas.map((t) => [t.id, t])), [turnMetas])
 
   // AI 活动状态 banner(对齐 Claude Code:实时显示"思考中/正在响应/运行命令"+ 计时)
   const aiStatus = useCodexStore((s) => s.status)
@@ -613,7 +739,7 @@ export function ChatPanel() {
     }
     // 切会话后清空 ref map(旧 message DOM 引用失效)
     messageRefsMap.current.clear()
-  }, [currentSessionId])
+  }, [currentThreadId])
   useEffect(() => {
     if (!pendingScrollToMessageId) return
     let cancelled = false
@@ -649,35 +775,32 @@ export function ChatPanel() {
     }
   }, [pendingScrollToMessageId, messages])
 
-  const createSession = useProjectStore((s) => s.createSession)
-  const renameSession = useProjectStore((s) => s.renameSession)
-  const sessions = useProjectStore((s) => s.sessions)
-  const setSessionModel = useProjectStore((s) => s.setSessionModel)
-  const setCurrentSession = useProjectStore((s) => s.setCurrentSession)
+  const threads = useProjectStore((s) => s.threads)
+  const currentProjectId = useProjectStore((s) => s.currentProjectId)
   const workspaceCwd = useWorkspaceStore((s) => s.cwd)
   const modelConfig = useModelStore((s) => s.config)
   const loadModels = useModelStore((s) => s.load)
   // 7.2.3 后台子代理运行数徽章
   const subagentRunning = useSubagentStore((s) => s.backgroundRunning)
 
-  // 当前会话标题
-  const currentSessionTitle = sessions.find((s) => s.id === currentSessionId)?.title ?? ''
-  // 当前会话绑定的工作目录（遵循 codex：会话绑定创建时的 cwd）
-  const currentSessionWorkdir = sessions.find((s) => s.id === currentSessionId)?.workdir
-  // 会话级模型覆盖（null 表示用全局默认）
-  const currentSessionModel = sessions.find((s) => s.id === currentSessionId)?.model ?? null
-  const forkSession = useProjectStore((s) => s.forkSession)
+  // 当前会话的 codex 记录(标题与 cwd 都来自它 —— 遵循 codex"会话绑定创建时的 cwd")
+  const currentThread = useMemo(
+    () => threads.find((t) => t.id === currentThreadId) ?? null,
+    [threads, currentThreadId],
+  )
+  const currentThreadWorkdir = currentThread?.cwd
+  /**
+   * 会话级模型覆盖(null = 跟随全局)
+   *
+   * 只活在内存里:codex 的 Thread 没有这个字段,属纯 UI 偏好。
+   * 每轮 resume 都会把 config 下发给 codex,所以覆盖无需落到 thread 上。
+   * (持久化到 ~/.flydex/thread_settings.json 是 P4 的事)
+   */
+  const [threadModel, setThreadModel] = useState<string | null>(null)
   const exportSession = useProjectStore((s) => s.exportSession)
   const lastUserInput = useRef<string>('')
 
   /** 7.4.3 消息级分叉：在指定消息后 fork 新会话（并行时间线入口） */
-  const handleForkAt = async (index: number) => {
-    if (!currentSessionId) return
-    const ok = window.confirm(`在此消息（第 ${index + 1} 条）后分叉创建新会话？`)
-    if (!ok) return
-    await forkSession(currentSessionId, index)
-  }
-
   // 挂载时加载模型配置（全局默认模型）
   useEffect(() => {
     void loadModels()
@@ -690,15 +813,6 @@ export function ChatPanel() {
       void loadSkills(workspaceCwd)
     }
   }, [workspaceCwd, loadSkills])
-
-  // 切换会话时加载会话数据（已迁移到 useProjectStore.setCurrentSession，这里保留兼容性）
-  // 注意:输入相关本地状态(command/attachments)已下放到 InputBox 子组件,
-  // InputBox 自身监听 currentSessionId 变化时清空,无需在此清理
-  useEffect(() => {
-    if (!currentSessionId) {
-      useCodexStore.getState().reset()
-    }
-  }, [currentSessionId])
 
   // 项目切换时检查 init 状态(用于"上次的 init 进行到 X,继续?" banner)
   useEffect(() => {
@@ -764,8 +878,8 @@ export function ChatPanel() {
     switch (action.type) {
       case 'review':
         // 用当前 workdir 触发 review（复用现有 /review 流程）
-        if (currentSessionWorkdir || workspaceCwd) {
-          const workdir = currentSessionWorkdir || workspaceCwd
+        if (currentThreadWorkdir || workspaceCwd) {
+          const workdir = currentThreadWorkdir || workspaceCwd
           try {
             const diff = (await invoke('git_review_diff', {
               repo: workdir,
@@ -780,7 +894,7 @@ export function ChatPanel() {
                 ? '请审查代码变更。diff 内容已写入工作目录下 .flydex-review.diff 文件中，请读取后输出结构化审查报告。'
                 : '当前没有检测到代码变更，请说明这一点。',
               workdir,
-              currentSessionModel,
+              threadModel,
               'review',
             )
             await invoke('remove_review_diff', { repo: workdir }).catch(() => {})
@@ -795,11 +909,7 @@ export function ChatPanel() {
       case 'rerun':
         // 复用本轮最后一次用户输入（取最近 user/agent 对）
         if (lastUserInput.current) {
-          await run(
-            lastUserInput.current,
-            currentSessionWorkdir || workspaceCwd,
-            currentSessionModel,
-          )
+          await run(lastUserInput.current, currentThreadWorkdir || workspaceCwd, threadModel)
         } else {
           useCodexStore.getState().appendOutput({ text: '没有可重跑的上一次输入', kind: 'system' })
         }
@@ -1017,22 +1127,13 @@ ${scenarioGuide[report.scenario]}
       // 记录本次用户输入（"再跑一次" 建议会用到）
       lastUserInput.current = cmd
 
-      // 如果没有当前会话，自动创建一个（绑定全局工作目录）
-      let sessionId = currentSessionId
-      if (!sessionId) {
-        const title = cmd.length > 30 ? cmd.slice(0, 30) + '…' : cmd
-        sessionId = await createSession(title, workspaceCwd)
-        setCurrentSession(sessionId)
-      } else if (currentSessionTitle === '未命名会话' || currentSessionTitle === '') {
-        // 发送第一条消息时自动重命名
-        const title = cmd.length > 30 ? cmd.slice(0, 30) + '…' : cmd
-        await renameSession(sessionId, title)
-      }
+      // 新会话刻意**不在此建 thread**:首条消息发出后 codex 自己建,轮结束时会话
+      // 自动出现在侧边栏(标题取自首条消息的 preview)。也不再需要 Flydex 手工改名。
 
       // 遵循 codex：resume 会话用会话绑定的 cwd，新会话用全局 cwd；模型用会话级覆盖（无则全局默认）
       // 计划模式开启时 mode='plan'（后端强制 read-only 沙箱 + 注入计划指令）
       const planModeActive = useCodexStore.getState().planMode
-      const workdir = currentSessionWorkdir || workspaceCwd
+      const workdir = currentThreadWorkdir || workspaceCwd
 
       let finalCmd = cmd
       // 技能注入：检测 /skill-name 前缀或自然语言触发词匹配
@@ -1073,7 +1174,7 @@ ${scenarioGuide[report.scenario]}
               ? '，请读取后按要求输出结构化审查报告。'
               : '，但当前没有检测到任何代码变更，请直接说明这一点。'
           }。`
-          await run(prompt, workdir, currentSessionModel, 'review')
+          await run(prompt, workdir, threadModel, 'review')
           await invoke('remove_review_diff', { repo: workdir }).catch(() => {})
           return
         } catch (e) {
@@ -1084,33 +1185,15 @@ ${scenarioGuide[report.scenario]}
 
       // 收集已落盘的图片附件路径(从当前 InputBox 内部状态不可见,但 attachments 中已有 path)
       const imagePaths = _attachments.map((a) => a.path).filter(Boolean)
-      run(finalCmd, workdir, currentSessionModel, planModeActive ? 'plan' : undefined, imagePaths)
+      run(finalCmd, workdir, threadModel, planModeActive ? 'plan' : undefined, imagePaths)
     },
-    [
-      status,
-      currentSessionId,
-      currentSessionTitle,
-      currentSessionWorkdir,
-      workspaceCwd,
-      createSession,
-      renameSession,
-      setCurrentSession,
-      run,
-      currentSessionModel,
-    ],
+    [status, currentThreadWorkdir, threadModel, workspaceCwd, run],
   )
 
-  // 切换会话模型覆盖。模型与会话 thread 绑定：若会话已有历史 thread，自动新建（新 threadId），
-  // 避免跨模型 resume 触发 codex 的模型不一致警告（也符合 codex"模型绑定会话"语义）
-  const handleModelChange = async (modelId: string) => {
-    if (!currentSessionId) {
-      return
-    }
-    await setSessionModel(currentSessionId, modelId === '__global__' ? null : modelId)
-    if (useCodexStore.getState().threadId) {
-      useCodexStore.getState().reset()
-      useCodexStore.getState().setThreadId(null)
-    }
+  // 切模型:只记偏好,不新建 thread —— 每轮 resume 都会把新 config 下发给 codex,
+  // 不需要靠"换模型=换会话"来绕开跨模型 resume 的警告(旧 hack 已删)
+  const handleModelChange = (modelId: string) => {
+    setThreadModel(modelId === '__global__' ? null : modelId)
   }
 
   const statusCfg = STATUS_CONFIG[status]
@@ -1124,7 +1207,7 @@ ${scenarioGuide[report.scenario]}
           <span className="text-sm font-medium">Codex Chat</span>
           {/* 会话级模型覆盖 */}
           <select
-            value={currentSessionModel ?? '__global__'}
+            value={threadModel ?? '__global__'}
             onChange={(e) => void handleModelChange(e.target.value)}
             disabled={status === 'running'}
             title="会话模型覆盖（切换仅对当前会话生效）"
@@ -1141,7 +1224,7 @@ ${scenarioGuide[report.scenario]}
           </select>
           {/* 上下文与记忆指示器（6.1）：L1/L2 记忆用量 + 会话上下文用量 + 超限压缩 */}
           <MemoryIndicator
-            workdir={currentSessionWorkdir || workspaceCwd}
+            workdir={currentThreadWorkdir || workspaceCwd}
             onCompact={handleCompact}
           />
           <span className={`flex items-center gap-1 text-xs ${statusCfg.color}`}>
@@ -1280,42 +1363,34 @@ ${scenarioGuide[report.scenario]}
                 ))}
               </div>
             )}
-            {/* 结构化消息（7.4.3 支持消息级分叉；连续工具调用合并为一段） */}
-            {buildRenderBlocks(messages).map((block) => {
-              if (block.kind === 'tools') {
-                return (
-                  <div key={`tools-${block.items[0].msg.id}`}>
-                    <ToolRunCard
-                      items={block.items}
-                      repo={currentSessionWorkdir || workspaceCwd}
-                      onFork={handleForkAt}
-                    />
-                  </div>
-                )
-              }
-              const { msg, index } = block
-              return (
-                <div
-                  key={msg.id}
-                  data-message-id={msg.id}
-                  ref={(el) => {
-                    if (el) messageRefsMap.current.set(msg.id, el)
-                    else messageRefsMap.current.delete(msg.id)
-                  }}
+            {/* 更早的历史:codex 的 turns 是分页的,按需往前翻 */}
+            {turnsCursor && (
+              <div className="flex justify-center">
+                <button
+                  onClick={() => void loadEarlierTurns()}
+                  className="rounded border border-border px-3 py-1 text-xs text-muted-foreground transition-colors hover:bg-accent hover:text-foreground"
                 >
-                  <MessageForkWrapper index={index} onFork={handleForkAt}>
-                    <MessageCard
-                      message={msg}
-                      repo={currentSessionWorkdir || workspaceCwd}
-                      onApprovePlan={approvePlan}
-                      onCancelPlan={cancelPlan}
-                      planDisabled={status === 'running'}
-                      onSuggestion={handleSuggestionAction}
-                    />
-                  </MessageForkWrapper>
-                </div>
-              )
-            })}
+                  加载更早的对话
+                </button>
+              </div>
+            )}
+            {/* 结构化消息:按轮分组,组内把连续的工具调用合并为一段 */}
+            {buildTurnGroups(messages).map((group) => (
+              <TurnBlockView
+                key={group.key}
+                group={group}
+                turnMeta={group.turnId ? turnMetaById.get(group.turnId) : undefined}
+                repo={currentThreadWorkdir || workspaceCwd}
+                onApprovePlan={approvePlan}
+                onCancelPlan={cancelPlan}
+                planDisabled={status === 'running'}
+                onSuggestion={handleSuggestionAction}
+                registerRef={(id, el) => {
+                  if (el) messageRefsMap.current.set(id, el)
+                  else messageRefsMap.current.delete(id)
+                }}
+              />
+            ))}
 
             {/* 流式实时预览:直接来自 codex 的 delta 通知。
                 正式消息落地后 clearLive() 会移除本块,由真实消息取代(文本连续)。 */}
@@ -1414,21 +1489,21 @@ ${scenarioGuide[report.scenario]}
       <SubagentPanel
         open={showSubagent}
         onClose={() => setShowSubagent(false)}
-        defaultWorkdir={currentSessionWorkdir || workspaceCwd}
-        defaultModel={currentSessionModel}
+        defaultWorkdir={currentThreadWorkdir || workspaceCwd}
+        defaultModel={threadModel}
       />
 
       {/* 任务面板（v4.2） */}
       <TaskPanel
         open={showTaskPanel}
         onClose={() => setShowTaskPanel(false)}
-        projectId={sessions.find((ss) => ss.id === currentSessionId)?.projectId ?? null}
-        sessionId={currentSessionId}
+        projectId={currentProjectId}
+        sessionId={currentThreadId}
       />
 
       {/* 记忆管理面板（v4.1） */}
       <MemoryPanel
-        workdir={currentSessionWorkdir || workspaceCwd}
+        workdir={currentThreadWorkdir || workspaceCwd}
         open={showMemoryPanel}
         onClose={() => setShowMemoryPanel(false)}
       />
@@ -1470,7 +1545,7 @@ ${scenarioGuide[report.scenario]}
         approval={approval}
         respondApproval={respondApproval}
         onSend={handleSend}
-        currentSessionWorkdir={currentSessionWorkdir}
+        currentSessionWorkdir={currentThreadWorkdir}
         workspaceCwd={workspaceCwd}
         planMode={planMode}
       />

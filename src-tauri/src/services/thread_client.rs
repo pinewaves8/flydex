@@ -11,7 +11,7 @@ use serde_json::{json, Value};
 use tauri::AppHandle;
 
 use crate::models::thread::{CodexProject, ThreadOccurrence, ThreadRow, ThreadSearchHit};
-use crate::services::appserver_client::AppServerClient;
+use crate::services::appserver_client::{map_item, AppServerClient};
 
 /// 写进 codex project metadata 的键 —— 用于把 Flydex 项目 id 与 codex project 关联
 pub const FLYDEX_PROJECT_META_KEY: &str = "flydex.projectId";
@@ -20,6 +20,27 @@ pub const FLYDEX_PROJECT_META_KEY: &str = "flydex.projectId";
 const PAGE_LIMIT: u32 = 100;
 /// 列表翻页上限,防止异常情况下无限循环
 const MAX_PAGES: u32 = 20;
+
+/// 归一化一个 turn,让前端只面对一种形状:
+///
+/// 1. `items` 走 [`map_item`](两条路径共用一份映射,见其文档)
+/// 2. `startedAt` / `completedAt` 由 codex 的 **Unix 秒**换成本项目的**毫秒**
+///    (陷阱 G:不换算的话前端相对时间会显示成 1970 年)
+fn normalize_turn(turn: &Value) -> Value {
+    let mut t = turn.clone();
+    if let Some(items) = t.get_mut("items").and_then(|i| i.as_array_mut()) {
+        for it in items.iter_mut() {
+            let mapped = map_item(it);
+            *it = mapped;
+        }
+    }
+    for key in ["startedAt", "completedAt"] {
+        if let Some(secs) = t.get(key).and_then(|v| v.as_i64()) {
+            t[key] = json!(secs.saturating_mul(1000));
+        }
+    }
+    t
+}
 
 pub struct ThreadClient;
 
@@ -125,7 +146,7 @@ impl ThreadClient {
         let turns = resp
             .get("data")
             .and_then(|d| d.as_array())
-            .cloned()
+            .map(|arr| arr.iter().map(normalize_turn).collect())
             .unwrap_or_default();
         let next = resp
             .get("nextCursor")
@@ -185,7 +206,6 @@ impl ThreadClient {
     }
 
     /// **硬删除,不可逆**。被 fork 引用时会失败 —— 调用方必须先按拓扑逆序删后代。
-    #[allow(dead_code)] // P5 接线
     pub fn delete(app: &AppHandle, thread_id: &str) -> Result<(), String> {
         Self::client(app)?
             .request("thread/delete", Some(json!({ "threadId": thread_id })))
@@ -409,5 +429,76 @@ impl ThreadClient {
     #[allow(dead_code)] // P5 接线
     pub fn list_all_unfiltered(app: &AppHandle, archived: bool) -> Result<Vec<ThreadRow>, String> {
         Self::list_all(app, archived, None)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// 真实抓取的 turn(见 `examples/probe_threads.rs` 的转储),字段名以此为准。
+    #[test]
+    fn normalize_turn_converts_items_and_timestamps() {
+        let raw = json!({
+            "id": "01a08940-bae7-7c51-8559-de42c66a72a5",
+            "status": "failed",
+            // 陷阱 G:codex 的 turn 时间戳是 Unix 秒
+            "startedAt": 1789009115,
+            "completedAt": 1789009163,
+            "durationMs": 47687,
+            "error": { "message": "high demand" },
+            "items": [
+                {
+                    "id": "item-51",
+                    "type": "userMessage",
+                    "clientId": null,
+                    "content": [{ "type": "text", "text": "hi", "textElements": [] }]
+                },
+                {
+                    "id": "item-52",
+                    "type": "commandExecution",
+                    "command": "ls -la",
+                    "status": "Completed",
+                    "aggregatedOutput": "a
+b",
+                    "exitCode": 0,
+                    "durationMs": 120,
+                    "cwd": "C:/x"
+                }
+            ]
+        });
+
+        let t = normalize_turn(&raw);
+
+        // 时间戳:秒 → 毫秒
+        assert_eq!(t["startedAt"], json!(1789009115000i64));
+        assert_eq!(t["completedAt"], json!(1789009163000i64));
+        // 毫秒字段不能被再乘一次
+        assert_eq!(t["durationMs"], json!(47687));
+        // turn 自身其它字段原样保留
+        assert_eq!(t["status"], json!("failed"));
+        assert_eq!(t["error"]["message"], json!("high demand"));
+
+        let items = t["items"].as_array().unwrap();
+        // userMessage 的字段本就同名,只需确认没被破坏
+        assert_eq!(items[0]["type"], json!("user_message"));
+        assert_eq!(items[0]["id"], json!("item-51"));
+        assert_eq!(items[0]["content"][0]["text"], json!("hi"));
+        // commandExecution:驼峰字段翻成 snake_case,状态枚举翻成小写
+        assert_eq!(items[1]["type"], json!("command_execution"));
+        assert_eq!(items[1]["aggregated_output"], json!("a
+b"));
+        assert_eq!(items[1]["exit_code"], json!(0));
+        assert_eq!(items[1]["duration_ms"], json!(120));
+        assert_eq!(items[1]["status"], json!("completed"));
+        assert_eq!(items[1]["cwd"], json!("C:/x"));
+    }
+
+    #[test]
+    fn normalize_turn_is_idempotent_on_missing_fields() {
+        // 字段缺失/为空时不能 panic(老版本 codex、中断的轮次)
+        let t = normalize_turn(&json!({ "id": "t1", "status": "inProgress" }));
+        assert_eq!(t["id"], json!("t1"));
+        assert!(t.get("items").is_none());
     }
 }

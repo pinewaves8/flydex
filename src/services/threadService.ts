@@ -81,6 +81,16 @@ export const threadService = {
     return invoke<void>('unarchive_thread', { threadId })
   },
 
+  /**
+   * 永久删除（**不可逆**，rollout 也会被删）
+   *
+   * 被 fork 引用时 codex 会拒绝 —— 错误**原样抛出**，调用方必须展示给用户，
+   * 不能吞(第三原则)。级联删除后代见 P5。
+   */
+  delete(threadId: string): Promise<void> {
+    return invoke<void>('delete_thread', { threadId })
+  },
+
   /** 一级搜索:命中的会话 + 片段 */
   search(query: string, archived = false, limit = 50): Promise<ThreadSearchHit[]> {
     return invoke<ThreadSearchHit[]>('search_threads', { query, archived, limit })

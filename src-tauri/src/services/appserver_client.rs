@@ -961,7 +961,12 @@ fn delta_event(kind: &str, params: &serde_json::Value) -> Option<serde_json::Val
 }
 
 /// 把 app-server item（camelCase）转成前端兼容的 exec 风格 item（snake_case）
-fn map_item(item: &serde_json::Value) -> serde_json::Value {
+/// 把 app-server 的 `ThreadItem`(camelCase)转成 exec 风格的 `CodexItem`(snake_case)。
+///
+/// **两条路径共用这一个转换**:实时事件(`item/completed` 通知)与历史重载
+/// (`thread/turns/list` 里的 items)。这样前端只需一份 item → 消息的映射逻辑,
+/// 「重载后的观感」与「实时流」就不会漂移。改这里时两条路径同时生效。
+pub fn map_item(item: &serde_json::Value) -> serde_json::Value {
     let mut out = serde_json::Map::new();
     let raw_type = item.get("type").and_then(|v| v.as_str()).unwrap_or("");
     // app-server 的 item.type 是 camelCase（agentMessage/commandExecution/...）
@@ -976,6 +981,16 @@ fn map_item(item: &serde_json::Value) -> serde_json::Value {
         "userMessage" => "user_message",
         "customToolCall" => "custom_tool_call",
         "collabAgentToolCall" => "collab_agent_tool_call",
+        "dynamicToolCall" => "dynamic_tool_call",
+        "subAgentActivity" => "sub_agent_activity",
+        "webSearch" => "web_search",
+        "imageView" => "image_view",
+        "imageGeneration" => "image_generation",
+        "enteredReviewMode" => "entered_review_mode",
+        "exitedReviewMode" => "exited_review_mode",
+        "contextCompaction" => "context_compaction",
+        "hookPrompt" => "hook_prompt",
+        "sleep" => "sleep",
         "error" => "error",
         other => other,
     };
@@ -999,6 +1014,16 @@ fn map_item(item: &serde_json::Value) -> serde_json::Value {
                 "pluginId" => "plugin_id",
                 "scriptPath" => "script_path",
                 "memoryCitation" => "memory_citation",
+                "agentThreadId" => "agent_thread_id",
+                "agentPath" => "agent_path",
+                "receiverThreadIds" => "receiver_thread_ids",
+                "senderThreadId" => "sender_thread_id",
+                "agentsStates" => "agents_states",
+                "contentItems" => "content_items",
+                "revisedPrompt" => "revised_prompt",
+                "savedPath" => "saved_path",
+                "transparentBackground" => "transparent_background",
+                "movePath" => "move_path",
                 other => other,
             };
             let nv = if k == "status" {

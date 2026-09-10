@@ -81,6 +81,13 @@ pub fn unarchive_thread(app: AppHandle, thread_id: String) -> Result<(), String>
     ThreadClient::unarchive(&app, &thread_id)
 }
 
+/// **永久删除,不可逆**。被 fork 引用时 codex 会拒绝 —— 错误原样回传,由 UI 展示
+/// (级联删除后代是 P5 的事)。
+#[tauri::command]
+pub fn delete_thread(app: AppHandle, thread_id: String) -> Result<(), String> {
+    ThreadClient::delete(&app, &thread_id)
+}
+
 /// 一级搜索:命中的会话 + 片段(粒度是会话,非消息)
 #[tauri::command]
 pub fn search_threads(
@@ -102,3 +109,4 @@ pub fn search_thread_occurrences(
 ) -> Result<Vec<ThreadOccurrence>, String> {
     ThreadClient::search_occurrences(&app, &thread_id, &query, limit.unwrap_or(50))
 }
+

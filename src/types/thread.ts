@@ -72,3 +72,32 @@ export function threadTitle(t: ThreadRow): string {
   if (!p) return '未命名会话'
   return p.length > 40 ? p.slice(0, 40) + '…' : p
 }
+
+/**
+ * 一个 item（codex `ThreadItem`）
+ *
+ * **故意不做完整强类型**:codex 的 item 有 18 个变体且仍在演进,逐一建模会把它
+ * 每一次协议变更都变成 Flydex 的编译错误。这里只固定 `type`,其余按需读取 ——
+ * 识别与兜底都在 `features/codex/threadItems.ts` 一处处理。
+ * (`commandExecution` 的 `id` 在协议里是可选的,故 `id` 也允许缺省。)
+ *
+ * 注意:字段是 **exec 风格 snake_case**(app-server 的 camelCase 已在 Rust 侧转换)。
+ */
+export type ThreadItem = { id?: string; type: string } & Record<string, unknown>
+
+/** 轮的终态(codex `TurnStatus`) */
+export type TurnStatus = 'completed' | 'interrupted' | 'failed' | 'inProgress'
+
+/** 一轮对话（codex `Turn`,来自 `thread/turns/list`） */
+export interface ThreadTurn {
+  id: string
+  status: TurnStatus
+  /** 毫秒(Rust 侧已从 Unix 秒换算) */
+  startedAt: number | null
+  /** 毫秒 */
+  completedAt: number | null
+  /** 毫秒 */
+  durationMs: number | null
+  error: { message: string } | null
+  items: ThreadItem[]
+}

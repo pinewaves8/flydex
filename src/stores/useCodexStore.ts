@@ -35,6 +35,18 @@ export interface CodexLive {
   text: string
 }
 
+/**
+ * 一个 turn 的渲染元信息(历史重载用)
+ *
+ * 消息自身带 `turnId`,足以分组;但轮的状态与耗时只有 turn 上有,
+ * 用于显示轮标题、失败原因与轮边界的「在此分叉」按钮(P6)。
+ */
+export interface ThreadTurnMeta {
+  id: string
+  status: 'completed' | 'interrupted' | 'failed' | 'inProgress'
+  durationMs: number | null
+}
+
 /** 增量文本节流:模型每秒可发几十个 delta,合并到 ~60ms 一次 setState */
 const LIVE_FLUSH_INTERVAL_MS = 60
 let liveBuffer: CodexLive | null = null
@@ -117,6 +129,10 @@ interface CodexState {
   planMode: boolean
   /** 当前会话 id（用于自动保存）；null 表示不保存*/
   currentSessionId: string | null
+  /** 已加载的 turn 元信息（按时间正序），与 messages 里的 turnId 对应 */
+  turns: ThreadTurnMeta[]
+  /** 再往前翻一页用的游标；null = 已到最开头 */
+  turnsCursor: string | null
   /** 是否有待保存的变更*/
   dirty: boolean
   /** 待写入输入框的命令前缀(由 SkillPalette 等外部触发);InputBox 监听后清空 */
@@ -137,6 +153,14 @@ interface CodexState {
   setStatus: (status: CodexStatus) => void
   appendOutput: (line: Omit<CodexOutputLine, 'id'>) => void
   appendMessage: (message: Omit<CodexMessage, 'id' | 'timestamp'>) => string
+  /**
+   * 插入一条 codex 来源的消息(**沿用 codex 的 item id**)
+   *
+   * 与 `appendMessage`(前端合成卡,id 随机)分开:codex 来源的消息在重载后会被
+   * 从 turns 重建,只有 id 相同才能保证「实时」与「重载」是同一批消息 ——
+   * 滚动定位(P7)、React key 都依赖这点。已存在则跳过。
+   */
+  appendCodexMessage: (message: CodexMessage) => string
   updateMessageKind: (id: string, kind: CodexMessage['kind']) => void
   markItemProcessed: (id: string) => boolean
   clearProcessedItems: () => void
@@ -158,8 +182,22 @@ interface CodexState {
   setCurrentSessionId: (id: string | null) => void
   /** 标记脏并触发自动保存（手点立及保存） */
   flushAutosave: () => Promise<void>
-  /** 加载会话数据（切换会话时用）*/
+  /** 加载会话数据（旧会话只读渲染用，见 P8）*/
   loadSession: (data: { messages: CodexMessage[]; threadId: string | null }) => void
+  /** 从 codex turns 重建会话（打开线程时用；P3 起这是主路径） */
+  loadThread: (data: {
+    threadId: string
+    messages: CodexMessage[]
+    turns: ThreadTurnMeta[]
+    /** 更早历史的游标；null 表示没有更早的了 */
+    cursor: string | null
+  }) => void
+  /** 往更早的历史翻页：把更早的 turns 插到最前面（滚动位置由 UI 负责） */
+  prependTurns: (data: {
+    messages: CodexMessage[]
+    turns: ThreadTurnMeta[]
+    cursor: string | null
+  }) => void
   /** 刷新输出 buffer（流结束后调用） */
   flushOutputBuffer: () => void
 }
@@ -277,6 +315,8 @@ const useCodexStore = create<CodexState>((set, get) => ({
   baselineFileChanges: [],
   planMode: false,
   currentSessionId: null,
+  turns: [],
+  turnsCursor: null,
   dirty: false,
   pendingCommand: null,
   livePlan: null,
@@ -307,6 +347,19 @@ const useCodexStore = create<CodexState>((set, get) => ({
       return { messages, dirty: true }
     })
     return id
+  },
+
+  appendCodexMessage: (message) => {
+    set((state) => {
+      // 已有同 id(重复投递 / 重载后再次收到)则不再插入
+      if (state.messages.some((m) => m.id === message.id)) return {}
+      let messages = [...state.messages, message]
+      if (messages.length > MAX_MESSAGES) {
+        messages = messages.slice(messages.length - MAX_MESSAGES)
+      }
+      return { messages }
+    })
+    return message.id
   },
 
   updateMessageKind: (id, kind) =>
@@ -368,6 +421,8 @@ const useCodexStore = create<CodexState>((set, get) => ({
       seenFileChanges: [],
       baselineFileChanges: [],
       livePlan: null,
+      turns: [],
+      turnsCursor: null,
       dirty: false,
     }),
   setCurrentSessionId: (id) => set({ currentSessionId: id, dirty: false }),
@@ -389,6 +444,41 @@ const useCodexStore = create<CodexState>((set, get) => ({
       console.error('[flushAutosave] failed:', e)
     }
   },
+  loadThread: (data) =>
+    set({
+      status: 'idle',
+      output: [],
+      messages: data.messages,
+      turns: data.turns,
+      turnsCursor: data.cursor,
+      exitCode: null,
+      threadId: data.threadId,
+      usage: null,
+      pendingRunId: null,
+      runningCommands: [],
+      approval: null,
+      live: null,
+      processedItemIds: [],
+      runStartedAt: null,
+      runWorkdir: null,
+      // 重载后 codex 侧的 item 全部重新出现,重置「已展示过的文件变更」避免误抑制
+      seenFileChanges: [],
+      baselineFileChanges: [],
+      livePlan: null,
+      dirty: false,
+    }),
+  prependTurns: (data) =>
+    set((state) => {
+      let messages = [...data.messages, ...state.messages]
+      if (messages.length > MAX_MESSAGES) {
+        messages = messages.slice(messages.length - MAX_MESSAGES)
+      }
+      return {
+        messages,
+        turns: [...data.turns, ...state.turns],
+        turnsCursor: data.cursor,
+      }
+    }),
   loadSession: (data) =>
     set({
       status: 'idle',

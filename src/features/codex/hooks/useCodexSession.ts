@@ -2,8 +2,10 @@ import { invoke } from '@tauri-apps/api/core'
 import { listen, type UnlistenFn } from '@tauri-apps/api/event'
 import { useCallback, useEffect } from 'react'
 
+import { mapItemToMessage } from '@/features/codex/threadItems'
 import { approveCodex, runCodex, stopCodex, type CodexExecMode } from '@/services/codex'
 import { initStateService, type InitStep } from '@/services/initService'
+// 实时与重载共用同一份 item → 消息映射(见 threadItems.ts 的模块文档)
 import { notificationService } from '@/services/notificationService'
 import {
   useCodexStore,
@@ -11,30 +13,11 @@ import {
   clearLive,
   type CodexApproval,
 } from '@/stores/useCodexStore'
+import { useProjectStore } from '@/stores/useProjectStore'
 import { useSecurityStore } from '@/stores/useSecurityStore'
 import { useSettingsStore } from '@/stores/useSettingsStore'
 import type { CodexEvent } from '@/types/codex'
 import type { CodexFileChange, CodexItem, CodexJsonEvent, TurnStats } from '@/types/codexJson'
-
-/** 从 MCP/工具 result 提取摘要（首行 200 字） */
-function summarizeToolResult(result: unknown): string {
-  if (result === null || result === undefined) return ''
-  let text: string
-  if (typeof result === 'string') {
-    text = result
-  } else {
-    try {
-      text = JSON.stringify(result)
-    } catch {
-      text = String(result)
-    }
-  }
-  // 取首行（去掉换行）
-  const firstLine = text.split('\n').find((l) => l.trim().length > 0) ?? text
-  const trimmed = firstLine.trim()
-  if (trimmed.length > 200) return trimmed.slice(0, 200) + '…'
-  return trimmed
-}
 
 /**
  * Codex 会话 Hook
@@ -142,44 +125,22 @@ export function useCodexSession() {
     // item id → 开始时间（用于计算耗时）
     const itemStartedAt = new Map<string, number>()
 
-    /** 解析待执行/正在执行的命令（codex 的 command_execution item） */
-    const handleCommandItem = (item: CodexItem) => {
+    /**
+     * 登记「正在执行的命令」(实时命令面板)
+     *
+     * 只管**开始**侧:完成侧(command_execution item 落地成 tool 卡片 + 摘掉面板)
+     * 统一由 `mapItemToMessage` 之外的 item.completed 分支处理,避免两处各记一次。
+     */
+    const markRunningCommand = (item: CodexItem) => {
       if (item.type !== 'command_execution') return
-      const store = useCodexStore.getState()
+      if (item.status !== 'in_progress' && item.status != null) return
       const cmdText = (item.command ?? '').trim()
       if (!cmdText) return
-      if (item.status === 'in_progress' || item.status == null) {
-        store.upsertRunningCommand({
-          id: item.id || cmdText,
-          command: cmdText,
-          startedAt: Date.now(),
-        })
-      } else if (item.status === 'completed') {
-        store.removeRunningCommand(item.id || cmdText)
-        const outputText = (item.aggregated_output ?? '').trim()
-        // 计算耗时：从 itemStartedAt map 取，没有就给 0
-        const startedAt = item.id ? itemStartedAt.get(item.id) : undefined
-        const durationMs = startedAt ? Date.now() - startedAt : undefined
-        if (item.id) itemStartedAt.delete(item.id)
-        // 触发完成动画
-        useCodexStore.setState({ lastToolCompleteAt: Date.now() })
-        // 结果摘要：第一行输出，去掉 ANSI
-        const resultSummary = outputText
-          ? (outputText
-              .split('\n')
-              .find((l) => l.trim().length > 0)
-              ?.trim()
-              .slice(0, 200) ?? '')
-          : ''
-        const timeBadge = durationMs != null ? ` · ${(durationMs / 1000).toFixed(1)}s` : ''
-        store.appendMessage({
-          kind: 'tool',
-          content: `$ ${cmdText}${timeBadge}${outputText ? `\n${outputText}` : ''}`,
-          toolName: 'command_execution',
-          durationMs,
-          toolResult: resultSummary || undefined,
-        })
-      }
+      useCodexStore.getState().upsertRunningCommand({
+        id: item.id || cmdText,
+        command: cmdText,
+        startedAt: Date.now(),
+      })
     }
 
     const handleJsonEvent = (data: unknown) => {
@@ -250,130 +211,31 @@ export function useCodexSession() {
           if (item.id) {
             itemStartedAt.set(item.id, Date.now())
           }
-          handleCommandItem(item)
+          markRunningCommand(item)
         }
       } else if (event.type === 'item.completed') {
         const item = event.item as CodexItem
         if (!item || typeof item !== 'object') return
         // 事件级幂等去重：同一 item 重复投递（监听器泄漏/StrictMode）只处理一次
         if (item.id && !store.markItemProcessed(item.id)) return
-        if (item.type === 'agent_message') {
-          const st = useCodexStore.getState()
-          if (st.planMode) {
-            // 计划模式：模型可能先输出探索/思考说明再输出正式计划。
-            // 全部按 agent 消息暂存（不流式），turn 结束时最后一个转成计划卡片。
-            const msgId = store.appendMessage({ kind: 'agent', content: item.text })
-            lastPlanMsgId = msgId
-            clearLive()
-            return
-          }
-          if (st.reviewMode) {
-            // 审查模式：模型可能先输出过程说明再输出正式报告。
-            // 全部按 agent 消息暂存，turn 结束时最后一个转成审查报告卡片。
-            const msgId = store.appendMessage({ kind: 'agent', content: item.text })
-            lastReviewMsgId = msgId
-            clearLive()
-            return
-          }
-          // 流式预览到此结束,正式消息(完整 Markdown)由 appendMessage 落地
-          clearLive()
-          store.appendMessage({ kind: 'agent', content: item.text })
-        } else if (item.type === 'error') {
-          // 过滤第三方模型的无害提示：元数据缺失警告、跨模型 resume 提示（不影响功能）
-          if (
-            item.message.startsWith('Model metadata for') ||
-            item.message.startsWith('This session was recorded with model')
-          ) {
-            return
-          }
-          store.appendMessage({ kind: 'error', content: item.message })
-          turnStats.hadErrors = true
-        } else if ((item.type as string) === 'reasoning') {
-          // Claude Code 风格:reasoning 显示为折叠卡片
-          const rItem = item as { content?: unknown; summary?: unknown }
-          const rContent = rItem.content
-          const rSummary = rItem.summary
-          const reasoningText = Array.isArray(rContent)
-            ? (rContent as Array<{ text?: string }>).map((c) => c.text ?? '').join('')
-            : typeof rContent === 'string'
-              ? rContent
-              : Array.isArray(rSummary)
-                ? (rSummary as string[]).join('')
-                : ''
-          if (reasoningText.trim()) {
-            clearLive()
-            store.appendMessage({ kind: 'reasoning', content: reasoningText })
-          }
-        } else if ((item.type as string) === 'collab_agent_tool_call') {
-          // 子代理活动(Claude Code 风格:缩进显示,与主消息流区分)
-          const sub = item as unknown as {
-            tool?: string
-            agentId?: string
-            args?: unknown
-            status?: string
-            content?: unknown
-          }
-          const label = sub.tool ?? (sub.agentId ? `agent:${sub.agentId.slice(0, 8)}` : 'subagent')
-          const argsStr = sub.args ? JSON.stringify(sub.args).slice(0, 200) : ''
-          store.appendMessage({
-            kind: 'subagent',
-            content: `${label}${argsStr ? ` · ${argsStr}` : ''}`,
-            toolName: label,
-          })
-        } else if (item.type === 'tool_call') {
-          turnStats.toolCalls++
-          // 触发完成动画(0 token 消耗)
-          useCodexStore.setState({ lastToolCompleteAt: Date.now() })
-          // 计算耗时（item.started 到 item.completed）
-          const startedAt = item.id ? itemStartedAt.get(item.id) : undefined
-          const durationMs = startedAt ? Date.now() - startedAt : undefined
-          if (item.id) itemStartedAt.delete(item.id)
-          store.appendMessage({
-            kind: 'tool',
-            content: `调用工具: ${item.name}${durationMs != null ? ` · ${(durationMs / 1000).toFixed(1)}s` : ''}`,
-            toolName: item.name,
-            toolArgs: item.arguments,
-            durationMs,
-          })
-        } else if (item.type === 'mcp_tool_call') {
-          turnStats.mcpCalls++
-          // 触发完成动画
-          useCodexStore.setState({ lastToolCompleteAt: Date.now() })
-          // MCP 工具调用：展示 server·tool + 状态 + 结果摘要 + 耗时
-          const toolName = item.server && item.tool ? `${item.server} · ${item.tool}` : 'MCP tool'
-          const failed = item.status === 'failed'
-          const errMsg = item.error?.message ? `：${item.error.message}` : ''
-          const resultSummary = !failed ? summarizeToolResult(item.result) : ''
-          const startedAt = item.id ? itemStartedAt.get(item.id) : undefined
-          const durationMs = startedAt ? Date.now() - startedAt : undefined
-          if (item.id) itemStartedAt.delete(item.id)
-          const timeBadge = durationMs != null ? ` · ${(durationMs / 1000).toFixed(1)}s` : ''
-          const statusBadge = failed ? `（失败${errMsg}）` : '（完成）'
-          store.appendMessage({
-            kind: 'tool',
-            content: `调用工具: ${toolName}${statusBadge}${timeBadge}`,
-            toolName,
-            toolArgs: item.arguments,
-            durationMs,
-            toolResult: resultSummary || undefined,
-          })
-        } else if (item.type === 'command_execution') {
-          handleCommandItem(item)
-        } else if (item.type === 'file_change') {
-          // 文件变更：对话流插入 diff 卡片（内联展示，可展开看 diff、接受/拒绝回滚）
-          const changes = item.changes ?? []
-          if (changes.length > 0) {
-            turnStats.fileChanges += changes.length
-            const summary = changes.map((c) => `${c.path}（${c.kind}）`).join('，')
-            store.appendMessage({
-              kind: 'file_change',
-              content: `文件变更：${summary}`,
-              fileChanges: changes,
-            })
-            // 与 git 工作区兜底共用 seenFileChanges，避免重复卡片
-            store.markFileChangesSeen(changes.map((c) => `${c.path}|${c.kind}`))
-          }
-        } else if (item.type === 'approval_request') {
+
+        // 第三方模型的无害提示：元数据缺失警告、跨模型 resume 提示（不影响功能）
+        if (
+          item.type === 'error' &&
+          (item.message.startsWith('Model metadata for') ||
+            item.message.startsWith('This session was recorded with model'))
+        ) {
+          return
+        }
+
+        // 本轮统计(turn_summary 卡用)
+        if (item.type === 'tool_call') turnStats.toolCalls++
+        else if (item.type === 'mcp_tool_call') turnStats.mcpCalls++
+        else if (item.type === 'file_change') turnStats.fileChanges += item.changes?.length ?? 0
+        else if (item.type === 'error') turnStats.hadErrors = true
+
+        // 审批请求是 Flydex 侧的概念(规则引擎决策),codex 无对应 item,单独处理
+        if (item.type === 'approval_request') {
           const decision = item.decision ?? 'ask'
           const approvalItem: CodexApproval = {
             id: item.id,
@@ -386,10 +248,7 @@ export function useCodexSession() {
           if (decision === 'ask') {
             // 规则引擎 ask：弹审批卡等用户决定
             store.setApproval(approvalItem)
-            store.appendMessage({
-              kind: 'system',
-              content: `需要审批: ${opText}`,
-            })
+            store.appendMessage({ kind: 'system', content: `需要审批: ${opText}` })
             if (useSettingsStore.getState().notifyOnApproval) {
               void notificationService.notify('Flydex · 需要审批', opText)
             }
@@ -401,13 +260,53 @@ export function useCodexSession() {
             })
           } else if (decision === 'auto_deny') {
             // deny 命中：执行前直接拒绝，卡片化展示（命令 + 命中原因）
-            store.appendMessage({
-              kind: 'deny',
-              content: opText,
-              reason: item.reason,
+            store.appendMessage({ kind: 'deny', content: opText, reason: item.reason })
+          }
+          return
+        }
+
+        // 计划/审查模式：模型可能先输出探索说明再输出正式计划/报告。
+        // 全部按 agent 消息暂存，turn 结束时把最后一条转成卡片。
+        if (item.type === 'agent_message') {
+          const st = useCodexStore.getState()
+          if (st.planMode || st.reviewMode) {
+            const msgId = store.appendCodexMessage({
+              id: item.id,
+              kind: 'agent',
+              source: 'codex',
+              content: item.text,
+              timestamp: Date.now(),
             })
+            if (st.planMode) lastPlanMsgId = msgId
+            else lastReviewMsgId = msgId
+            clearLive()
+            return
           }
         }
+
+        // 命令跑完 → 摘掉实时面板(登记在 item.started 侧)
+        if (item.type === 'command_execution') {
+          useCodexStore.getState().removeRunningCommand(item.id || (item.command ?? '').trim())
+        }
+
+        // 旧的本地计时兜底(item 不带 duration_ms 时用它)
+        const startedAt = item.id ? itemStartedAt.get(item.id) : undefined
+        if (item.id) itemStartedAt.delete(item.id)
+
+        // 与重载路径共用同一映射 —— 「实时」与「重载后」因此必然一致
+        const mapped = mapItemToMessage(item, Date.now(), undefined, {
+          durationMs: startedAt != null ? Date.now() - startedAt : undefined,
+        })
+        if (!mapped) return
+        clearLive()
+        if (mapped.kind === 'tool') {
+          // 完成瞬间的"叮"动画(0 token 消耗)
+          useCodexStore.setState({ lastToolCompleteAt: Date.now() })
+        } else if (mapped.kind === 'file_change' && mapped.fileChanges) {
+          // 与 git 工作区兜底共用 seenFileChanges，避免重复卡片
+          store.markFileChangesSeen(mapped.fileChanges.map((c) => `${c.path}|${c.kind}`))
+        }
+        store.appendCodexMessage(mapped)
       } else if (
         event.type === 'item.agent_message.delta' ||
         event.type === 'item.reasoning.delta' ||
@@ -595,6 +494,14 @@ export function useCodexSession() {
           store.setApproval(null)
           store.setRunningCommands([])
           clearLive()
+          // 会话列表的权威源是 codex:本轮结束后刷新,新会话才会出现在侧边栏
+          {
+            const project = useProjectStore.getState()
+            const tid = useCodexStore.getState().threadId
+            // 草稿会话(还没认领)+ codex 已建出 thread → 认领
+            if (tid && !project.currentThreadId) project.adoptThread(tid)
+            void project.loadThreads()
+          }
           // 会话完成/失败通知（按设置开关控制）
           const settings = useSettingsStore.getState()
           if (payload.data.exit_code !== 0 && settings.notifyOnError) {
