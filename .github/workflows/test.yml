@@ -73,4 +73,22 @@ jobs:
         shell: bash
 
       # 只跑 lib 的单元测试(不构建桌面应用),这正是本地那条命令
-      - run: cargo test --lib
+      #
+      # TEMP:失败时把关键行发成注解 —— 定位这个 job 首次失败的根因用的。
+      # 起因是 GitHub 的日志接口需要仓库管理权限,匿名拿不到,而注解可以。
+      # 查清原因后这一步应改回朴素的 `cargo test --lib`。
+      - name: cargo test --lib
+        shell: bash
+        run: |
+          set -o pipefail
+          if cargo test --lib 2>&1 | tee /tmp/ci.out; then
+            exit 0
+          fi
+          echo "::error::cargo test 失败,关键行如下"
+          grep -nE "^error(\[|:)" /tmp/ci.out | head -10 | while IFS= read -r l; do
+            echo "::error::$l"
+          done
+          grep -A 6 "^error" /tmp/ci.out | head -50 | while IFS= read -r l; do
+            echo "::error::  $l"
+          done
+          exit 1
