@@ -9,6 +9,25 @@
 
 use serde::{Deserialize, Serialize};
 
+/// 去掉 Windows 的扩展长度前缀
+///
+/// codex 记录的 cwd 是 `\\?\C:\llm\flydex`(verbatim 形式),而 Flydex 项目的
+/// path 是人写的 `C:\llm\flydex` —— 不归一就永远匹配不上,「同一目录」会被当成
+/// 两个地方(实测线程列表里绝大多数 cwd 都是带前缀的形式)。
+///
+/// - `\\?\C:\x`          → `C:\x`
+/// - `\\?\UNC\srv\share` → `\\srv\share`(verbatim 的 UNC 形式)
+/// - 其它原样返回(含非 Windows 路径)
+pub fn strip_verbatim_prefix(p: &str) -> String {
+    if let Some(rest) = p.strip_prefix(r"\\?\UNC\") {
+        return format!(r"\\{rest}");
+    }
+    if let Some(rest) = p.strip_prefix(r"\\?\") {
+        return rest.to_string();
+    }
+    p.to_string()
+}
+
 /// 会话列表行(来自 `thread/list`)
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -68,11 +87,7 @@ impl ThreadRow {
                 .map(str::to_string),
             created_at: secs_to_ms("createdAt"),
             updated_at: secs_to_ms("updatedAt"),
-            cwd: v
-                .get("cwd")
-                .and_then(|x| x.as_str())
-                .unwrap_or("")
-                .to_string(),
+            cwd: strip_verbatim_prefix(v.get("cwd").and_then(|x| x.as_str()).unwrap_or("")),
             model_provider: v
                 .get("modelProvider")
                 .and_then(|x| x.as_str())
@@ -116,6 +131,8 @@ pub struct ThreadSearchHit {
     pub thread_id: String,
     pub title: String,
     pub project_id: Option<String>,
+    /// 线程的工作目录 —— 前端软过滤要用:未归属但有 cwd 的历史会话也要能被搜到
+    pub cwd: String,
     /// **毫秒**
     pub updated_at: i64,
     pub snippet: String,
@@ -149,14 +166,14 @@ pub struct CodexProject {
 impl CodexProject {
     pub fn from_value(v: &serde_json::Value) -> Option<Self> {
         let id = v.get("id")?.as_str()?.to_string();
-        let root = v
-            .get("roots")
-            .and_then(|r| r.as_array())
-            .and_then(|a| a.first())
-            .and_then(|r| r.get("path"))
-            .and_then(|p| p.as_str())
-            .unwrap_or("")
-            .to_string();
+        let root = strip_verbatim_prefix(
+            v.get("roots")
+                .and_then(|r| r.as_array())
+                .and_then(|a| a.first())
+                .and_then(|r| r.get("path"))
+                .and_then(|p| p.as_str())
+                .unwrap_or(""),
+        );
         let secs_to_ms = |key: &str| -> i64 {
             v.get(key).and_then(|x| x.as_i64()).unwrap_or(0) * 1000
         };
@@ -252,4 +269,24 @@ mod tests {
         assert_eq!(p.flydex_project_id.as_deref(), Some("proj_123"));
         assert_eq!(p.created_at, 1_789_000_000_000);
     }
+
+    #[test]
+    fn strip_verbatim_handles_windows_forms() {
+        // 实测主线:codex 的 cwd 带 verbatim 前缀(两个反斜杠 + 问号 + 反斜杠),
+        // 而项目 path 不带 —— 两者必须能归一成同一个字符串
+        assert_eq!(strip_verbatim_prefix(r"\\?\C:\llm\flydex"), r"C:\llm\flydex");
+        // 已归一的形式必须幂等(会被反复调用)
+        assert_eq!(strip_verbatim_prefix(r"C:\llm\flydex"), r"C:\llm\flydex");
+        // 单反斜杠的 `\?\` 是**另一种**形式,不该被误删(删了会把 `\?\x` 变成 `x`)
+        assert_eq!(strip_verbatim_prefix(r"\?\C:\x"), r"\?\C:\x");
+        // UNC:verbatim 形式要还原成普通 UNC,而不是把 \\?\UNC\ 一并删掉
+        assert_eq!(
+            strip_verbatim_prefix(r"\\?\UNC\server\share"),
+            r"\\server\share"
+        );
+        // 非 Windows 路径原样
+        assert_eq!(strip_verbatim_prefix("/home/u/p"), "/home/u/p");
+        assert_eq!(strip_verbatim_prefix(""), "");
+    }
+
 }

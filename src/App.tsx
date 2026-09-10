@@ -10,7 +10,6 @@ import { SearchDialog } from '@/features/search/SearchDialog'
 import { SettingsPanel } from '@/features/security/SettingsPanel'
 import { TerminalPanel } from '@/features/terminal'
 import { useGlobalShortcuts } from '@/hooks/useGlobalShortcuts'
-import { useCodexStore } from '@/stores/useCodexStore'
 import { useProjectStore } from '@/stores/useProjectStore'
 import { applyTheme, useThemeStore } from '@/stores/useThemeStore'
 import { useUIStore } from '@/stores/useUIStore'
@@ -26,7 +25,6 @@ function App() {
   // Ctrl+R 全局对话搜索(快捷键在 useGlobalShortcuts 统一注册,开合状态在 useUIStore)
   const searchOpen = useUIStore((s) => s.searchOpen)
   const setSearchOpen = useUIStore((s) => s.setSearchOpen)
-  const currentProjectId = useProjectStore((s) => s.currentProjectId)
   // 项目归属同步的非致命问题(codex 不可用等)—— 必须可见,不能只在 console
   const projectSyncWarnings = useProjectStore((s) => s.projectSyncWarnings)
   // 按「内容签名」记录已关闭的那一条:否则用户关过一次后,后续**新的**警告
@@ -34,7 +32,7 @@ function App() {
   const warnSig = projectSyncWarnings.join(';')
   const [dismissedWarnSig, setDismissedWarnSig] = useState<string | null>(null)
   const setCurrentView = useUIStore((s) => s.setCurrentView)
-  const setCurrentSession = useProjectStore((s) => s.setCurrentSession)
+  const revealSearchHit = useProjectStore((s) => s.revealSearchHit)
 
   // 应用启动时加载项目和会话列表 —— 用 workspace cwd 作为 source of truth,
   // 保证 cwd / project / session 三者始终同步
@@ -90,16 +88,13 @@ function App() {
       <SearchDialog
         open={searchOpen}
         onClose={() => setSearchOpen(false)}
-        projectId={currentProjectId}
-        onSelect={(hit) => {
-          // 1) 立即关掉搜索弹窗
+        onSelect={(hit, query) => {
+          // 1) 立即关掉搜索弹窗 2) 切到 codex 视图
           setSearchOpen(false)
-          // 2) 切到 codex 视图
           setCurrentView('codex')
-          // 3) 切到目标会话(setCurrentSession 内部会清空 messages 然后异步加载)
-          void setCurrentSession(hit.session_id)
-          // 4) 标记待滚动的目标消息 ID(由 ChatPanel 监听处理)
-          useCodexStore.getState().setPendingScrollToMessageId(hit.message_id)
+          // 3) 打开命中的会话并定位到具体那一条(codex 的搜索是会话粒度,
+          //    精确位置由 revealSearchHit 内部的 searchOccurrences 拿)
+          void revealSearchHit(hit.threadId, query)
         }}
       />
     </div>

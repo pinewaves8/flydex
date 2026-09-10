@@ -6,12 +6,15 @@ import { sessionService } from '@/services/sessionService'
 import { threadService } from '@/services/threadService'
 import { useCodexStore } from '@/stores/useCodexStore'
 import type { ExportFormat, Project, SessionMeta, SessionSearchHit } from '@/types/project'
+import { isInsidePath } from '@/types/thread'
 import type { ThreadRow, ThreadTurn } from '@/types/thread'
 
 /** 持久化当前项目的 localStorage key */
 const CURRENT_PROJECT_KEY = 'flydex.currentProjectId'
 /** 持久化当前会话(localStorage)。失效时回退到列表首项 */
 const CURRENT_THREAD_KEY = 'flydex.currentThreadId'
+/** 跳转到搜索命中时,最多往前翻多少页 turns(每页 20 轮) */
+const MAX_REVEAL_PAGES = 10
 
 interface ProjectState {
   projects: Project[]
@@ -55,6 +58,8 @@ interface ProjectState {
   setThreadModel: (model: string | null) => Promise<void>
   /** 从某一轮之后分叉出新会话,并切换过去 */
   forkThreadAtTurn: (turnId: string) => Promise<void>
+  /** 打开命中的会话并滚动定位到具体那一条(搜索结果跳转用) */
+  revealSearchHit: (threadId: string, query: string) => Promise<void>
   /** 当前项目对应的 codex project id；未同步上时为 null */
   codexProjectId: () => string | null
 
@@ -281,8 +286,17 @@ export const useProjectStore = create<ProjectState>((set, get) => ({
 
   loadThreads: async () => {
     const codexProjectId = get().codexProjectId()
+    const projectPath = get().projects.find((p) => p.id === get().currentProjectId)?.path
     try {
-      const threads = await threadService.list(false, codexProjectId)
+      // **不加 projectId 过滤**:大量历史会话(exec 时代)没有归属,只按 projectId
+      // 过滤会让它们彻底消失(实测飞书目录下 100+ 条只剩 1 条可见)。
+      // 改为拉全量后在前端按「归属该项目 或 cwd 落在项目目录树内」收录。
+      const all = await threadService.list(false, null)
+      const threads = all.filter(
+        (t) =>
+          (codexProjectId && t.projectId === codexProjectId) ||
+          (projectPath && isInsidePath(t.cwd, projectPath)),
+      )
       set({ threads })
     } catch (e) {
       set({ threadWarnings: [`读取会话列表失败: ${String(e)}`] })
@@ -334,6 +348,60 @@ export const useProjectStore = create<ProjectState>((set, get) => ({
   },
 
   /**
+   * 打开某个会话,并滚动定位到查询命中的那一条
+   *
+   * 定位分两层,但**第二层在当前 codex 上不可用**:
+   * `thread/searchOccurrences` 在 0.149.1 里直接返回
+   * `thread/searchOccurrences is not supported yet`(协议里有、服务端没实现,
+   * 实测)。所以这里以「本地匹配已加载消息」为准,codex 的接口只当作可选增强 ——
+   * 哪天它实现了,不用改这里的调用方。
+   *
+   * 命中可能落在还没加载的更早分页里,故一页页往前翻直到出现或翻完;翻不动时
+   * **明说**(第三原则),否则用户只会看到"打开了会话却停在别处"。
+   */
+  revealSearchHit: async (threadId, query) => {
+    await get().setCurrentThread(threadId)
+    const needle = query.trim().toLowerCase()
+    if (!needle) return
+
+    const locate = () =>
+      useCodexStore.getState().messages.find((m) => m.content.toLowerCase().includes(needle))?.id ??
+      null
+
+    let itemId = locate()
+    if (!itemId) {
+      // codex 的二级接口(有则用;实测未实现,失败即忽略,不影响下面的本地匹配)
+      try {
+        const occurrences = await threadService.searchOccurrences(threadId, query, 50)
+        itemId = occurrences[0]?.itemId ?? null
+      } catch {
+        itemId = null
+      }
+    }
+    if (!itemId) {
+      for (let i = 0; i < MAX_REVEAL_PAGES; i++) {
+        if (!useCodexStore.getState().turnsCursor) break
+        await get().loadEarlierTurns()
+        itemId = locate()
+        if (itemId) break
+      }
+    }
+
+    if (itemId) {
+      useCodexStore.getState().setPendingScrollToMessageId(itemId)
+      return
+    }
+    const exhausted = !useCodexStore.getState().turnsCursor
+    set({
+      threadWarnings: [
+        exhausted
+          ? `已打开会话,但没有找到包含「${query}」的内容(可能已被压缩或删除)。`
+          : `「${query}」在更早的历史里,已往前翻 ${MAX_REVEAL_PAGES} 页仍未到 —— 可在会话里继续往上翻。`,
+      ],
+    })
+  },
+
+  /**
    * 在某一轮之后分叉出新会话
    *
    * 与以前的「按消息序号切片」不同:分叉点是**轮**,turnId 直接从渲染数据里就有,
@@ -373,8 +441,15 @@ export const useProjectStore = create<ProjectState>((set, get) => ({
   },
 
   loadArchivedThreads: async () => {
+    const codexProjectId = get().codexProjectId()
+    const projectPath = get().projects.find((p) => p.id === get().currentProjectId)?.path
     try {
-      const archivedThreads = await threadService.list(true, get().codexProjectId())
+      const all = await threadService.list(true, null)
+      const archivedThreads = all.filter(
+        (t) =>
+          (codexProjectId && t.projectId === codexProjectId) ||
+          (projectPath && isInsidePath(t.cwd, projectPath)),
+      )
       set({ archivedThreads })
     } catch (e) {
       set({ threadWarnings: [`读取回收站失败: ${String(e)}`] })

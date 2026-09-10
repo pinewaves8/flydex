@@ -195,12 +195,71 @@ fn main() {
             }
         }
     }
+    // 按 cwd 归类看看列表到底覆盖了什么(决定「未归属的历史会话」能否被找回)
+    {
+        let mut hist: std::collections::BTreeMap<String, usize> = std::collections::BTreeMap::new();
+        for r in &rows {
+            let cwd = r
+                .get("cwd")
+                .and_then(|v| v.as_str())
+                .unwrap_or("")
+                .replace("\\?\\", "");
+            *hist.entry(cwd).or_insert(0) += 1;
+        }
+        println!("    按 cwd 归类(前 8):");
+        let mut v: Vec<_> = hist.into_iter().collect();
+        v.sort_by(|a, b| b.1.cmp(&a.1));
+        for (cwd, n) in v.iter().take(8) {
+            println!("      {n:4}  {cwd}");
+        }
+        let unattributed = rows
+            .iter()
+            .filter(|r| r.get("projectId").map(|p| p.is_null()).unwrap_or(true))
+            .count();
+        println!("    其中未归属任何 project 的: {unattributed} 条");
+    }
+
     // Flydex 自己的线程是否在默认列表里(陷阱 B)
     let flydex_owned = rows
         .iter()
         .filter(|r| r.get("modelProvider").and_then(|v| v.as_str()).unwrap_or("").starts_with("flydex_"))
         .count();
     println!("    其中 provider 以 flydex_ 开头(即 Flydex 创建的线程): {flydex_owned} 条");
+
+    // ── 2z. 参数变体:默认 50 条是不是上限?能否列出全部历史 ──
+    println!("
+== 2z. thread/list 取全量的参数组合 ==");
+    let variants: Vec<(&str, serde_json::Value)> = vec![
+        ("基线(useStateDbOnly)", json!({"limit": 100, "useStateDbOnly": true})),
+        ("不带 useStateDbOnly", json!({"limit": 100})),
+        (
+            // 注意:这个枚举的线上取值是混合命名(appServer/subAgent),不是全
+            // snake_case —— 写错会直接报 unknown variant
+            "显式 sourceKinds=vscode+cli+exec",
+            json!({"limit": 500, "sourceKinds": ["vscode", "cli", "exec", "appServer"]}),
+        ),
+        (
+            "含子代理",
+            json!({"limit": 500, "sourceKinds": ["vscode", "cli", "exec", "appServer", "subAgent", "subAgentReview", "subAgentCompact", "subAgentThreadSpawn", "subAgentOther", "unknown"]}),
+        ),
+        ("只 exec", json!({"limit": 500, "sourceKinds": ["exec"]})),
+    ];
+    for (name, extra) in variants {
+        let mut params = json!({ "sortKey": "updated_at", "sortDirection": "desc", "archived": false });
+        if let (Some(dst), Some(src)) = (params.as_object_mut(), extra.as_object()) {
+            for (k, v) in src {
+                dst.insert(k.clone(), v.clone());
+            }
+        }
+        match p.request("thread/list", Some(params)) {
+            Ok(v) => {
+                let n = v.get("data").and_then(|d| d.as_array()).map(|a| a.len()).unwrap_or(0);
+                let next = v.get("nextCursor").and_then(|c| c.as_str()).is_some();
+                println!("    {name:<32} → {n} 条(nextCursor={next})");
+            }
+            Err(e) => println!("    {name:<32} → 失败: {e}"),
+        }
+    }
 
     // ── 2a. 回收站面板依赖的 archived 列表 ──
     println!("
@@ -375,6 +434,33 @@ fn main() {
             println!("OK  命中 {n} 条线程(粒度=线程,非消息)");
         }
         Err(e) => println!("FAIL: {e}"),
+    }
+    // 二级定位接口:协议里有,但服务端**不一定实现了** —— 实测 0.149.1 直接返回
+    // "not supported yet"。调用方必须准备好本地匹配的兜底,不能假定它可用。
+    if let Ok(v) = p.request("thread/search", Some(json!({ "searchTerm": "flydex", "limit": 1 }))) {
+        if let Some(tid) = v
+            .get("data")
+            .and_then(|d| d.as_array())
+            .and_then(|a| a.first())
+            .and_then(|h| h.get("thread"))
+            .and_then(|t| t.get("id"))
+            .and_then(|x| x.as_str())
+        {
+            match p.request(
+                "thread/searchOccurrences",
+                Some(json!({ "threadId": tid, "searchTerm": "flydex", "limit": 5 })),
+            ) {
+                Ok(r) => {
+                    let n = r.get("data").and_then(|d| d.as_array()).map(|a| a.len()).unwrap_or(0);
+                    println!("    searchOccurrences → OK {n} 处(二级定位可用)");
+                }
+                Err(e) => {
+                    let m: String = e.to_string().chars().take(120).collect();
+                    println!("    searchOccurrences → 不可用:{m}");
+                    println!("    ⚠ 二级定位必须自己兜底(本地匹配已加载消息),不能假定它存在");
+                }
+            }
+        }
     }
 
     // ── 6. 陷阱 D:idempotencyKey 指向已删除项目会怎样 ───────────

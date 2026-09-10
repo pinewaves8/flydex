@@ -32,6 +32,8 @@ export interface ThreadSearchHit {
   threadId: string
   title: string
   projectId: string | null
+  /** 线程的工作目录(软过滤用:未归属但在项目目录树内的历史会话也要能搜到) */
+  cwd: string
   /** 毫秒 */
   updatedAt: number
   snippet: string
@@ -166,4 +168,36 @@ export function forkDescendantCount(all: ThreadRow[], rootId: string): number {
     stack.push(...(children.get(id) ?? []))
   }
   return seen.size
+}
+
+/**
+ * 路径归一:小写、`\`→`/`、去尾斜杠、去掉 Windows verbatim 前缀
+ *
+ * 两侧都要过这一道:codex 记的 cwd 带 verbatim 前缀(实测多数如此),而项目的 path
+ * 是人写的形式 —— 不归一就永远匹配不上。(Rust 侧已剥过一次,这里再做一次是防御:
+ * projects.json 里的 path 由用户提供,形态不可控。)
+ */
+export function normPath(p: string): string {
+  let s = p.trim()
+  // Windows verbatim 前缀:先判断 UNC 形式,否则 `\\?\UNC\srv` 会被削成 `UNC\srv`
+  const UNC_PREFIX = '\\\\?\\UNC\\'
+  const VERBATIM = '\\\\?\\'
+  if (s.startsWith(UNC_PREFIX)) {
+    s = '\\\\' + s.slice(UNC_PREFIX.length)
+  } else if (s.startsWith(VERBATIM)) {
+    s = s.slice(VERBATIM.length)
+  }
+  return s.replace(/\\/g, '/').toLowerCase().replace(/\/+$/, '')
+}
+
+/**
+ * `child` 是否位于 `root` 目录树内(含 root 自身)
+ *
+ * 用分隔符做边界,避免 `C:/llm/flydex-other` 被 `C:/llm/flydex` 误判为子树。
+ */
+export function isInsidePath(child: string, root: string): boolean {
+  const c = normPath(child)
+  const r = normPath(root)
+  if (!c || !r) return false
+  return c === r || c.startsWith(r + '/')
 }

@@ -18,6 +18,18 @@ pub const FLYDEX_PROJECT_META_KEY: &str = "flydex.projectId";
 
 /// `thread/list` 单页最大条数(codex 侧 clamp 到 [1,100])
 const PAGE_LIMIT: u32 = 100;
+
+/// 要列出的会话来源
+///
+/// **必须显式传**:不传时 codex 只给「交互式来源」,实测被截在 50 条 ——
+/// `codex exec` 时代产生的会话(本项目早期全是这种)完全看不到,用户会以为
+/// 历史对话丢了。显式列出后分页才生效,能翻到全部。
+///
+/// 注意取值是**混合命名**(`appServer`/`subAgent`),不是全 snake_case,
+/// 写错会直接报 `unknown variant`。
+///
+/// 子代理线程刻意不列 —— 它们是执行细节,不属于用户视角的"对话"。
+const SOURCE_KINDS: &[&str] = &["cli", "vscode", "exec", "appServer"];
 /// 列表翻页上限,防止异常情况下无限循环
 const MAX_PAGES: u32 = 20;
 
@@ -65,6 +77,7 @@ impl ThreadClient {
             "sortDirection": "desc",
             "limit": PAGE_LIMIT,
             "archived": archived,
+            "sourceKinds": SOURCE_KINDS,
             // 跳过 JSONL 扫描修复元数据,直接读 state db(列表足够用,快得多)
             "useStateDbOnly": true,
         });
@@ -297,6 +310,7 @@ impl ThreadClient {
                             thread_id: row.id,
                             title,
                             project_id: row.project_id,
+                            cwd: row.cwd,
                             updated_at: row.updated_at,
                             snippet: item
                                 .get("snippet")

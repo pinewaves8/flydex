@@ -2,34 +2,47 @@ import { Search, X } from 'lucide-react'
 import { useEffect, useRef, useState } from 'react'
 
 import { useListNavigation } from '@/hooks/useListNavigation'
-import { sessionService, type MessageSearchHit } from '@/services/sessionService'
+import { threadService } from '@/services/threadService'
+import { useProjectStore } from '@/stores/useProjectStore'
+import { isInsidePath } from '@/types/thread'
+import type { ThreadSearchHit } from '@/types/thread'
 
 interface SearchDialogProps {
   open: boolean
   onClose: () => void
-  /** 当前项目 ID(用于过滤范围);null = 全部项目 */
-  projectId: string | null
-  /** 点击搜索结果 */
-  onSelect: (hit: MessageSearchHit) => void
+  /** 点击某条结果：打开该会话并定位到命中处 */
+  onSelect: (hit: ThreadSearchHit, query: string) => void
 }
 
+/** 结果条数上限(codex 侧也会截断) */
+const SEARCH_LIMIT = 50
+
 /**
- * 对话全文搜索(对齐 Claude Code `Ctrl+R`)
+ * 对话搜索(对齐 Claude Code `Ctrl+R`)
  *
- * - 上箭头/下箭头:选择结果
- * - Enter:打开选中结果(切到该会话并定位消息)
- * - Esc:关闭
+ * 数据源是 codex 的 `thread/search`,**粒度是会话**(返回命中的会话 + 片段),
+ * 不是消息。定位到具体某条则由 `thread/searchOccurrences` 完成,见 `onSelect`。
+ *
+ * codex 的这个接口没有 project 参数,所以按当前项目**在前端软过滤** ——
+ * 与侧边栏一样,搜索的范围就是当前项目。
  */
-export function SearchDialog({ open, onClose, projectId, onSelect }: SearchDialogProps) {
+export function SearchDialog({ open, onClose, onSelect }: SearchDialogProps) {
   const [query, setQuery] = useState('')
-  const [hits, setHits] = useState<MessageSearchHit[]>([])
+  const [hits, setHits] = useState<ThreadSearchHit[]>([])
   const [loading, setLoading] = useState(false)
   const inputRef = useRef<HTMLInputElement>(null)
+  // 软过滤用:当前项目对应的 codex project id
+  const projectMappings = useProjectStore((s) => s.projectMappings)
+  const currentProjectId = useProjectStore((s) => s.currentProjectId)
+  const codexProjectId = currentProjectId ? (projectMappings[currentProjectId] ?? null) : null
+  const projectPath = useProjectStore((s) =>
+    currentProjectId ? (s.projects.find((p) => p.id === currentProjectId)?.path ?? null) : null,
+  )
 
   const { highlightIdx, setHighlightIdx, listRef } = useListNavigation({
     items: hits,
     resetKey: query,
-    onSelect: (hit) => onSelect(hit),
+    onSelect: (hit) => onSelect(hit, query),
     onClose,
     enabled: open,
   })
@@ -44,7 +57,7 @@ export function SearchDialog({ open, onClose, projectId, onSelect }: SearchDialo
     }
   }, [open])
 
-  // 防抖搜索(query 变化时触发)
+  // 防抖搜索
   useEffect(() => {
     if (!open) return
     if (!query.trim()) {
@@ -54,8 +67,18 @@ export function SearchDialog({ open, onClose, projectId, onSelect }: SearchDialo
     const timer = setTimeout(async () => {
       setLoading(true)
       try {
-        const results = await sessionService.searchMessages(query, projectId, 50)
-        setHits(results)
+        const results = await threadService.search(query, false, SEARCH_LIMIT)
+        // 软过滤(与侧边栏同一口径):归属该项目,或 cwd 落在项目目录树内。
+        // 两个依据都没有时不过滤 —— 宁可多给也不要空手。
+        const scoped =
+          codexProjectId || projectPath
+            ? results.filter(
+                (h) =>
+                  (codexProjectId && h.projectId === codexProjectId) ||
+                  (projectPath && isInsidePath(h.cwd, projectPath)),
+              )
+            : results
+        setHits(scoped)
       } catch {
         setHits([])
       } finally {
@@ -63,7 +86,7 @@ export function SearchDialog({ open, onClose, projectId, onSelect }: SearchDialo
       }
     }, 200)
     return () => clearTimeout(timer)
-  }, [query, open, projectId])
+  }, [query, open, codexProjectId, projectPath])
 
   if (!open) return null
 
@@ -83,7 +106,7 @@ export function SearchDialog({ open, onClose, projectId, onSelect }: SearchDialo
             ref={inputRef}
             value={query}
             onChange={(e) => setQuery(e.target.value)}
-            placeholder="搜索所有对话的内容...(对齐 Ctrl+R)"
+            placeholder="搜索当前项目的对话内容…(Ctrl+R)"
             className="flex-1 bg-transparent text-sm text-foreground outline-none placeholder:text-muted-foreground"
           />
           <kbd className="rounded bg-muted px-1.5 py-0.5 text-[10px] text-muted-foreground">
@@ -94,34 +117,38 @@ export function SearchDialog({ open, onClose, projectId, onSelect }: SearchDialo
           </button>
         </div>
 
-        {/* 搜索结果 */}
+        {/* 搜索结果(粒度是会话,点进去再定位到具体命中) */}
         <div ref={listRef} className="max-h-96 overflow-y-auto">
           {!query.trim() ? (
             <div className="px-4 py-8 text-center text-xs text-muted-foreground">
-              输入关键词搜索所有会话(标题 + 消息内容)
+              输入关键词搜索当前项目的对话
             </div>
           ) : loading && hits.length === 0 ? (
             <div className="px-4 py-8 text-center text-xs text-muted-foreground">搜索中…</div>
           ) : hits.length === 0 ? (
             <div className="px-4 py-8 text-center text-xs text-muted-foreground">
-              没有匹配 "{query}" 的结果
+              没有匹配 “{query}” 的会话
             </div>
           ) : (
             hits.map((hit, idx) => (
               <button
-                key={`${hit.session_id}:${hit.message_id}`}
+                key={hit.threadId}
                 data-idx={idx}
-                onClick={() => onSelect(hit)}
+                onClick={() => onSelect(hit, query)}
                 onMouseEnter={() => setHighlightIdx(idx)}
                 className={`flex w-full flex-col gap-1 border-b border-border/40 px-4 py-2 text-left transition-colors ${
                   idx === highlightIdx ? 'bg-accent text-accent-foreground' : 'hover:bg-accent/50'
                 }`}
               >
                 <div className="flex items-center gap-2 text-[10px] text-muted-foreground">
-                  <span className="font-medium">{hit.session_title}</span>
-                  <span className="rounded bg-muted px-1 py-0.5">{hit.message_kind}</span>
+                  <span className="max-w-[60%] truncate font-medium">{hit.title}</span>
+                  {hit.archived && (
+                    <span className="rounded bg-destructive/20 px-1 py-0.5 text-destructive">
+                      回收站
+                    </span>
+                  )}
                   <span className="ml-auto">
-                    {new Date(hit.timestamp).toLocaleString('zh-CN', {
+                    {new Date(hit.updatedAt).toLocaleString('zh-CN', {
                       month: '2-digit',
                       day: '2-digit',
                       hour: '2-digit',
