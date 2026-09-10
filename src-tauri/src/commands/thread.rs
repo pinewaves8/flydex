@@ -64,6 +64,21 @@ pub fn load_earlier_turns(
     ThreadClient::earlier_turns(&app, &thread_id, &cursor, limit.unwrap_or(20))
 }
 
+/// 把会话归入某个 codex project(传 `null` 清除归属)
+///
+/// 注意时机:**必须在本轮结束后**调用。`thread/start` 刚返回时该线程还没有落盘,
+/// 此时 `thread/metadata/update` 会被随后开始的 turn 覆盖掉(已实测:同样调用
+/// 放在本轮之后就能存住)。`thread/start` 的参数里也没有 projectId ——
+/// 与 `thread/fork` 是同一处协议缺口。
+#[tauri::command]
+pub fn set_thread_project(
+    app: AppHandle,
+    thread_id: String,
+    project_id: Option<String>,
+) -> Result<(), String> {
+    ThreadClient::set_project(&app, &thread_id, project_id.as_deref())
+}
+
 /// 重命名会话(codex `thread/name/set`)。**已归档的会话不能改名**(codex 约束)。
 #[tauri::command]
 pub fn rename_thread(app: AppHandle, thread_id: String, name: String) -> Result<(), String> {

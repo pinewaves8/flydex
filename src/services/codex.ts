@@ -19,8 +19,6 @@ export async function runCodex(
     model?: string | null
     images?: string[]
     sandbox?: string | null
-    /** codex project id —— 仅新建线程时用于归属(已有 thread 不受影响) */
-    projectId?: string | null
   },
 ): Promise<string> {
   const runId = options?.runId ?? crypto.randomUUID()
@@ -33,7 +31,6 @@ export async function runCodex(
     model: options?.model ?? null,
     images: options?.images ?? null,
     sandbox: options?.sandbox ?? null,
-    projectId: options?.projectId ?? null,
   })
   return runId
 }

@@ -49,7 +49,7 @@ use commands::thread::{
     archive_thread, delete_thread, get_thread_settings, list_threads, load_earlier_turns,
     load_thread_turns,
     project_map_entries, read_thread, rename_thread, search_thread_occurrences,
-    search_threads, set_thread_model,
+    search_threads, set_thread_model, set_thread_project,
     sync_projects, unarchive_thread,
 };
 use commands::workspace::{list_directory, list_files};
@@ -119,6 +119,7 @@ pub fn run() {
             delete_thread,
             get_thread_settings,
             set_thread_model,
+            set_thread_project,
             search_threads,
             search_thread_occurrences,
             // security

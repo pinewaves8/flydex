@@ -29,7 +29,6 @@ pub async fn run_codex(
     model: Option<String>,
     images: Option<Vec<String>>,
     sandbox: Option<String>,
-    project_id: Option<String>,
 ) -> Result<(), String> {
     let exec_mode = match mode.as_deref() {
         Some("resume") => CodexExecMode::Resume,
@@ -53,7 +52,6 @@ pub async fn run_codex(
                 model,
                 images,
                 sandbox,
-                project_id,
             },
         )
     })

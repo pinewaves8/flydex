@@ -438,6 +438,33 @@ fn main() {
 (跳过 project/create 与陷阱 D 测试;加 --create-project 验证)");
     }
 
+    // ── 7. --set-project <threadId> <projectId>:验证归属写入是否持久 ──
+    let args: Vec<String> = std::env::args().collect();
+    if let Some(pos) = args.iter().position(|a| a == "--set-project") {
+        let tid = args.get(pos + 1).cloned().unwrap_or_default();
+        let pid = args.get(pos + 2).cloned().unwrap_or_default();
+        println!("
+== 7. thread/metadata/update 归属 ==");
+        match p.request(
+            "thread/metadata/update",
+            Some(json!({ "threadId": tid, "projectId": pid })),
+        ) {
+            Ok(v) => println!("    写入 OK: {v}"),
+            Err(e) => {
+                println!("    写入 FAIL: {e}");
+                failures.push(format!("metadata/update 失败: {e}"));
+            }
+        }
+        match p.request("thread/read", Some(json!({ "threadId": tid, "includeTurns": false }))) {
+            Ok(v) => println!(
+                "    回读 projectId = {:?}",
+                v.get("thread").and_then(|t| t.get("projectId"))
+            ),
+            Err(e) => println!("    回读 FAIL: {e}"),
+        }
+    }
+
+
     println!("\n================ 结论 ================");
     if failures.is_empty() {
         println!("全部假设验证通过");

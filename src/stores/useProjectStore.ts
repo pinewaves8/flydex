@@ -41,7 +41,7 @@ interface ProjectState {
   /** 新建会话:不落盘,只清空 —— 首次发消息时由 codex 建 thread(见 P4) */
   newThread: () => void
   /** 认领刚由 codex 建出的 thread(新会话首次发消息后) */
-  adoptThread: (id: string) => void
+  adoptThread: (id: string) => Promise<void>
   loadArchivedThreads: () => Promise<void>
   setCurrentThread: (id: string | null) => Promise<void>
   /** 再往前翻一页(打开会话时首屏之外的更早历史) */
@@ -292,9 +292,22 @@ export const useProjectStore = create<ProjectState>((set, get) => ({
     codex.setThreadId(null)
   },
 
-  adoptThread: (id) => {
+  /**
+   * 认领刚建出的 thread,并把它归入当前项目
+   *
+   * 归属放在这里(本轮结束)而不是 `thread/start` 之后:刚建出的线程还没落盘,
+   * 那时写 `thread/metadata/update` 会被随后开始的 turn 覆盖(已实测)。
+   */
+  adoptThread: async (id) => {
     set({ currentThreadId: id })
     persistThreadId(id)
+    const codexProjectId = get().codexProjectId()
+    if (!codexProjectId) return
+    try {
+      await threadService.setProject(id, codexProjectId)
+    } catch (e) {
+      set({ threadWarnings: [`新会话未能归入当前项目: ${String(e)}`] })
+    }
   },
 
   /**

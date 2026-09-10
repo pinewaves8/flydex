@@ -498,9 +498,13 @@ export function useCodexSession() {
           {
             const project = useProjectStore.getState()
             const tid = useCodexStore.getState().threadId
-            // 草稿会话(还没认领)+ codex 已建出 thread → 认领
-            if (tid && !project.currentThreadId) project.adoptThread(tid)
-            void project.loadThreads()
+            // 草稿会话(还没认领)+ codex 已建出 thread → 认领并归属当前项目,
+            // 归属完成后才刷新列表(否则新线程还没归到项目下,过滤后看不见)
+            if (tid && !project.currentThreadId) {
+              void project.adoptThread(tid).then(() => project.loadThreads())
+            } else {
+              void project.loadThreads()
+            }
           }
           // 会话完成/失败通知（按设置开关控制）
           const settings = useSettingsStore.getState()
@@ -604,8 +608,6 @@ export function useCodexSession() {
           runId,
           model: model ?? null,
           images,
-          // 新线程要归到当前项目下;有 thread 时后端不会用这个值
-          projectId: useProjectStore.getState().codexProjectId(),
         })
         // 兜底：如果 done 事件丢失，强制更新状态
         if (useCodexStore.getState().status === 'running') {

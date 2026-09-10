@@ -82,6 +82,16 @@ export const threadService = {
     return invoke<void>('unarchive_thread', { threadId })
   },
 
+  /**
+   * 把会话归入某个 codex project(null = 清除归属)
+   *
+   * **只能在本轮结束后调用** —— 刚 `thread/start` 时线程尚未落盘,那时写会被
+   * 随后开始的 turn 覆盖掉(已实测)。
+   */
+  setProject(threadId: string, projectId: string | null): Promise<void> {
+    return invoke<void>('set_thread_project', { threadId, projectId })
+  },
+
   /** 会话级 UI 偏好(codex 的 Thread 里没有这些字段,属 Flydex 侧数据) */
   getSettings(threadId: string): Promise<ThreadSettings> {
     return invoke<ThreadSettings>('get_thread_settings', { threadId })

@@ -57,11 +57,6 @@ pub struct RunOverrides {
     pub images: Option<Vec<String>>,
     /// 沙箱模式覆盖(子代理可配)
     pub sandbox: Option<String>,
-    /// codex project id —— **仅新建线程时**用于归属。
-    ///
-    /// `thread/start` 的参数里**没有** projectId(与 `thread/fork` 同一处协议缺口),
-    /// 所以新建后要补一次 `thread/metadata/update` 把线程归到项目下。
-    pub project_id: Option<String>,
 }
 
 impl CodexManager {
@@ -281,27 +276,7 @@ impl CodexManager {
                     client.thread_start(tp)?
                 }
             },
-            _ => {
-                let new_tid = client.thread_start(tp)?;
-                // 新线程归属项目。thread/start 没有 projectId 参数,只能建完补一次
-                // thread/metadata/update —— 失败不影响对话,但必须让用户看见(第三原则)
-                if let Some(pid) = ov.project_id.as_deref().filter(|p| !p.is_empty()) {
-                    if let Err(e) = crate::services::thread_client::ThreadClient::set_project(
-                        &app, &new_tid, Some(pid),
-                    ) {
-                        let _ = app.emit(
-                            "codex-output",
-                            CodexEvent {
-                                run_id: run_id.clone(),
-                                body: CodexEventBody::Output {
-                                    text: format!("⚠️ 新会话未能归入当前项目：{e}"),
-                                },
-                            },
-                        );
-                    }
-                }
-                new_tid
-            }
+            _ => client.thread_start(tp)?,
         };
 
         // 绑定 run_id（事件路由）
