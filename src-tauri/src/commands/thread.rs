@@ -145,3 +145,53 @@ pub fn get_thread_settings(thread_id: String) -> ThreadSettings {
 pub fn set_thread_model(thread_id: String, model: Option<String>) -> Result<(), String> {
     ThreadSettingsService::set_model(&thread_id, model)
 }
+
+/// 分叉结果
+#[derive(Debug, Clone, serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ForkOutcome {
+    /// 新会话 id。**即使归属写入失败也要返回** —— 否则用户找不到刚分叉出来的会话
+    pub thread_id: String,
+    /// 归属写入失败的原因(为 None 表示一切正常)
+    pub warning: Option<String>,
+}
+
+/// 从某一轮之后分叉出新会话
+///
+/// `ThreadForkParams` 没有 projectId(与 `thread/start` 同一处协议缺口),所以要补一次
+/// 归属写入。分叉本身成功、归属失败时**不返回错误**:新会话已经建出来了,把 id 丢掉
+/// 比归属缺失更糟 —— 改为回传 warning 由 UI 展示。
+#[tauri::command]
+pub fn fork_thread(
+    app: AppHandle,
+    thread_id: String,
+    last_turn_id: String,
+    cwd: Option<String>,
+    project_id: Option<String>,
+    model: Option<String>,
+) -> Result<ForkOutcome, String> {
+    // 与每轮 resume 用同一份 config(模型 + 供应商),否则分叉出的会话会退回全局配置
+    let config = crate::services::model::ModelService::thread_config(model.as_deref())
+        .map(serde_json::Value::Object);
+
+    let new_id = ThreadClient::fork(
+        &app,
+        &thread_id,
+        Some(&last_turn_id),
+        None,
+        cwd.as_deref(),
+        config,
+    )?;
+
+    let warning = match project_id.as_deref().filter(|p| !p.is_empty()) {
+        None => None,
+        Some(pid) => ThreadClient::set_project(&app, &new_id, Some(pid))
+            .err()
+            .map(|e| format!("新会话已创建,但未能归入当前项目:{e}")),
+    };
+
+    Ok(ForkOutcome {
+        thread_id: new_id,
+        warning,
+    })
+}

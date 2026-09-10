@@ -178,10 +178,12 @@ fn main() {
     println!("    翻 {pages} 页后共 {} 条", rows.len());
     if let Some(first) = rows.first() {
         println!(
-            "    样例: id={} preview={:?} projectId={:?} cwd={:?}",
+            "    样例: id={} preview={:?} projectId={:?} forkedFromId={:?} cwd={:?}",
             first.get("id").and_then(|v| v.as_str()).unwrap_or("-"),
             first.get("preview").and_then(|v| v.as_str()).unwrap_or(""),
             first.get("projectId").and_then(|v| v.as_str()),
+            // 侧边栏的 fork 树缩进靠它;为 null 说明该线程是主线
+            first.get("forkedFromId").and_then(|v| v.as_str()),
             first.get("cwd").and_then(|v| v.as_str()).unwrap_or(""),
         );
         // 时间戳单位验证(陷阱 G:秒 vs 毫秒)
@@ -501,6 +503,17 @@ fn main() {
     // 为什么必须自建:待验证的正是"codex 会不会拒绝删被引用的父线程",而这一步本身就是
     // 不可逆的 —— 拿别人的会话去赌这个前提,一旦不成立就是数据损失。
     if args.iter().any(|a| a == "--fork-probe") {
+        let first_project_id: Option<String> = p
+            .request("project/list", Some(json!({ "limit": 1 })))
+            .ok()
+            .and_then(|v| {
+                v.get("data")
+                    .and_then(|d| d.as_array())
+                    .and_then(|a| a.first())
+                    .and_then(|x| x.get("id"))
+                    .and_then(|x| x.as_str())
+                    .map(str::to_string)
+            });
         println!("\n== 9. 级联删除的前提(fork 引用 / 删除顺序) ==");
         let probe_root =
             std::env::temp_dir().join(format!("flydex-fork-probe-{}", std::process::id()));
@@ -577,7 +590,44 @@ fn main() {
                             Ok(child_id) => {
                                 println!("    fork 出子线程 {}", &child_id[..8.min(child_id.len())]);
 
+                                // (0) 陷阱 C:fork 没有 projectId 参数,补一次归属是否生效?
+                                if let Some(pid) = first_project_id.as_deref() {
+                                    let set = p.request(
+                                        "thread/metadata/update",
+                                        Some(json!({ "threadId": child_id, "projectId": pid })),
+                                    );
+                                    match set {
+                                        Ok(_) => {
+                                            let got = p
+                                                .request(
+                                                    "thread/read",
+                                                    Some(json!({
+                                                        "threadId": child_id,
+                                                        "includeTurns": false
+                                                    })),
+                                                )
+                                                .ok()
+                                                .and_then(|v| {
+                                                    v.get("thread")
+                                                        .and_then(|t| t.get("projectId"))
+                                                        .and_then(|x| x.as_str())
+                                                        .map(str::to_string)
+                                                });
+                                            if got.as_deref() == Some(pid) {
+                                                println!("    [0] 分叉后补归属 → 生效 ✔(陷阱 C 补救可行)");
+                                            } else {
+                                                println!("    [0] 分叉后补归属 → 回读为 {got:?} ✗");
+                                                failures.push("分叉后归属写入未生效".into());
+                                            }
+                                        }
+                                        Err(e) => println!("    [0] 分叉后补归属 → 失败: {e}"),
+                                    }
+                                } else {
+                                    println!("    [0] 没有可用 project,跳过归属检查");
+                                }
+
                                 // (1) 有子线程时删父 → 预期被拒
+                                let mut parent_still_there = true;
                                 match p
                                     .request("thread/delete", Some(json!({ "threadId": parent_id })))
                                 {
@@ -591,6 +641,7 @@ fn main() {
                                         // 记在这里是为了下次有人重读源码时别再把注释当真。
                                         println!("    [1] 有分支时删父 → 成功(与源码注释相反)");
                                         println!("        ⇒ 级联不是协议要求,而是产品决定:不删子就会留孤儿");
+                                        parent_still_there = false;
                                     }
                                 }
 
@@ -601,12 +652,20 @@ fn main() {
                                     Ok(_) => println!("    [2] 先删子 → 成功 ✔"),
                                     Err(e) => failures.push(format!("删子失败: {e}")),
                                 }
-                                // (3) 再删父(此时已无引用)
-                                match p
-                                    .request("thread/delete", Some(json!({ "threadId": parent_id })))
-                                {
-                                    Ok(_) => println!("    [3] 再删父 → 成功 ✔(叶子优先的顺序可行)"),
-                                    Err(e) => failures.push(format!("删父失败: {e}")),
+                                // (3) 只有在父还在的情况下才验证「再删父」——
+                                // 若 [1] 已经把它删掉了,这一步只会返回 no rollout found
+                                if parent_still_there {
+                                    match p.request(
+                                        "thread/delete",
+                                        Some(json!({ "threadId": parent_id })),
+                                    ) {
+                                        Ok(_) => {
+                                            println!("    [3] 先子后父 → 成功 ✔(叶子优先的顺序可行)")
+                                        }
+                                        Err(e) => failures.push(format!("删父失败: {e}")),
+                                    }
+                                } else {
+                                    println!("    [3] 父线程已在 [1] 被删,跳过(避免重复删除的噪声)");
                                 }
                             }
                         }

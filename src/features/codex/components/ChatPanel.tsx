@@ -17,6 +17,7 @@ import {
   Sparkles,
   Users,
   User,
+  GitFork,
   ListChecks,
 } from 'lucide-react'
 import { memo, useCallback, useEffect, useMemo, useRef, useState } from 'react'
@@ -219,6 +220,9 @@ function TurnBlockView({
   group,
   turnMeta,
   repo,
+  ordinal,
+  running,
+  onFork,
   onApprovePlan,
   onCancelPlan,
   planDisabled,
@@ -228,6 +232,11 @@ function TurnBlockView({
   group: TurnGroup
   turnMeta?: ThreadTurnMeta
   repo?: string
+  /** 该轮在本次已加载列表里的序号(从 1 开始),用于分叉文案 */
+  ordinal: number
+  /** 该轮是否还在进行中 —— 进行中的轮不能被引用为分叉点 */
+  running: boolean
+  onFork?: (turnId: string, ordinal: number) => void
   onApprovePlan?: (steps: string[]) => void
   onCancelPlan?: () => void
   planDisabled?: boolean
@@ -235,17 +244,29 @@ function TurnBlockView({
   registerRef: (id: string, el: HTMLDivElement | null) => void
 }) {
   const failed = turnMeta?.status === 'failed' || turnMeta?.status === 'interrupted'
+  // codex 的 fork 只认已结束的轮;正在跑的那轮(或状态仍是 inProgress 的)不给入口
+  const forkable = !!group.turnId && !!onFork && !running && turnMeta?.status !== 'inProgress'
   return (
-    <div className="border-l border-border/40 pl-3">
+    <div className="group/turn border-l border-border/40 pl-3">
       {/* 轮标题:有 turnId 才显示(前端合成的卡片不构成一轮) */}
       {group.turnId && (
         <div className="mb-1 flex items-center gap-2 text-[10px] text-muted-foreground/70">
-          <span className="font-mono">{group.turnId.slice(-6)}</span>
+          <span className="font-mono">第 {ordinal} 轮</span>
           {turnMeta?.durationMs != null && <span>{(turnMeta.durationMs / 1000).toFixed(1)}s</span>}
           {failed && (
             <span className="text-red-400">
               {turnMeta?.status === 'interrupted' ? '已中断' : '失败'}
             </span>
+          )}
+          {forkable && (
+            <button
+              onClick={() => onFork!(group.turnId!, ordinal)}
+              className="ml-auto flex items-center gap-1 rounded border border-border px-1.5 py-0.5 opacity-0 transition-opacity hover:bg-accent hover:text-foreground group-hover/turn:opacity-100"
+              title={`在此轮之后分叉(保留前 ${ordinal} 轮上下文)`}
+            >
+              <GitFork className="h-3 w-3" />
+              在此分叉
+            </button>
           )}
         </div>
       )}
@@ -1187,6 +1208,25 @@ ${scenarioGuide[report.scenario]}
 
   // 切模型:只记偏好,不新建 thread —— 每轮 resume 都会把新 config 下发给 codex,
   // 不需要靠"换模型=换会话"来绕开跨模型 resume 的警告(旧 hack 已删)
+  // 轮序号(按 codex 的轮顺序,不受分页影响)
+  const turnOrdinal = useCallback(
+    (turnId?: string) => {
+      if (!turnId) return 0
+      const idx = turnMetas.findIndex((t) => t.id === turnId)
+      return idx >= 0 ? idx + 1 : 0
+    },
+    [turnMetas],
+  )
+
+  const handleForkAtTurn = useCallback((turnId: string, ordinal: number) => {
+    const ok = window.confirm(
+      `在此轮(第 ${ordinal} 轮)之后分叉出新会话?
+将复制到该轮为止的完整上下文。`,
+    )
+    if (!ok) return
+    void useProjectStore.getState().forkThreadAtTurn(turnId)
+  }, [])
+
   const handleModelChange = (modelId: string) => {
     void setThreadModel(modelId === '__global__' ? null : modelId)
   }
@@ -1370,11 +1410,15 @@ ${scenarioGuide[report.scenario]}
               </div>
             )}
             {/* 结构化消息:按轮分组,组内把连续的工具调用合并为一段 */}
-            {buildTurnGroups(messages).map((group) => (
+            {buildTurnGroups(messages).map((group, gi, groups) => (
               <TurnBlockView
                 key={group.key}
                 group={group}
                 turnMeta={group.turnId ? turnMetaById.get(group.turnId) : undefined}
+                ordinal={turnOrdinal(group.turnId)}
+                // 只在跑的时候把最后一轮当进行中:历史里的 inProgress 由 turnMeta 判定
+                running={status === 'running' && gi === groups.length - 1}
+                onFork={handleForkAtTurn}
                 repo={currentThreadWorkdir || workspaceCwd}
                 onApprovePlan={approvePlan}
                 onCancelPlan={cancelPlan}

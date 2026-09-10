@@ -858,9 +858,15 @@ impl AppServerClient {
                         HooksService::fire(ev, item);
                     }
                 }
-                params.get("item").map(
-                    |item| serde_json::json!({ "type": "item.completed", "item": map_item(item) }),
-                )
+                params.get("item").map(|item| {
+                    // 带上 turnId:前端要靠它把消息归到正确的轮(否则实时消息会落进
+                    // 上一轮,轮边界的「在此分叉」按钮就会出现在正在输出的那一轮上)
+                    serde_json::json!({
+                        "type": "item.completed",
+                        "item": map_item(item),
+                        "turn_id": params.get("turnId").cloned().unwrap_or(serde_json::Value::Null),
+                    })
+                })
             }
             "turn/completed" => {
                 // Hooks：本轮结束

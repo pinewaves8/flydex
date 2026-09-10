@@ -2,6 +2,7 @@ import { invoke } from '@tauri-apps/api/core'
 
 import type {
   CascadeOutcome,
+  ForkOutcome,
   ProjectEntry,
   ThreadSettings,
   ProjectSyncOutcome,
@@ -91,6 +92,26 @@ export const threadService = {
    */
   setProject(threadId: string, projectId: string | null): Promise<void> {
     return invoke<void>('set_thread_project', { threadId, projectId })
+  },
+
+  /**
+   * 从某一轮之后分叉出新会话
+   *
+   * `lastTurnId` 含该轮。**已在进行中的轮不能作为分叉点**(codex 会拒绝),
+   * 所以调用方要先确认该轮已结束。
+   */
+  fork(
+    threadId: string,
+    lastTurnId: string,
+    opts?: { cwd?: string | null; projectId?: string | null; model?: string | null },
+  ): Promise<ForkOutcome> {
+    return invoke<ForkOutcome>('fork_thread', {
+      threadId,
+      lastTurnId,
+      cwd: opts?.cwd ?? null,
+      projectId: opts?.projectId ?? null,
+      model: opts?.model ?? null,
+    })
   },
 
   /** 会话级 UI 偏好(codex 的 Thread 里没有这些字段,属 Flydex 侧数据) */

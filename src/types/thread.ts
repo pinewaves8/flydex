@@ -126,6 +126,14 @@ export interface CascadeOutcome {
   failures: string[]
 }
 
+/** 分叉结果 */
+export interface ForkOutcome {
+  /** 新会话 id —— 即使归属失败也会返回,否则用户找不到刚分叉出的会话 */
+  threadId: string
+  /** 归属写入失败的原因(null 表示一切正常) */
+  warning: string | null
+}
+
 /** 删项目的结果 */
 export interface ProjectDeleteOutcome {
   deletedThreads: number

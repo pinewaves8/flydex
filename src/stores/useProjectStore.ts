@@ -53,6 +53,8 @@ interface ProjectState {
   dismissThreadWarnings: () => void
   /** 切换会话级模型覆盖并持久化 */
   setThreadModel: (model: string | null) => Promise<void>
+  /** 从某一轮之后分叉出新会话,并切换过去 */
+  forkThreadAtTurn: (turnId: string) => Promise<void>
   /** 当前项目对应的 codex project id；未同步上时为 null */
   codexProjectId: () => string | null
 
@@ -73,7 +75,6 @@ interface ProjectState {
   restoreSession: (id: string) => Promise<void>
   purgeSession: (id: string) => Promise<void>
   loadTrashed: () => Promise<void>
-  forkSession: (id: string, messageIndex: number) => Promise<string>
   searchSessions: (query: string) => Promise<void>
   clearSearch: () => void
   exportSession: (id: string, format: ExportFormat) => Promise<string>
@@ -333,6 +334,30 @@ export const useProjectStore = create<ProjectState>((set, get) => ({
   },
 
   /**
+   * 在某一轮之后分叉出新会话
+   *
+   * 与以前的「按消息序号切片」不同:分叉点是**轮**,turnId 直接从渲染数据里就有,
+   * 不需要额外推算。codex 侧会复制该轮之前的完整上下文。
+   */
+  forkThreadAtTurn: async (turnId) => {
+    const id = get().currentThreadId
+    if (!id) return
+    const thread = get().threads.find((t) => t.id === id)
+    try {
+      const outcome = await threadService.fork(id, turnId, {
+        cwd: thread?.cwd,
+        projectId: get().codexProjectId(),
+        model: get().currentThreadModel,
+      })
+      if (outcome.warning) set({ threadWarnings: [outcome.warning] })
+      await get().loadThreads()
+      await get().setCurrentThread(outcome.threadId)
+    } catch (e) {
+      set({ threadWarnings: [`分叉失败: ${String(e)}`] })
+    }
+  },
+
+  /**
    * 切模型只改偏好,不新建 thread —— 每轮 resume 都会把新 config 下发给 codex,
    * 不需要靠"换模型=换会话"来绕开跨模型 resume 的警告。
    */
@@ -565,13 +590,6 @@ export const useProjectStore = create<ProjectState>((set, get) => ({
   loadTrashed: async () => {
     const trashed = await sessionService.listTrashed()
     set({ trashedSessions: trashed })
-  },
-
-  forkSession: async (id, messageIndex) => {
-    const newSession = await sessionService.fork(id, messageIndex)
-    await get().loadSessions()
-    get().setCurrentSession(newSession.id)
-    return newSession.id
   },
 
   searchSessions: async (query) => {

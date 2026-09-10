@@ -216,8 +216,8 @@ impl ThreadClient {
 
     /// 从某轮之后分叉。`last_turn_id` 含该轮;`before_turn_id` 不含(两者互斥)。
     ///
-    /// 注意:`ThreadForkParams` **没有 projectId**,分叉后需另调 `metadata_update` 归属。
-    #[allow(dead_code)] // P6 接线
+    /// 注意:`ThreadForkParams` **没有 projectId**(与 `thread/start` 同一处协议缺口),
+    /// 分叉后需另调 [`Self::set_project`] 归属 —— 见 `commands::thread::fork_thread`。
     pub fn fork(
         app: &AppHandle,
         thread_id: &str,

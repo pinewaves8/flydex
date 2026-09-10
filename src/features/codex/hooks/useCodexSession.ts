@@ -274,6 +274,7 @@ export function useCodexSession() {
               id: item.id,
               kind: 'agent',
               source: 'codex',
+              turnId: event.turn_id ?? undefined,
               content: item.text,
               timestamp: Date.now(),
             })
@@ -294,7 +295,7 @@ export function useCodexSession() {
         if (item.id) itemStartedAt.delete(item.id)
 
         // 与重载路径共用同一映射 —— 「实时」与「重载后」因此必然一致
-        const mapped = mapItemToMessage(item, Date.now(), undefined, {
+        const mapped = mapItemToMessage(item, Date.now(), event.turn_id ?? undefined, {
           durationMs: startedAt != null ? Date.now() - startedAt : undefined,
         })
         if (!mapped) return

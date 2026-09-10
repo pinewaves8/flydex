@@ -4,7 +4,8 @@ export type CodexJsonEvent =
   | { type: 'thread.started'; thread_id: string }
   | { type: 'turn.started' }
   | { type: 'item.started'; item: CodexItem }
-  | { type: 'item.completed'; item: CodexItem }
+  /** `turn_id` 来自 codex 通知,用于把消息归到正确的轮 */
+  | { type: 'item.completed'; item: CodexItem; turn_id?: string | null }
   | { type: 'turn.completed'; usage?: CodexUsage }
   | { type: 'item.agent_message.delta'; item_id: string | null; delta: string }
   | { type: 'item.reasoning.delta'; item_id: string | null; delta: string }
