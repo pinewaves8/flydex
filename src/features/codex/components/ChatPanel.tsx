@@ -1,5 +1,6 @@
 ﻿import { invoke } from '@tauri-apps/api/core'
 import {
+  Brain,
   Trash2,
   Terminal,
   AlertCircle,
@@ -18,7 +19,7 @@ import {
   GitFork,
   ListChecks,
 } from 'lucide-react'
-import { memo, useCallback, useEffect, useRef, useState } from 'react'
+import { memo, useCallback, useEffect, useMemo, useRef, useState } from 'react'
 
 import { useCodexSession } from '../hooks/useCodexSession'
 
@@ -30,12 +31,19 @@ import { PlanCard } from './PlanCard'
 import { ReflectionCard } from './ReflectionCard'
 import { ReviewCard } from './ReviewCard'
 import { SuggestionChips, type SuggestionAction } from './SuggestionChips'
+import { TurnPlanPanel } from './TurnPlanPanel'
 import { TurnSummaryCard } from './TurnSummaryCard'
 
 import { Markdown } from '@/components/ui/Markdown'
 import { SkillPalette } from '@/features/skills/SkillPalette'
 import { SubagentPanel } from '@/features/subagent/SubagentPanel'
 import { TaskPanel } from '@/features/tasks/TaskPanel'
+import {
+  initService,
+  initStateService,
+  type InitStateData,
+  getInitStepLabel,
+} from '@/services/initService'
 import { memoryService } from '@/services/memoryService'
 import { useCodexStore } from '@/stores/useCodexStore'
 import { useModelStore } from '@/stores/useModelStore'
@@ -45,6 +53,9 @@ import { useSubagentStore } from '@/stores/useSubagentStore'
 import { useWorkspaceStore } from '@/stores/useWorkspaceStore'
 import type { CodexStatus } from '@/types/codex'
 import type { CodexMessage } from '@/types/codexJson'
+
+/** 流式思考预览最多显示尾部这么多字符(完整内容在完成后的可展开卡片里) */
+const THINKING_TAIL_CHARS = 400
 
 /** 审查意图解析：/review、/rv、/cr 前缀或"审查"开头，可选模式参数
  * 支持：/review、/review uncommitted、/review commit <hash>、/review base <branch>，
@@ -114,6 +125,98 @@ function MessageForkWrapper({
   )
 }
 
+/** 消息流的渲染分组:连续的工具消息合成一「工具段」 */
+type RenderBlock =
+  | { kind: 'single'; msg: CodexMessage; index: number }
+  | { kind: 'tools'; items: { msg: CodexMessage; index: number }[] }
+
+/**
+ * 把连续的工具消息归为一段。
+ *
+ * codex 的 item 事件是扁平的(没有 turn 级分组),而 Claude Code 会把一串工具调用
+ * 收成一行汇总。这里按「相邻同类」聚合即可覆盖实际形态:agent/system 等消息天然
+ * 打断工具段,所以一段就对应「一轮里连着跑的几次工具调用」。
+ */
+function buildRenderBlocks(messages: CodexMessage[]): RenderBlock[] {
+  const blocks: RenderBlock[] = []
+  let run: { msg: CodexMessage; index: number }[] = []
+  const flush = () => {
+    if (run.length === 1) {
+      blocks.push({ kind: 'single', msg: run[0].msg, index: run[0].index })
+    } else if (run.length > 1) {
+      blocks.push({ kind: 'tools', items: run })
+    }
+    run = []
+  }
+  messages.forEach((msg, index) => {
+    if (msg.kind === 'tool') {
+      run.push({ msg, index })
+    } else {
+      flush()
+      blocks.push({ kind: 'single', msg, index })
+    }
+  })
+  flush()
+  return blocks
+}
+
+/** 一段连续工具调用的汇总卡(折叠时只占一行) */
+function ToolRunCard({
+  items,
+  repo,
+  onFork,
+}: {
+  items: { msg: CodexMessage; index: number }[]
+  repo?: string
+  onFork: (index: number) => void
+}) {
+  const [open, setOpen] = useState(false)
+  const totalMs = items.reduce((n, it) => n + (it.msg.durationMs ?? 0), 0)
+  // 按工具名归类,给出 "Read ×3 · Grep ×1" 这样的概览
+  const byName = new Map<string, number>()
+  for (const { msg } of items) {
+    const name = msg.toolName ?? 'tool'
+    byName.set(name, (byName.get(name) ?? 0) + 1)
+  }
+  const summary = [...byName.entries()]
+    .map(([name, n]) => (n > 1 ? `${name} ×${n}` : name))
+    .join(' · ')
+
+  return (
+    <div className="rounded border border-border/50 bg-muted/10">
+      <button
+        onClick={() => setOpen(!open)}
+        className="flex w-full min-w-0 items-center gap-1.5 px-2 py-1 text-xs text-muted-foreground hover:text-foreground"
+      >
+        {open ? (
+          <ChevronDown className="h-3 w-3 shrink-0" />
+        ) : (
+          <ChevronRight className="h-3 w-3 shrink-0" />
+        )}
+        <Wrench className="h-3 w-3 shrink-0 text-blue-400" />
+        <span className="shrink-0 font-medium">{items.length} 次工具调用</span>
+        <span className="min-w-0 flex-1 truncate text-[11px] text-muted-foreground/70">
+          {summary}
+        </span>
+        {totalMs > 0 && (
+          <span className="shrink-0 rounded bg-muted/50 px-1 py-px font-mono text-[10px]">
+            {(totalMs / 1000).toFixed(1)}s
+          </span>
+        )}
+      </button>
+      {open && (
+        <div className="space-y-0.5 border-t border-border/40 px-2 py-1">
+          {items.map(({ msg, index }) => (
+            <MessageForkWrapper key={msg.id} index={index} onFork={onFork}>
+              <MessageCard message={msg} repo={repo} />
+            </MessageForkWrapper>
+          ))}
+        </div>
+      )}
+    </div>
+  )
+}
+
 const MessageCard = memo(function MessageCard({
   message,
   repo,
@@ -129,10 +232,23 @@ const MessageCard = memo(function MessageCard({
   planDisabled?: boolean
   onSuggestion?: (action: SuggestionAction) => void
 }) {
-  const [expanded, setExpanded] = useState(true)
-  // 打字机流式状态：若该消息正在逐字显示，用已渲染文本
-  const streaming = useCodexStore((s) => s.streaming)
-  const isStreaming = streaming?.id === message.id
+  // tool 卡片默认折叠(Claude Code 风格):避免长输出撑爆消息流
+  const [toolExpanded, setToolExpanded] = useState(false)
+  // reasoning(thinking)卡片展开状态 —— 必须在顶层声明(不能放在 if 分支内,否则违反 hooks 规则)
+  const [reasoningExpanded, setReasoningExpanded] = useState(false)
+  // tool 完成"叮"动画:store 的 lastToolCompleteAt 变化时,如果时间戳匹配就闪一下
+  const lastToolCompleteAt = useCodexStore((s) => s.lastToolCompleteAt)
+  const [justCompleted, setJustCompleted] = useState(false)
+  useEffect(() => {
+    if (message.kind !== 'tool' || lastToolCompleteAt === 0) return
+    // message.timestamp 应在 lastToolCompleteAt 之后很短时间内(appendMessage 紧随 setState)
+    const dt = message.timestamp - lastToolCompleteAt
+    if (dt < 500 && dt > -500) {
+      setJustCompleted(true)
+      const t = setTimeout(() => setJustCompleted(false), 900)
+      return () => clearTimeout(t)
+    }
+  }, [lastToolCompleteAt, message.timestamp, message.kind])
 
   const kindStyles: Record<string, string> = {
     agent: 'border-l-2 border-green-500 bg-green-500/5 pl-3',
@@ -216,45 +332,157 @@ const MessageCard = memo(function MessageCard({
     )
   }
 
-  // 工具调用卡片：支持展开/收起
-  if (message.kind === 'tool') {
+  // 子代理活动(对齐 Claude Code:缩进 + 左侧竖线,与主消息流区分)
+  if (message.kind === 'subagent') {
     return (
-      <div className={`rounded py-2 ${kindStyles.tool}`}>
+      <div className="my-0.5 ml-6 border-l-2 border-cyan-500/40 pl-3">
+        <div className="flex items-center gap-1.5 text-[11px] text-cyan-300/80">
+          <Users className="h-3 w-3 shrink-0" />
+          <span className="font-medium">Subagent</span>
+          <span
+            className="min-w-0 flex-1 truncate font-mono text-cyan-200/70"
+            title={message.content}
+          >
+            {message.content}
+          </span>
+          <span className="shrink-0 text-[10px] opacity-50">
+            <Clock className="h-2.5 w-2.5 inline" /> {timeStr}
+          </span>
+        </div>
+      </div>
+    )
+  }
+
+  // Claude Code 风格 thinking 卡片:默认折叠,显示"Thinking for Xs · N chars",展开看完整内容
+  if (message.kind === 'reasoning') {
+    const charCount = message.content.length
+    return (
+      <div className="my-1 border-l-2 border-purple-500/40 bg-purple-500/5 py-1 pl-3">
         <button
-          onClick={() => setExpanded(!expanded)}
-          className="mb-1 flex w-full items-center gap-1.5 text-xs text-muted-foreground hover:text-foreground"
+          onClick={() => setReasoningExpanded(!reasoningExpanded)}
+          className="flex w-full items-center gap-1.5 text-left text-xs text-purple-300/80 hover:text-purple-200"
         >
-          {expanded ? <ChevronDown className="h-3 w-3" /> : <ChevronRight className="h-3 w-3" />}
-          {kindIcons.tool}
-          <span className="capitalize">Tool</span>
-          {message.toolName && (
-            <span className="font-mono text-blue-400">· {message.toolName}</span>
+          {reasoningExpanded ? (
+            <ChevronDown className="h-3 w-3" />
+          ) : (
+            <ChevronRight className="h-3 w-3" />
           )}
-          {/* 耗时徽章 */}
-          {message.durationMs != null && (
-            <span className="rounded bg-muted/50 px-1 py-px font-mono text-[10px] text-muted-foreground">
-              {(message.durationMs / 1000).toFixed(2)}s
-            </span>
-          )}
-          <span className="ml-auto flex items-center gap-0.5 text-[10px] opacity-50">
+          <Brain className="h-3 w-3 shrink-0" />
+          <span className="font-medium">Thinking</span>
+          <span className="text-purple-300/60">· {charCount} chars</span>
+          <span className="ml-auto text-[10px] opacity-50">
             <Clock className="h-2.5 w-2.5" />
             {timeStr}
           </span>
         </button>
-        {expanded && (
-          <div className="space-y-1">
-            <div className="text-sm text-foreground">{message.content}</div>
-            {/* 结果摘要（Claude Code 风格 —— 让用户看到工具做了什么） */}
-            {message.toolResult && (
-              <div className="rounded border border-sky-500/20 bg-sky-500/5 p-2 text-xs">
-                <span className="mb-0.5 block font-mono text-[10px] uppercase tracking-wide text-sky-400">
-                  结果摘要
-                </span>
-                <span className="break-all text-foreground/90">{message.toolResult}</span>
-              </div>
-            )}
+        {reasoningExpanded && (
+          <div className="mt-1 max-h-64 overflow-y-auto whitespace-pre-wrap rounded bg-black/20 p-2 font-mono text-[11px] leading-relaxed text-purple-200/80">
+            {message.content}
+          </div>
+        )}
+      </div>
+    )
+  }
+
+  // 工具调用卡片：Claude Code 风格 —— 默认折叠,头部只显示命令摘要
+  if (message.kind === 'tool') {
+    // 完成瞬间的"叮"动画(0 token,纯 UI 反馈)
+    // 提取首行命令(去掉时间徽章/输出部分),长命令截断
+    const rawCmdLine = (message.content.split('\n')[0] ?? '').trim()
+    // 去壳前缀:把 powershell.exe -Command '<真实命令>' / cmd.exe /c '<真实命令>' 还原成真实命令
+    const cmdLine = rawCmdLine
+      .replace(/^\$\s*/, '')
+      .replace(/^"[^"]*(?:powershell|pwsh)\.exe"\s+-Command\s+(['"])(.+?)\1$/i, '$2')
+      .replace(/^cmd(?:\.exe)?\s+\/c\s+(['"])(.+?)\1$/i, '$2')
+      .replace(/^"[^"]*(?:powershell|pwsh)\.exe"\s+-Command\s+(.+)$/i, '$1')
+      .replace(/^cmd(?:\.exe)?\s+\/c\s+(.+)$/i, '$1')
+    const cmdDisplay = cmdLine.length > 80 ? cmdLine.slice(0, 77) + '…' : cmdLine
+    // 完整内容行数(用于头部摘要,Claude Code 风格:"Used Read (5 lines)")
+    const lineCount = message.content.split('\n').length
+    // 结果首行 preview(从 message.content 第二行起的输出提取),帮助用户在折叠状态下
+    // 一眼看出 AI 拿到了什么 —— 类似 Claude Code 的"Used Read (showing first line)"
+    const resultPreview = (() => {
+      const lines = message.content.split('\n').slice(1)
+      // 过滤空行 + 时间徽章行(如 " · 5.1s")
+      const cleaned = lines.filter((l) => {
+        const t = l.trim()
+        if (!t) return false
+        if (/^·\s*[\d.]+s\s*$/.test(t)) return false
+        return true
+      })
+      if (cleaned.length === 0) return ''
+
+      // 智能 preview(按命令类型区分):
+      // 1) here-string 写入(如 `$var = @"..."`):第一行是 @" 标记,内容从 cleaned[0] 开始
+      const cmdFirstLine = (message.content.split('\n')[0] ?? '').trim()
+      const isHeredocWrite = /^\$\w+\s*=\s*@["']/.test(cmdFirstLine)
+      if (isHeredocWrite) {
+        const content = cleaned[0]
+        return content.length > 60 ? content.slice(0, 57) + '…' : content
+      }
+      // 2) list 类命令:首行通常是列标题(无意义),显示条目数
+      if (/Get-ChildItem|^\s*ls\b|\bdir\b/i.test(cmdLine)) {
+        return `→ ${cleaned.length} 项`
+      }
+      // 3) 默认:首行内容(读文件 / grep 等)
+      const t = cleaned[0]
+      return t.length > 60 ? t.slice(0, 57) + '…' : t
+    })()
+    return (
+      <div className={`rounded py-0.5 ${justCompleted ? 'animate-complete-glow' : ''}`}>
+        <button
+          onClick={() => setToolExpanded(!toolExpanded)}
+          className="flex w-full min-w-0 items-center gap-1.5 text-xs text-muted-foreground hover:text-foreground"
+        >
+          {toolExpanded ? (
+            <ChevronDown className="h-3 w-3 shrink-0" />
+          ) : (
+            <ChevronRight className="h-3 w-3 shrink-0" />
+          )}
+          {/* Claude Code 风格:tool 卡片创建于工具完成时,故始终显示绿点;
+              刚完成瞬间加一次缩放动画(justCompleted) */}
+          <span
+            className={`h-1.5 w-1.5 shrink-0 rounded-full bg-green-500 ${
+              justCompleted ? 'animate-check-pop' : ''
+            }`}
+            title="已完成"
+          />
+          {kindIcons.tool}
+          <span className="shrink-0 capitalize">Tool</span>
+          {message.toolName && (
+            <span className="shrink-0 font-mono text-blue-400">· {message.toolName}</span>
+          )}
+          <span
+            className="min-w-0 flex-1 truncate font-mono text-[11px] text-foreground/80"
+            title={cmdLine}
+          >
+            {cmdDisplay}
+          </span>
+          {/* Claude Code 风格:折叠状态下显示结果首行,让用户立刻知道 AI 拿到/做了什么 */}
+          {resultPreview && !toolExpanded && (
+            <span
+              className="hidden min-w-0 max-w-[40%] truncate text-[10px] text-muted-foreground/80 md:inline"
+              title={resultPreview}
+            >
+              → {resultPreview}
+            </span>
+          )}
+          <span className="shrink-0 text-[10px] text-muted-foreground/60">{lineCount} 行</span>
+          {/* 耗时徽章 */}
+          {message.durationMs != null && (
+            <span className="shrink-0 rounded bg-muted/50 px-1 py-px font-mono text-[10px] text-muted-foreground">
+              {(message.durationMs / 1000).toFixed(2)}s
+            </span>
+          )}
+        </button>
+        {toolExpanded && (
+          <div className="mt-1 space-y-1 pl-4">
+            {/* 完整输出(含命令和原始文本)—— Claude Code 风格:展开后一次性看到所有 */}
+            <pre className="max-h-96 overflow-auto whitespace-pre-wrap rounded bg-black/30 p-2 font-mono text-xs leading-relaxed text-foreground/90">
+              {message.content}
+            </pre>
             {message.toolArgs != null && (
-              <details className="group mt-1">
+              <details className="group">
                 <summary className="cursor-pointer text-[10px] text-muted-foreground hover:text-blue-400">
                   查看参数
                 </summary>
@@ -296,9 +524,7 @@ const MessageCard = memo(function MessageCard({
         </span>
       </div>
       {message.kind === 'agent' ? (
-        <Markdown
-          content={isStreaming ? streaming.full.slice(0, streaming.shown) : message.content}
-        />
+        <Markdown content={message.content} />
       ) : (
         <div className="whitespace-pre-wrap text-sm text-red-300">{message.content}</div>
       )}
@@ -313,7 +539,6 @@ export function ChatPanel() {
     messages,
     exitCode,
     threadId,
-    usage,
     runningCommands,
     approval,
     run,
@@ -327,37 +552,113 @@ export function ChatPanel() {
   const planMode = useCodexStore((s) => s.planMode)
   const [showSkillPalette, setShowSkillPalette] = useState(false)
   const [showMemoryPanel, setShowMemoryPanel] = useState(false)
+  const [initResumeState, setInitResumeState] = useState<InitStateData | null>(null)
+
+  // 本会话累计的文件变更数。注意:接受/回滚状态在 FileChangeCard 内部(未上提),
+  // 故这里统计的是「累计变更数」而非「待处理数」,文案据此措辞。
+  // useMemo:ChatPanel 在运行期会随输出节流频繁重渲染,避免每次都扫全量 messages。
+  const fileChangeCount = useMemo(
+    () =>
+      messages.reduce(
+        (n, m) => n + (m.kind === 'file_change' ? (m.fileChanges?.length ?? 0) : 0),
+        0,
+      ),
+    [messages],
+  )
   const [showSubagent, setShowSubagent] = useState(false)
   const [showTaskPanel, setShowTaskPanel] = useState(false)
   // 注:输入相关本地 state(command / attachments / dragOver 等)已下放到 InputBox 子组件,
   // 这样 keystroke 不会触发整个消息列表 re-render(性能优化)
   const messagesRef = useRef<HTMLDivElement>(null)
+  // 用 React ref Map 收集 message DOM 元素(替代 querySelector,更可靠)
+  const messageRefsMap = useRef<Map<string, HTMLElement>>(new Map())
 
+  // 搜索结果跳转:监听 store 中的 pendingScrollToMessageId,等 messages 数组真包含目标 ID 后滚动
+  // 关键:messages 是 useCodexSession 状态,异步加载(先清空再填)。
+  // 用 messages.find 验证目标 ID 已加载,再用 ref Map 找 DOM 节点
+  const pendingScrollToMessageId = useCodexStore((s) => s.pendingScrollToMessageId)
+  // 同时监听 currentSessionId 变化,新会话加载时重置 scrollTop(避免显示旧会话的滚动位置)
   const currentSessionId = useProjectStore((s) => s.currentSessionId)
+
+  // session 切换流畅动画:切会话时先 opacity=0,200ms 后恢复 1
+  const [switchFading, setSwitchFading] = useState(false)
+  useEffect(() => {
+    if (!currentSessionId) return
+    setSwitchFading(true)
+    const t = setTimeout(() => setSwitchFading(false), 200)
+    return () => clearTimeout(t)
+  }, [currentSessionId])
+
+  // AI 活动状态 banner(对齐 Claude Code:实时显示"思考中/正在响应/运行命令"+ 计时)
+  const aiStatus = useCodexStore((s) => s.status)
+  const aiLive = useCodexStore((s) => s.live)
+  const aiRunningCommands = useCodexStore((s) => s.runningCommands)
+  const [elapsedSec, setElapsedSec] = useState(0)
+  useEffect(() => {
+    if (aiStatus !== 'running') {
+      setElapsedSec(0)
+      return
+    }
+    const start = Date.now()
+    setElapsedSec(0)
+    const timer = setInterval(() => {
+      setElapsedSec(Math.floor((Date.now() - start) / 1000))
+    }, 500)
+    return () => clearInterval(timer)
+  }, [aiStatus])
+  useEffect(() => {
+    // 切会话 → 立即重置 scroll 位置到顶部(防止显示旧会话的滚动状态)
+    if (messagesRef.current) {
+      messagesRef.current.scrollTop = 0
+    }
+    // 切会话后清空 ref map(旧 message DOM 引用失效)
+    messageRefsMap.current.clear()
+  }, [currentSessionId])
+  useEffect(() => {
+    if (!pendingScrollToMessageId) return
+    let cancelled = false
+    let attempt = 0
+    const maxAttempts = 50 // 50 × 100ms = 5 秒
+    const tryScroll = () => {
+      if (cancelled) return
+      attempt += 1
+      // 1) 验证目标 message 已在 messages 数组中(不是空数组)
+      const inState = messages.some((m) => m.id === pendingScrollToMessageId)
+      // 2) 验证 DOM 渲染完成(用 ref Map,比 querySelector 更可靠)
+      const el = messageRefsMap.current.get(pendingScrollToMessageId)
+      if (inState && el) {
+        // 找到目标!滚动到该 message
+        el.scrollIntoView({ behavior: 'smooth', block: 'center' })
+        el.classList.add('ring-2', 'ring-blue-500/60', 'rounded-md')
+        setTimeout(() => el.classList.remove('ring-2', 'ring-blue-500/60', 'rounded-md'), 2000)
+        useCodexStore.getState().setPendingScrollToMessageId(null)
+        return
+      }
+      if (attempt < maxAttempts) {
+        setTimeout(tryScroll, 100)
+      } else {
+        useCodexStore.getState().setPendingScrollToMessageId(null)
+      }
+    }
+    // 立即 scrollTop=0 + 启动轮询
+    if (messagesRef.current) messagesRef.current.scrollTop = 0
+    const timer = setTimeout(tryScroll, 50)
+    return () => {
+      cancelled = true
+      clearTimeout(timer)
+    }
+  }, [pendingScrollToMessageId, messages])
+
   const createSession = useProjectStore((s) => s.createSession)
   const renameSession = useProjectStore((s) => s.renameSession)
   const sessions = useProjectStore((s) => s.sessions)
   const setSessionModel = useProjectStore((s) => s.setSessionModel)
   const setCurrentSession = useProjectStore((s) => s.setCurrentSession)
   const workspaceCwd = useWorkspaceStore((s) => s.cwd)
-  const streaming = useCodexStore((s) => s.streaming)
   const modelConfig = useModelStore((s) => s.config)
   const loadModels = useModelStore((s) => s.load)
   // 7.2.3 后台子代理运行数徽章
   const subagentRunning = useSubagentStore((s) => s.backgroundRunning)
-
-  // 打字机推进：逐字追加显示（6ms/次，每次 3 字符）
-  useEffect(() => {
-    if (!streaming) return
-    if (streaming.shown >= streaming.full.length) {
-      useCodexStore.getState().setStreaming(null)
-      return
-    }
-    const timer = setTimeout(() => {
-      useCodexStore.getState().advanceStream(3)
-    }, 16)
-    return () => clearTimeout(timer)
-  }, [streaming])
 
   // 当前会话标题
   const currentSessionTitle = sessions.find((s) => s.id === currentSessionId)?.title ?? ''
@@ -399,12 +700,34 @@ export function ChatPanel() {
     }
   }, [currentSessionId])
 
+  // 项目切换时检查 init 状态(用于"上次的 init 进行到 X,继续?" banner)
+  useEffect(() => {
+    let cancelled = false
+    void (async () => {
+      try {
+        const state = await initStateService.get(workspaceCwd)
+        if (cancelled) return
+        if (state && state.step !== 'done' && state.step !== 'idle') {
+          setInitResumeState(state)
+        } else {
+          setInitResumeState(null)
+        }
+      } catch {
+        // 静默:没文件或后端失败
+        if (!cancelled) setInitResumeState(null)
+      }
+    })()
+    return () => {
+      cancelled = true
+    }
+  }, [workspaceCwd])
+
   // 自动滚动到底部（消息变化或打字机推进时）
   useEffect(() => {
     if (messagesRef.current) {
       messagesRef.current.scrollTop = messagesRef.current.scrollHeight
     }
-  }, [messages, streaming?.shown])
+  }, [messages, aiLive?.text])
 
   /** 压缩上下文（6.1 P2）：长会话时把模型摘要为上下文快照 —— 重置为新会话
    *
@@ -520,6 +843,177 @@ export function ChatPanel() {
   const handleSend = useCallback(
     async (cmd: string, _attachments: Attachment[]) => {
       if (!cmd.trim() || status === 'running') return
+
+      // /init 命令:对齐 Claude Code 风格 —— 不弹窗,直接让 AI 自主决策
+      // 1. 扫描项目 → InitReport
+      // 2. 根据 scenario + 检测到的文件,构造 init prompt 让 AI 自主选择动作
+      //    - A(已有规范): 不动,告知用户已存在
+      //    - B(有文档无规范): 直接读需求+技术,生成 AGENTS.md
+      //    - C(仅骨架): 读 README.md,通过对话引导用户补全需求/技术文档
+      //    - D(全新): 引导用户从零开始建立需求/技术文档
+      if (cmd.trim() === '/init' || cmd.trim().startsWith('/init ')) {
+        try {
+          const report = await initService.scan(workspaceCwd)
+          // 构造 init 上下文 prompt(注入到 finalCommand,跟普通对话走同样的发送流程)
+          const fileList = report.candidates
+            .map((c) => `- ${c.path}(${c.size_bytes} 字节)`)
+            .join('\n')
+          const scenarioGuide: Record<typeof report.scenario, string> = {
+            A: '项目已有规范文件(AGENTS.md / CLAUDE.md),**不要覆盖**。读取现有内容告知用户已存在,**不创建任何文件**。',
+            B: '项目有需求/技术文档但无规范。**核心任务:生成 AGENTS.md**。请用 read_file 工具读取 requirements.md 和 tech-spec.md(最多 3 次 read),然后直接生成 AGENTS.md(YAML frontmatter + Markdown body,必填字段:project.name / project.description / stack.languages / build.command / build.test / conventions.naming / workflow.commit)。',
+            C: '项目已有骨架(README / build 文件),但无规范/需求/技术文档。**核心任务:通过对话引导用户补全 requirements.md → tech-spec.md → AGENTS.md**。先 read_file README.md 1 次,理解项目后开始多轮对话。',
+            D: '全新项目。**核心任务:通过对话引导用户从零建立 requirements.md → tech-spec.md → AGENTS.md**。每写完一个文件,让用户确认后输入 /done 进入下一步。',
+          }
+          cmd = `你刚收到 /init 命令。**核心目标:让 AI 未来更懂项目,产物是 AGENTS.md / requirements.md / tech-spec.md**(注意:不是 README/LICENSE/CONTRIBUTING.md)。
+
+项目根目录扫描结果:
+- 场景: ${report.scenario}(${report.scenario_label})
+- git 仓库: ${report.has_git ? '是' : '否'}
+- README: ${report.has_readme ? '有' : '无'}
+
+检测到的文件:
+${fileList || '(空目录)'}
+
+推荐操作:
+${scenarioGuide[report.scenario]}
+
+**重要约束**:
+1. **不要创建 README.md / LICENSE / CONTRIBUTING.md**(不是 init 的职责)
+2. **不要弹窗询问用户**"你要怎么做"——直接根据上面的推荐采取行动
+3. read_file 次数限制 ≤ 3(避免重复读)
+4. 完成后在回复里报告做了什么,**核心产物是 AGENTS.md**
+5. 完成后请告诉用户输入 \`/done\` 推进 init state
+
+你可以使用 file_read / file_edit / shell 等工具完成工作。`
+          // 更新 init state(scanned,作为持久化状态机的中间步骤)
+          await initStateService.set(workspaceCwd, report.scenario, 'scanned')
+          useCodexStore.getState().appendOutput({
+            text: `[init] 已扫描 ${workspaceCwd} (场景 ${report.scenario}),AI 接管中…`,
+            kind: 'system',
+          })
+        } catch (e) {
+          useCodexStore.getState().appendOutput({
+            text: `[init] 扫描失败: ${String(e)}`,
+            kind: 'stderr',
+          })
+          return
+        }
+      }
+
+      // /requirements /tech-spec /spec /done 子命令:引导 init 流程
+      // 阶段 3 增强:写模板 + 更新 init state,AI 用 file_edit 工具在多轮对话中完善内容
+      const trimmedCmd = cmd.trim()
+      const slashMatch = trimmedCmd.match(/^\/(requirements|tech-spec|spec|done)(?:\s+(.*))?$/)
+      if (slashMatch) {
+        const subcmd = slashMatch[1]
+        const userInput = slashMatch[2]?.trim() ?? ''
+        void userInput
+        try {
+          if (subcmd === 'requirements') {
+            const template = `# 项目需求文档
+
+> 由 Flydex \`/requirements\` 命令生成,AI 在多轮对话中自动完善。
+
+## 1. 项目目标
+<!-- 项目核心目标:要解决什么问题 -->
+
+## 2. 用户场景
+<!-- 谁会用这个项目?典型使用场景? -->
+
+## 3. 功能需求
+<!-- 主要功能列表,优先级 P0/P1/P2 -->
+
+## 4. 非功能需求
+<!-- 性能/安全/兼容性 -->
+
+## 5. 验收标准
+<!-- 怎么算"做完了"? -->
+`
+            await initService.writeFile(workspaceCwd, 'requirements.md', template, false)
+            await initStateService.set(workspaceCwd, 'D', 'collecting-requirements')
+            setInitResumeState(null) // 触发 useEffect 重新检查
+            useCodexStore.getState().appendOutput({
+              text: '[init] 已创建 requirements.md 模板。继续对话告诉 AI 需求细节。完成后输入 /done 进入下一步。',
+              kind: 'system',
+            })
+            return
+          } else if (subcmd === 'tech-spec') {
+            const template = `# 技术规格说明书
+
+> 由 Flydex \`/tech-spec\` 命令生成。
+
+## 1. 技术栈
+<!-- 语言/框架/运行时 -->
+
+## 2. 架构设计
+<!-- 模块划分/数据流 -->
+
+## 3. 接口定义
+<!-- 关键 API/数据模型 -->
+
+## 4. 存储设计
+<!-- 数据库/文件/缓存 -->
+
+## 5. 部署/构建
+<!-- 如何构建/运行/部署 -->
+`
+            await initService.writeFile(workspaceCwd, 'tech-spec.md', template, false)
+            await initStateService.set(workspaceCwd, 'D', 'collecting-tech-spec')
+            setInitResumeState(null)
+            useCodexStore.getState().appendOutput({
+              text: '[init] 已创建 tech-spec.md 模板。继续对话告诉 AI 技术细节。完成后输入 /done 进入下一步。',
+              kind: 'system',
+            })
+            return
+          } else if (subcmd === 'spec') {
+            // /spec:让 AI 基于现有文档生成 AGENTS.md(实际生成由 AI 在对话中完成)
+            cmd = `请阅读 ${workspaceCwd} 下的 requirements.md 和 tech-spec.md(如不存在请说明),然后生成 AGENTS.md(YAML frontmatter + Markdown,包含项目名/描述/技术栈/构建命令/命名规范/提交规范/测试要求)。`
+            await initStateService.set(workspaceCwd, 'D', 'ready-to-generate')
+            setInitResumeState(null)
+          } else if (subcmd === 'done') {
+            // /done:推进 init 状态到下一步(根据当前 step)
+            const state = await initStateService.get(workspaceCwd)
+            if (!state) {
+              useCodexStore.getState().appendOutput({
+                text: '[init] 没有进行中的 init 流程',
+                kind: 'stderr',
+              })
+              return
+            }
+            let nextStep:
+              'collecting-requirements' | 'collecting-tech-spec' | 'ready-to-generate' | 'done' =
+              'done'
+            let nextLabel = '全部完成'
+            if (state.step === 'collecting-requirements') {
+              nextStep = 'collecting-tech-spec'
+              nextLabel = '请运行 /tech-spec 生成技术文档模板'
+            } else if (state.step === 'collecting-tech-spec') {
+              nextStep = 'ready-to-generate'
+              nextLabel = '请运行 /spec 生成 AGENTS.md'
+            } else if (state.step === 'ready-to-generate') {
+              nextStep = 'done'
+              nextLabel = 'init 完成'
+            } else if (state.step === 'done') {
+              nextStep = 'done'
+              nextLabel = 'init 已完成'
+            }
+            await initStateService.set(workspaceCwd, state.scenario, nextStep)
+            setInitResumeState(null)
+            useCodexStore.getState().appendOutput({
+              text: `[init] 推进到下一步:${nextLabel}`,
+              kind: 'system',
+            })
+            return
+          }
+        } catch (e) {
+          useCodexStore.getState().appendOutput({
+            text: `[init] ${subcmd} 失败: ${String(e)}`,
+            kind: 'stderr',
+          })
+          return
+        }
+      }
+
       // 记录本次用户输入（"再跑一次" 建议会用到）
       lastUserInput.current = cmd
 
@@ -749,7 +1243,12 @@ export function ChatPanel() {
       )}
 
       {/* 消息区域 */}
-      <div ref={messagesRef} className="flex-1 overflow-y-auto p-4">
+      <div
+        ref={messagesRef}
+        className={`flex-1 overflow-y-auto p-4 transition-opacity duration-200 ${
+          switchFading ? 'opacity-0' : 'opacity-100'
+        }`}
+      >
         {messages.length === 0 && output.length === 0 ? (
           <div className="flex h-full items-center justify-center text-muted-foreground">
             <div className="text-center">
@@ -781,28 +1280,119 @@ export function ChatPanel() {
                 ))}
               </div>
             )}
-            {/* 结构化消息（7.4.3 支持消息级分叉） */}
-            {messages.map((msg, index) => (
-              <MessageForkWrapper key={msg.id} index={index} onFork={handleForkAt}>
-                <MessageCard
-                  message={msg}
-                  repo={currentSessionWorkdir || workspaceCwd}
-                  onApprovePlan={approvePlan}
-                  onCancelPlan={cancelPlan}
-                  planDisabled={status === 'running'}
-                  onSuggestion={handleSuggestionAction}
-                />
-              </MessageForkWrapper>
-            ))}
+            {/* 结构化消息（7.4.3 支持消息级分叉；连续工具调用合并为一段） */}
+            {buildRenderBlocks(messages).map((block) => {
+              if (block.kind === 'tools') {
+                return (
+                  <div key={`tools-${block.items[0].msg.id}`}>
+                    <ToolRunCard
+                      items={block.items}
+                      repo={currentSessionWorkdir || workspaceCwd}
+                      onFork={handleForkAt}
+                    />
+                  </div>
+                )
+              }
+              const { msg, index } = block
+              return (
+                <div
+                  key={msg.id}
+                  data-message-id={msg.id}
+                  ref={(el) => {
+                    if (el) messageRefsMap.current.set(msg.id, el)
+                    else messageRefsMap.current.delete(msg.id)
+                  }}
+                >
+                  <MessageForkWrapper index={index} onFork={handleForkAt}>
+                    <MessageCard
+                      message={msg}
+                      repo={currentSessionWorkdir || workspaceCwd}
+                      onApprovePlan={approvePlan}
+                      onCancelPlan={cancelPlan}
+                      planDisabled={status === 'running'}
+                      onSuggestion={handleSuggestionAction}
+                    />
+                  </MessageForkWrapper>
+                </div>
+              )
+            })}
+
+            {/* 流式实时预览:直接来自 codex 的 delta 通知。
+                正式消息落地后 clearLive() 会移除本块,由真实消息取代(文本连续)。 */}
+            {aiLive && aiLive.text && (
+              <div
+                className={
+                  aiLive.kind !== 'agent'
+                    ? 'border-l-2 border-purple-500/40 bg-purple-500/5 py-2 pl-3'
+                    : 'border-l-2 border-green-500 bg-green-500/5 py-2 pl-3'
+                }
+              >
+                <div className="mb-1 flex items-center gap-1.5 text-xs text-muted-foreground">
+                  {aiLive.kind !== 'agent' ? (
+                    <>
+                      <Brain className="h-3 w-3 text-purple-400" />
+                      <span>
+                        {aiLive.kind === 'reasoning-summary' ? 'Thinking…' : 'Thinking (raw)…'}
+                      </span>
+                    </>
+                  ) : (
+                    <>
+                      <Sparkles className="h-3 w-3 text-green-400" />
+                      <span>Responding…</span>
+                    </>
+                  )}
+                  <span className="ml-auto flex items-center gap-0.5 text-[10px] opacity-50">
+                    <Loader2 className="h-2.5 w-2.5 animate-spin" />
+                    {aiLive.text.length} chars
+                  </span>
+                </div>
+                {aiLive.kind !== 'agent' ? (
+                  // 思考:原文可能长达数千字符,只露出尾部若干行(顶部渐隐),
+                  // 完整内容仍保留在完成后的可展开卡片里 —— 对齐 Claude Code 的"只显示部分"
+                  <div className="relative max-h-24 overflow-hidden">
+                    <div className="pointer-events-none absolute inset-x-0 top-0 z-10 h-6 bg-gradient-to-b from-background to-transparent" />
+                    <div className="whitespace-pre-wrap pt-3 font-mono text-[11px] leading-relaxed text-purple-200/80">
+                      {aiLive.text.length > THINKING_TAIL_CHARS
+                        ? '…' + aiLive.text.slice(-THINKING_TAIL_CHARS)
+                        : aiLive.text}
+                    </div>
+                  </div>
+                ) : (
+                  <Markdown content={aiLive.text} />
+                )}
+              </div>
+            )}
           </div>
         )}
       </div>
 
-      {/* 状态栏 */}
-      {usage && (
-        <div className="border-t border-border bg-muted/30 px-4 py-1 text-[10px] text-muted-foreground">
-          Input: {usage.input_tokens ?? 0} tokens · Output: {usage.output_tokens ?? 0} tokens ·
-          Reasoning: {usage.reasoning_output_tokens ?? 0}
+      {/* AI 活动状态 banner(对齐 Claude Code 实时状态显示) */}
+      {aiStatus === 'running' && (
+        <div className="flex items-center gap-2 border-t border-blue-500/30 bg-blue-500/5 px-3 py-1.5 text-xs text-blue-300">
+          {aiLive ? (
+            <>
+              <span className="inline-block h-2 w-2 animate-pulse rounded-full bg-blue-400" />
+              <span className="font-medium">正在响应</span>
+              <span className="text-blue-300/70">· {elapsedSec}s</span>
+              <span className="ml-auto text-[10px] text-blue-300/60">
+                ↑ {aiLive.text.length} chars
+              </span>
+            </>
+          ) : aiRunningCommands.length > 0 ? (
+            <>
+              <Loader2 className="h-3 w-3 animate-spin" />
+              <span className="font-medium">运行命令</span>
+              <span className="font-mono text-blue-300/80">↑ {aiRunningCommands[0].command}</span>
+              <span className="text-blue-300/70">· {elapsedSec}s</span>
+            </>
+          ) : (
+            <>
+              <span className="inline-block h-2 w-2 animate-pulse rounded-full bg-blue-400" />
+              <span className="font-medium">思考中</span>
+              <span className="text-blue-300/70">· {elapsedSec}s</span>
+              <span className="ml-auto text-[10px] text-blue-300/60">等待响应…</span>
+            </>
+          )}
         </div>
       )}
 
@@ -843,7 +1433,37 @@ export function ChatPanel() {
         onClose={() => setShowMemoryPanel(false)}
       />
 
+      {/* 模型任务清单(codex 原生 turn/plan/updated) */}
+      <TurnPlanPanel />
+
       {/* 输入区域 —— 拆为独立子组件(性能优化) */}
+      {/* 文件变更导航 banner(对齐 Claude Code 的 diff 可见性) */}
+      {fileChangeCount > 0 && (
+        <button
+          onClick={() => {
+            // 滚动到第一个 file_change 卡片
+            const firstFileChange = document.querySelector(
+              '[data-file-change="true"]',
+            ) as HTMLElement | null
+            if (firstFileChange) {
+              firstFileChange.scrollIntoView({ behavior: 'smooth', block: 'center' })
+              // 高亮一下
+              firstFileChange.classList.add('ring-2', 'ring-amber-500/60')
+              setTimeout(
+                () => firstFileChange.classList.remove('ring-2', 'ring-amber-500/60'),
+                1500,
+              )
+            }
+          }}
+          className="flex items-center gap-2 border-b border-amber-500/30 bg-amber-500/10 px-3 py-1.5 text-left text-xs text-amber-300 transition-colors hover:bg-amber-500/20"
+          title="点击跳到第一个文件变更卡片"
+        >
+          <span className="font-medium">📋 {fileChangeCount} 个文件变更</span>
+          <span className="text-[10px] text-amber-300/70">
+            点击跳到第一个变更卡片,接受/回滚在卡片内操作
+          </span>
+        </button>
+      )}
       <InputBox
         status={status}
         threadId={threadId}
@@ -854,6 +1474,54 @@ export function ChatPanel() {
         workspaceCwd={workspaceCwd}
         planMode={planMode}
       />
+
+      {/* init 流程恢复 banner —— 项目切换时检测 .flydex/init-state.json,
+          显示"上次的 init 进行到 X,继续?"让用户感知状态 */}
+      {initResumeState && (
+        <div className="border-t border-amber-500/40 bg-amber-500/10 px-3 py-2 text-xs text-amber-300">
+          <div className="flex items-center gap-2">
+            <span className="font-medium">📋 检测到未完成的 init 流程</span>
+            <span className="text-amber-300/80">
+              步骤:<span className="font-mono">{getInitStepLabel(initResumeState.step)}</span>
+            </span>
+            <span className="text-amber-300/60">场景:{initResumeState.scenario}</span>
+            {initResumeState.written_files.length > 0 && (
+              <span className="hidden text-amber-300/60 sm:inline">
+                已写入:{initResumeState.written_files.join(', ')}
+              </span>
+            )}
+            <button
+              onClick={async () => {
+                // 继续:关闭 banner,保留 state,用户后续 /init 操作会基于这个 state
+                setInitResumeState(null)
+              }}
+              className="ml-auto rounded bg-amber-500/30 px-2 py-0.5 text-amber-200 transition-colors hover:bg-amber-500/50"
+            >
+              继续
+            </button>
+            <button
+              onClick={async () => {
+                try {
+                  await initStateService.clear(workspaceCwd)
+                  setInitResumeState(null)
+                  useCodexStore.getState().appendOutput({
+                    text: '[init] 已清除 init 状态,可重新 /init 开始',
+                    kind: 'system',
+                  })
+                } catch (e) {
+                  useCodexStore.getState().appendOutput({
+                    text: `[init] 清除失败: ${String(e)}`,
+                    kind: 'stderr',
+                  })
+                }
+              }}
+              className="rounded px-2 py-0.5 text-amber-300 transition-colors hover:bg-amber-500/20"
+            >
+              取消
+            </button>
+          </div>
+        </div>
+      )}
     </div>
   )
 }

@@ -1,13 +1,14 @@
 pub mod codex;
 pub mod git;
 pub mod hooks;
+pub mod init;
 pub mod mcp;
 pub mod memory;
 pub mod model;
 pub mod project;
 pub mod security;
 pub mod session;
-pub mod task;
 pub mod skill;
+pub mod task;
 pub mod terminal;
 pub mod workspace;

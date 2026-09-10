@@ -25,6 +25,13 @@ export function useGlobalShortcuts() {
         useUIStore.getState().setCurrentView('codex')
         return
       }
+      // Ctrl+R：全局对话搜索（对齐 Claude Code）
+      if (e.ctrlKey && !e.shiftKey && e.key.toLowerCase() === 'r') {
+        e.preventDefault()
+        const ui = useUIStore.getState()
+        ui.setSearchOpen(!ui.searchOpen)
+        return
+      }
     }
 
     // 捕获阶段监听：先于目标元素（如 xterm 的输入 textarea）的 keydown 处理执行

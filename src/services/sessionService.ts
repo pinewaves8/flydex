@@ -2,6 +2,17 @@ import { invoke } from '@tauri-apps/api/core'
 
 import type { ExportFormat, Session, SessionMeta, SessionSearchHit } from '@/types/project'
 
+/** 单条消息搜索结果(来自 Rust commands/session.rs search_messages) */
+export interface MessageSearchHit {
+  session_id: string
+  session_title: string
+  project_id: string | null
+  message_id: string
+  message_kind: string
+  snippet: string
+  timestamp: number
+}
+
 /**
  * 会话管理 Service
  *
@@ -73,6 +84,19 @@ export const sessionService = {
     return invoke<SessionSearchHit[]>('search_sessions', {
       query,
       projectId: projectId ?? null,
+    })
+  },
+
+  /** 全文搜索消息内容(跨会话,带片段预览) */
+  async searchMessages(
+    query: string,
+    projectId?: string | null,
+    limit?: number,
+  ): Promise<MessageSearchHit[]> {
+    return invoke<MessageSearchHit[]>('search_messages', {
+      query,
+      projectId: projectId ?? null,
+      limit: limit ?? null,
     })
   },
 

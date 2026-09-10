@@ -3,7 +3,7 @@
 import { sessionService } from '@/services/sessionService'
 import { useProjectStore } from '@/stores/useProjectStore'
 import type { CodexOutputLine, CodexStatus } from '@/types/codex'
-import type { CodexMessage, CodexFileChange, CodexUsage } from '@/types/codexJson'
+import type { CodexMessage, CodexFileChange, CodexUsage, TurnPlanStep } from '@/types/codexJson'
 
 /** 待审批的操作（由 codex approval_request 触发）*/
 export interface CodexApproval {
@@ -22,15 +22,57 @@ export interface CodexRunningCommand {
   startedAt: number
 }
 
-/** 打字机流式覆写状态（agent_message 逐字显示）*/
-export interface CodexStreaming {
-  id: string
-  full: string
-  shown: number
+/**
+ * 流式实时预览(直接来自 codex 的 delta 通知)
+ *
+ * 与旧的 `CodexStreaming` 不同:那是"等全文到了再用定时器逐字揭示"的假流式 ——
+ * 首字延迟 = 整段生成时间,还要再叠加一段固定速率的打字时间。这里直接累积模型增量,
+ * 第一个 token 到达即可显示。
+ */
+export interface CodexLive {
+  /** agent=正式回答;reasoning-summary=摘要思考(优先);reasoning=原始思维链(回退) */
+  kind: 'agent' | 'reasoning-summary' | 'reasoning'
+  text: string
 }
 
-/** 计划模式开启的 localStorage key（非法重启保持开启状态） */
-const PLAN_MODE_KEY = 'flydex.planMode'
+/** 增量文本节流:模型每秒可发几十个 delta,合并到 ~60ms 一次 setState */
+const LIVE_FLUSH_INTERVAL_MS = 60
+let liveBuffer: CodexLive | null = null
+let liveFlushTimer: ReturnType<typeof setTimeout> | null = null
+
+function flushLive(): void {
+  if (liveFlushTimer) {
+    clearTimeout(liveFlushTimer)
+    liveFlushTimer = null
+  }
+  if (liveBuffer === null) return
+  useCodexStore.setState({ live: { ...liveBuffer } })
+}
+
+/** 追加一段流式增量(由事件层调用) */
+export function appendLiveDelta(kind: CodexLive['kind'], delta: string): void {
+  if (liveBuffer === null) {
+    liveBuffer = { kind, text: delta }
+  } else if (liveBuffer.kind === kind) {
+    liveBuffer.text += delta
+  } else if (liveBuffer.kind === 'reasoning-summary' && kind === 'reasoning') {
+    // 摘要优先:已有摘要时忽略原始思维链,避免用几千字原文盖掉精简摘要
+    return
+  } else {
+    // 切换类型(如思考→回答)则重新开始累积
+    liveBuffer = { kind, text: delta }
+  }
+  if (!liveFlushTimer) {
+    liveFlushTimer = setTimeout(flushLive, LIVE_FLUSH_INTERVAL_MS)
+  }
+}
+
+/** 清空流式预览(对应的正式消息即将落地时) */
+export function clearLive(): void {
+  liveBuffer = null
+  flushLive()
+  useCodexStore.setState({ live: null })
+}
 
 /** 自动保存 debounce 时间（毫秒） */
 const AUTOSAVE_DEBOUNCE_MS = 2000
@@ -58,7 +100,8 @@ interface CodexState {
   /** 待审批项 */
   approval: CodexApproval | null
   /** 打字机流式覆写状态（agent_message 逐字显示）*/
-  streaming: CodexStreaming | null
+  /** 流式实时预览(agent: 正式回答 / reasoning: 思考内容) */
+  live: CodexLive | null
   /** 已处理的 codex item id（事件级去重等重防止重复） */
   processedItemIds: string[]
   lineId: number
@@ -79,6 +122,15 @@ interface CodexState {
   /** 待写入输入框的命令前缀(由 SkillPalette 等外部触发);InputBox 监听后清空 */
   pendingCommand: string | null
   setPendingCommand: (cmd: string | null) => void
+  /** 模型当前的任务清单(来自 codex `turn/plan/updated`,含每步真实状态)。
+   * 取代了旧的「FIFO 猜进度 + 2s 轮询」。 */
+  livePlan: { explanation: string | null; steps: TurnPlanStep[] } | null
+  setLivePlan: (p: { explanation: string | null; steps: TurnPlanStep[] } | null) => void
+  /** 最近一个 tool 完成的时间戳(ms)—— ToolCard 用 key 触发一次性完成动画 */
+  lastToolCompleteAt: number
+  /** 待滚动到指定消息 ID(搜索结果跳转用)—— ChatPanel useEffect 监听后清除 */
+  pendingScrollToMessageId: string | null
+  setPendingScrollToMessageId: (id: string | null) => void
   setPlanMode: (v: boolean) => void
   reviewMode: boolean
   setReviewMode: (v: boolean) => void
@@ -100,8 +152,7 @@ interface CodexState {
   removeRunningCommand: (id: string) => void
   setRunningCommands: (cmds: CodexRunningCommand[]) => void
   setApproval: (approval: CodexApproval | null) => void
-  setStreaming: (streaming: CodexStreaming | null) => void
-  advanceStream: (count: number) => void
+
   reset: () => void
   /** 设置当前会话 id（启用自动保存）；传 null 关闭自动保存 */
   setCurrentSessionId: (id: string | null) => void
@@ -217,34 +268,26 @@ const useCodexStore = create<CodexState>((set, get) => ({
   pendingRunId: null,
   runningCommands: [],
   approval: null,
-  streaming: null,
+  live: null,
   processedItemIds: [],
   lineId: 0,
   runStartedAt: null,
   runWorkdir: null,
   seenFileChanges: [],
   baselineFileChanges: [],
-  planMode: (() => {
-    try {
-      return localStorage.getItem(PLAN_MODE_KEY) === '1'
-    } catch {
-      return false
-    }
-  })(),
+  planMode: false,
   currentSessionId: null,
   dirty: false,
   pendingCommand: null,
+  livePlan: null,
+  lastToolCompleteAt: 0,
+  pendingScrollToMessageId: null,
   reviewMode: false,
   setReviewMode: (v) => set({ reviewMode: v }),
   setPendingCommand: (cmd) => set({ pendingCommand: cmd }),
-  setPlanMode: (v) => {
-    try {
-      localStorage.setItem(PLAN_MODE_KEY, v ? '1' : '0')
-    } catch {
-      // localStorage 不可用时忽略
-    }
-    set({ planMode: v })
-  },
+  setLivePlan: (p) => set({ livePlan: p }),
+  setPendingScrollToMessageId: (id) => set({ pendingScrollToMessageId: id }),
+  setPlanMode: (v) => set({ planMode: v }),
   setStatus: (status) => set({ status }),
 
   /** 流式输出节流：先缓存到 buffer，定时批量 flush */
@@ -297,7 +340,7 @@ const useCodexStore = create<CodexState>((set, get) => ({
     })),
   setRunningCommands: (cmds) => set({ runningCommands: cmds }),
   setApproval: (approval) => set({ approval }),
-  setStreaming: (streaming) => set({ streaming }),
+
   markItemProcessed: (id) => {
     const s = get()
     if (s.processedItemIds.includes(id)) return false
@@ -306,13 +349,6 @@ const useCodexStore = create<CodexState>((set, get) => ({
   },
   // 每个 run 时 item id 从 item_0 重新计数，跨 run 必须清空；否则 resume 的新输出被误删
   clearProcessedItems: () => set({ processedItemIds: [] }),
-  advanceStream: (count) =>
-    set((state) => {
-      if (!state.streaming) return state
-      const shown = Math.min(state.streaming.full.length, state.streaming.shown + count)
-      const done = shown >= state.streaming.full.length
-      return done ? { streaming: null } : { streaming: { ...state.streaming, shown } }
-    }),
   reset: () =>
     set({
       status: 'idle',
@@ -324,13 +360,14 @@ const useCodexStore = create<CodexState>((set, get) => ({
       pendingRunId: null,
       runningCommands: [],
       approval: null,
-      streaming: null,
+      live: null,
       processedItemIds: [],
       lineId: 0,
       runStartedAt: null,
       runWorkdir: null,
       seenFileChanges: [],
       baselineFileChanges: [],
+      livePlan: null,
       dirty: false,
     }),
   setCurrentSessionId: (id) => set({ currentSessionId: id, dirty: false }),
@@ -363,12 +400,13 @@ const useCodexStore = create<CodexState>((set, get) => ({
       pendingRunId: null,
       runningCommands: [],
       approval: null,
-      streaming: null,
+      live: null,
       processedItemIds: [],
       runStartedAt: null,
       runWorkdir: null,
       seenFileChanges: [],
       baselineFileChanges: [],
+      livePlan: null,
       dirty: false,
     }),
   flushOutputBuffer,

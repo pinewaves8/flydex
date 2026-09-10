@@ -3,8 +3,14 @@ import { listen, type UnlistenFn } from '@tauri-apps/api/event'
 import { useCallback, useEffect } from 'react'
 
 import { approveCodex, runCodex, stopCodex, type CodexExecMode } from '@/services/codex'
+import { initStateService, type InitStep } from '@/services/initService'
 import { notificationService } from '@/services/notificationService'
-import { useCodexStore, type CodexApproval } from '@/stores/useCodexStore'
+import {
+  useCodexStore,
+  appendLiveDelta,
+  clearLive,
+  type CodexApproval,
+} from '@/stores/useCodexStore'
 import { useSecurityStore } from '@/stores/useSecurityStore'
 import { useSettingsStore } from '@/stores/useSettingsStore'
 import type { CodexEvent } from '@/types/codex'
@@ -77,6 +83,62 @@ export function useCodexSession() {
     let lastTurnStatsForReflect: TurnStats | null = null
     // 上次 turn 结束时的最近消息（用于反思）
     let lastRecentMessagesForReflect: typeof messages = []
+    // 本轮开始时的消息数（用于 turn.completed 时归并 file_change 卡片 —— Claude Code 风格）
+    let turnStartMessageCount = 0
+
+    /** Claude Code /init 风格:AI 写入关键文件 → 自动推进 init state
+     *
+     * 不依赖 file_change 消息(AI 用 shell here-string 写文件不会产生 file_change 事件),
+     * 直接用 git_status_changes 检查工作区当前所有变更的文件。
+     */
+    const advanceInitState = async () => {
+      const workdir = useCodexStore.getState().runWorkdir
+      if (!workdir) return
+      try {
+        // 1. 读 init state
+        const state = await initStateService.get(workdir)
+        if (!state || state.step === 'done' || state.step === 'idle') return
+
+        // 2. 检查工作区变更的文件(覆盖 file_change + command_execution 两种写文件方式)
+        const changes = await invoke<Array<{ path: string; kind: string }>>('git_status_changes', {
+          repo: workdir,
+        })
+        const lowerPaths = changes.map((c) => c.path.toLowerCase())
+        const wroteAgents = lowerPaths.some(
+          (p) => p.endsWith('agents.md') || p.endsWith('claude.md'),
+        )
+        const wroteRequirements = lowerPaths.some((p) => p.endsWith('requirements.md'))
+        const wroteTechSpec = lowerPaths.some((p) => /tech[-_]?spec\.md$/.test(p))
+
+        let nextStep: InitStep | null = null
+        if (wroteAgents) {
+          nextStep = 'done'
+        } else if (
+          wroteRequirements &&
+          (state.step === 'scanned' || state.step === 'collecting-requirements')
+        ) {
+          nextStep = 'collecting-tech-spec'
+        } else if (wroteTechSpec && state.step !== 'ready-to-generate') {
+          nextStep = 'ready-to-generate'
+        }
+
+        if (nextStep) {
+          await initStateService.set(state.workdir, state.scenario, nextStep)
+          const file = wroteAgents
+            ? 'AGENTS.md'
+            : wroteRequirements
+              ? 'requirements.md'
+              : 'tech-spec.md'
+          useCodexStore.getState().appendOutput({
+            text: `[init] 自动推进: ${state.step} → ${nextStep}(检测到 ${file} 写入)`,
+            kind: 'system',
+          })
+        }
+      } catch {
+        // 静默
+      }
+    }
+
     // item id → 开始时间（用于计算耗时）
     const itemStartedAt = new Map<string, number>()
 
@@ -99,6 +161,8 @@ export function useCodexSession() {
         const startedAt = item.id ? itemStartedAt.get(item.id) : undefined
         const durationMs = startedAt ? Date.now() - startedAt : undefined
         if (item.id) itemStartedAt.delete(item.id)
+        // 触发完成动画
+        useCodexStore.setState({ lastToolCompleteAt: Date.now() })
         // 结果摘要：第一行输出，去掉 ANSI
         const resultSummary = outputText
           ? (outputText
@@ -174,6 +238,10 @@ export function useCodexSession() {
         turnStats.mcpCalls = 0
         turnStats.fileChanges = 0
         turnStats.hadErrors = false
+        // 记录本轮开始时的消息数(用于 turn.completed 时归并 file_change 卡片)
+        turnStartMessageCount = useCodexStore.getState().messages.length
+        // 清掉上一轮的任务清单(等本轮的 turn/plan/updated 到达)
+        store.setLivePlan(null)
       } else if (event.type === 'item.started') {
         // item.started 可能带 tool 或 command 信息
         const item = event.item as CodexItem
@@ -196,7 +264,7 @@ export function useCodexSession() {
             // 全部按 agent 消息暂存（不流式），turn 结束时最后一个转成计划卡片。
             const msgId = store.appendMessage({ kind: 'agent', content: item.text })
             lastPlanMsgId = msgId
-            store.setStreaming(null)
+            clearLive()
             return
           }
           if (st.reviewMode) {
@@ -204,12 +272,12 @@ export function useCodexSession() {
             // 全部按 agent 消息暂存，turn 结束时最后一个转成审查报告卡片。
             const msgId = store.appendMessage({ kind: 'agent', content: item.text })
             lastReviewMsgId = msgId
-            store.setStreaming(null)
+            clearLive()
             return
           }
-          // 存入全文，同时标记为打字机流式（显示层逐字）；id 用 appendMessage 返回的真实 id
-          const msgId = store.appendMessage({ kind: 'agent', content: item.text })
-          store.setStreaming({ id: msgId, full: item.text, shown: 0 })
+          // 流式预览到此结束,正式消息(完整 Markdown)由 appendMessage 落地
+          clearLive()
+          store.appendMessage({ kind: 'agent', content: item.text })
         } else if (item.type === 'error') {
           // 过滤第三方模型的无害提示：元数据缺失警告、跨模型 resume 提示（不影响功能）
           if (
@@ -220,8 +288,42 @@ export function useCodexSession() {
           }
           store.appendMessage({ kind: 'error', content: item.message })
           turnStats.hadErrors = true
+        } else if ((item.type as string) === 'reasoning') {
+          // Claude Code 风格:reasoning 显示为折叠卡片
+          const rItem = item as { content?: unknown; summary?: unknown }
+          const rContent = rItem.content
+          const rSummary = rItem.summary
+          const reasoningText = Array.isArray(rContent)
+            ? (rContent as Array<{ text?: string }>).map((c) => c.text ?? '').join('')
+            : typeof rContent === 'string'
+              ? rContent
+              : Array.isArray(rSummary)
+                ? (rSummary as string[]).join('')
+                : ''
+          if (reasoningText.trim()) {
+            clearLive()
+            store.appendMessage({ kind: 'reasoning', content: reasoningText })
+          }
+        } else if ((item.type as string) === 'collab_agent_tool_call') {
+          // 子代理活动(Claude Code 风格:缩进显示,与主消息流区分)
+          const sub = item as unknown as {
+            tool?: string
+            agentId?: string
+            args?: unknown
+            status?: string
+            content?: unknown
+          }
+          const label = sub.tool ?? (sub.agentId ? `agent:${sub.agentId.slice(0, 8)}` : 'subagent')
+          const argsStr = sub.args ? JSON.stringify(sub.args).slice(0, 200) : ''
+          store.appendMessage({
+            kind: 'subagent',
+            content: `${label}${argsStr ? ` · ${argsStr}` : ''}`,
+            toolName: label,
+          })
         } else if (item.type === 'tool_call') {
           turnStats.toolCalls++
+          // 触发完成动画(0 token 消耗)
+          useCodexStore.setState({ lastToolCompleteAt: Date.now() })
           // 计算耗时（item.started 到 item.completed）
           const startedAt = item.id ? itemStartedAt.get(item.id) : undefined
           const durationMs = startedAt ? Date.now() - startedAt : undefined
@@ -235,6 +337,8 @@ export function useCodexSession() {
           })
         } else if (item.type === 'mcp_tool_call') {
           turnStats.mcpCalls++
+          // 触发完成动画
+          useCodexStore.setState({ lastToolCompleteAt: Date.now() })
           // MCP 工具调用：展示 server·tool + 状态 + 结果摘要 + 耗时
           const toolName = item.server && item.tool ? `${item.server} · ${item.tool}` : 'MCP tool'
           const failed = item.status === 'failed'
@@ -304,9 +408,66 @@ export function useCodexSession() {
             })
           }
         }
+      } else if (
+        event.type === 'item.agent_message.delta' ||
+        event.type === 'item.reasoning.delta' ||
+        event.type === 'item.reasoning.summary.delta'
+      ) {
+        // 真实流式:回答 / 思考摘要 / 思考原文,分别累积到各自预览区
+        const kind =
+          event.type === 'item.agent_message.delta'
+            ? 'agent'
+            : event.type === 'item.reasoning.summary.delta'
+              ? 'reasoning-summary'
+              : 'reasoning'
+        appendLiveDelta(kind, event.delta)
+      } else if (event.type === 'turn.plan.updated') {
+        // codex 原生的任务清单:交给 store,由 UI 面板实时渲染(取代旧的猜进度 + 轮询)
+        store.setLivePlan({
+          explanation: event.explanation ?? null,
+          steps: event.plan,
+        })
       } else if (event.type === 'turn.completed') {
         // 本轮结束，强制完成打字机（避免残留流式状态）
-        store.setStreaming(null)
+        clearLive()
+
+        // /init 自动推进:直接查 git 工作区变更,根据写入的关键文档推进 init state
+        void advanceInitState()
+
+        // Claude Code 风格对齐:本 turn 内多次 file_change 事件会生成多张卡片,
+        // turn 完成后把它们归并为一张(FileChangeCard 已支持多个 changes)
+        const currentMessages = useCodexStore.getState().messages
+        const turnFileChanges = currentMessages
+          .slice(turnStartMessageCount)
+          .filter((m) => m.kind === 'file_change')
+        if (turnFileChanges.length > 1) {
+          // 合并所有 changes 到第一条卡片,删除后续重复卡片
+          const firstId = turnFileChanges[0].id
+          const mergedChanges = turnFileChanges.flatMap((m) => m.fileChanges ?? [])
+          // 统计行数(+add / -update 中旧内容 / 总变化)
+          const dedupChanges: typeof mergedChanges = []
+          const seen = new Set<string>()
+          for (const c of mergedChanges) {
+            const key = `${c.path}|${c.kind}`
+            if (seen.has(key)) continue
+            seen.add(key)
+            dedupChanges.push(c)
+          }
+          useCodexStore.setState((state) => ({
+            messages: state.messages
+              .map((m) =>
+                m.id === firstId
+                  ? {
+                      ...m,
+                      fileChanges: dedupChanges,
+                      content: `文件变更：${dedupChanges.map((c) => `${c.path}(${c.kind})`).join('，')}`,
+                    }
+                  : m,
+              )
+              .filter((m) => !(m.kind === 'file_change' && m.id !== firstId)),
+          }))
+        }
+
         // 计划模式：把本轮最后一个 agent_message 转为计划卡片（前面的探索说明保持 agent）
         if (useCodexStore.getState().planMode && lastPlanMsgId) {
           store.updateMessageKind(lastPlanMsgId, 'plan')
@@ -338,6 +499,32 @@ export function useCodexSession() {
         // 取最近 3 条消息（快照）
         const allMsgs = useCodexStore.getState().messages
         lastRecentMessagesForReflect = allMsgs.slice(-3)
+        // 静默失败检测:模型返回空(0 输出 + 本 turn 无任何 agent 消息)
+        // 常见于:模型 ID 不被供应商支持 / 上下文超限 / 供应商返回空
+        {
+          const msgsThisTurn = useCodexStore.getState().messages.slice(turnStartMessageCount)
+          const producedAgentOutput = msgsThisTurn.some(
+            (m) => m.kind === 'agent' || m.kind === 'reasoning',
+          )
+          const outTokens = event.usage?.output_tokens ?? 0
+          if (!producedAgentOutput && outTokens === 0 && !turnStats.hadErrors) {
+            const inTok = event.usage?.input_tokens ?? 0
+            store.appendMessage({
+              kind: 'error',
+              content:
+                `⚠️ 模型返回了空响应(输出 0 tokens,输入 ${inTok} tokens)。
+` +
+                `可能原因:
+` +
+                `1. 模型 ID 不被当前供应商支持 — 检查「设置 → 模型配置」里的模型名
+` +
+                `2. 上下文超限 — 输入 ${inTok} tokens 可能超过模型窗口
+` +
+                `3. 供应商侧限流/异常 — 查看 app-server 日志(下方如有 [app-server] 报错即为根因)`,
+            })
+          }
+        }
+
         // 只有产生实际工作（工具调用/文件变更/MCP/错误）才生成摘要卡，
         // 避免纯对话轮次也弹一张空摘要
         const hasActivity =
@@ -407,7 +594,7 @@ export function useCodexSession() {
           store.setPendingRunId(null)
           store.setApproval(null)
           store.setRunningCommands([])
-          store.setStreaming(null)
+          clearLive()
           // 会话完成/失败通知（按设置开关控制）
           const settings = useSettingsStore.getState()
           if (payload.data.exit_code !== 0 && settings.notifyOnError) {
@@ -484,7 +671,7 @@ export function useCodexSession() {
       store.setRunStartedAt(Date.now())
       store.setApproval(null)
       store.setRunningCommands([])
-      store.setStreaming(null)
+      clearLive()
       store.setRunWorkdir(workdir ?? null)
       // 记录本轮开始时的 git 工作区快照（turn 完成时只展示本轮新增的变更）
       if (workdir) {

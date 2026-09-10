@@ -92,26 +92,82 @@ fn seed_config() -> ModelConfigFile {
     ];
     let models = vec![
         // OpenAI 官方系
-        ModelConfig { id: "gpt-5.5".into(), provider: "openai-official".into(), context_window: Some(400000) },
-        ModelConfig { id: "gpt-5.2".into(), provider: "openai-official".into(), context_window: Some(400000) },
-        ModelConfig { id: "gpt-5-mini".into(), provider: "openai-official".into(), context_window: Some(200000) },
-        ModelConfig { id: "o3".into(), provider: "openai-official".into(), context_window: Some(200000) },
-        ModelConfig { id: "o4-mini".into(), provider: "openai-official".into(), context_window: Some(200000) },
+        ModelConfig {
+            id: "gpt-5.5".into(),
+            provider: "openai-official".into(),
+            context_window: Some(400000),
+        },
+        ModelConfig {
+            id: "gpt-5.2".into(),
+            provider: "openai-official".into(),
+            context_window: Some(400000),
+        },
+        ModelConfig {
+            id: "gpt-5-mini".into(),
+            provider: "openai-official".into(),
+            context_window: Some(200000),
+        },
+        ModelConfig {
+            id: "o3".into(),
+            provider: "openai-official".into(),
+            context_window: Some(200000),
+        },
+        ModelConfig {
+            id: "o4-mini".into(),
+            provider: "openai-official".into(),
+            context_window: Some(200000),
+        },
         // MiniMax
-        ModelConfig { id: "MiniMax-M2.7-highspeed".into(), provider: "minimax".into(), context_window: Some(204800) },
+        ModelConfig {
+            id: "MiniMax-M2.7-highspeed".into(),
+            provider: "minimax".into(),
+            context_window: Some(204800),
+        },
         // Qwen
-        ModelConfig { id: "qwen-max".into(), provider: "qwen".into(), context_window: Some(131072) },
-        ModelConfig { id: "qwen3-coder-plus".into(), provider: "qwen".into(), context_window: Some(262144) },
+        ModelConfig {
+            id: "qwen-max".into(),
+            provider: "qwen".into(),
+            context_window: Some(131072),
+        },
+        ModelConfig {
+            id: "qwen3-coder-plus".into(),
+            provider: "qwen".into(),
+            context_window: Some(262144),
+        },
         // DeepSeek
-        ModelConfig { id: "deepseek-chat".into(), provider: "deepseek".into(), context_window: Some(131072) },
-        ModelConfig { id: "deepseek-reasoner".into(), provider: "deepseek".into(), context_window: Some(131072) },
+        ModelConfig {
+            id: "deepseek-chat".into(),
+            provider: "deepseek".into(),
+            context_window: Some(131072),
+        },
+        ModelConfig {
+            id: "deepseek-reasoner".into(),
+            provider: "deepseek".into(),
+            context_window: Some(131072),
+        },
         // Ollama（本地）：仅内置本机常见的模型（用户需先 `ollama pull` 才能用）。
         // 注意：不要内置不存在的 tag（如 qwen2.5:7b）误导用户，本机实际以 `ollama list` 为准，
         // 缺失的模型可在设置页"模型配置"里自行增删。
-        ModelConfig { id: "qwen2.5-coder:latest".into(), provider: "ollama-local".into(), context_window: None },
-        ModelConfig { id: "qwen2.5:0.5b".into(), provider: "ollama-local".into(), context_window: None },
-        ModelConfig { id: "qwen2.5vl:3b".into(), provider: "ollama-local".into(), context_window: None },
-        ModelConfig { id: "qwen3:0.6b".into(), provider: "ollama-local".into(), context_window: None },
+        ModelConfig {
+            id: "qwen2.5-coder:latest".into(),
+            provider: "ollama-local".into(),
+            context_window: None,
+        },
+        ModelConfig {
+            id: "qwen2.5:0.5b".into(),
+            provider: "ollama-local".into(),
+            context_window: None,
+        },
+        ModelConfig {
+            id: "qwen2.5vl:3b".into(),
+            provider: "ollama-local".into(),
+            context_window: None,
+        },
+        ModelConfig {
+            id: "qwen3:0.6b".into(),
+            provider: "ollama-local".into(),
+            context_window: None,
+        },
     ];
     let mut cfg = ModelConfigFile {
         providers,
@@ -128,8 +184,12 @@ fn seed_config() -> ModelConfigFile {
 fn inherit_from_codex_config(cfg: &mut ModelConfigFile) {
     let Some(home) = dirs::home_dir() else { return };
     let path = home.join(".codex").join("config.toml");
-    let Ok(text) = fs::read_to_string(&path) else { return };
-    let Ok(v) = text.parse::<toml::Value>() else { return };
+    let Ok(text) = fs::read_to_string(&path) else {
+        return;
+    };
+    let Ok(v) = text.parse::<toml::Value>() else {
+        return;
+    };
 
     // 顶层 model_provider / model
     if let Some(toml::Value::String(pid)) = v.get("model_provider") {
@@ -194,6 +254,38 @@ fn config_path() -> Option<PathBuf> {
     Some(home.join(".flydex").join("models.json"))
 }
 
+/// `ModelService::thread_config` 的纯实现(便于单测,不读磁盘)
+fn build_thread_config(
+    cfg: &ModelConfigFile,
+    model_override: Option<&str>,
+) -> Option<serde_json::Map<String, serde_json::Value>> {
+    let model_id = model_override
+        .filter(|s| !s.is_empty())
+        .unwrap_or(&cfg.current_model);
+    let model = cfg.find_model(model_id)?;
+    let provider = cfg.find_provider(&model.provider)?;
+
+    let provider_id = format!("flydex_{}", provider.id);
+    let mut provider_table = serde_json::json!({
+        "name": provider.name,
+        "base_url": provider.base_url,
+    });
+    // codex 的 ModelProviderInfo 只认 responses 协议（chat 已被移除），默认即 responses
+    if !provider.api_key.is_empty() {
+        provider_table["experimental_bearer_token"] =
+            serde_json::Value::String(provider.api_key.clone());
+    }
+
+    let mut out = serde_json::Map::new();
+    out.insert("model".into(), serde_json::Value::String(model.id.clone()));
+    out.insert(
+        "model_provider".into(),
+        serde_json::Value::String(provider_id.clone()),
+    );
+    out.insert(format!("model_providers.{provider_id}"), provider_table);
+    Some(out)
+}
+
 pub struct ModelService;
 
 impl ModelService {
@@ -217,6 +309,33 @@ impl ModelService {
                 cfg
             }
         }
+    }
+
+    /// 构造 codex `thread/start`（及 `thread/resume`）的 `config` 覆盖表。
+    ///
+    /// 为什么走这条路而不是改写 `~/.codex/config.toml`:
+    /// codex 支持按 thread 传 config 层（优先级高于全局 config.toml），因此
+    /// **不需要碰用户的 Codex CLI 全局配置**，也不需要重启 daemon —— 换模型只是下一个
+    /// thread 的参数不同。resume 同样带这份 config，所以不会出现「线程绑死旧 provider →
+    /// 拿新模型名去请求旧厂商 → unknown model」。
+    ///
+    /// 返回形如:
+    /// ```json
+    /// {
+    ///   "model": "deepseek-v4-flash",
+    ///   "model_provider": "flydex_deepseek",
+    ///   "model_providers.flydex_deepseek": {
+    ///     "name": "DeepSeek",
+    ///     "base_url": "https://api.deepseek.com/v1",
+    ///     "experimental_bearer_token": "sk-..."
+    ///   }
+    /// }
+    /// ```
+    /// provider id 加 `flydex_` 前缀，避免与用户自己在 config.toml 里的定义撞名。
+    pub fn thread_config(
+        model_override: Option<&str>,
+    ) -> Option<serde_json::Map<String, serde_json::Value>> {
+        build_thread_config(&Self::load(), model_override)
     }
 
     pub fn save(cfg: &ModelConfigFile) -> Result<(), String> {
@@ -283,4 +402,81 @@ fn ensure_builtin(cfg: &mut ModelConfigFile) -> bool {
         }
     }
     changed
+}
+
+/// 在 codex config.toml 文本中写入 model / model_provider / [model_providers.<id>]
+///
+/// **关键**:TOML 的顶层键必须出现在**任何 `[table]` 之前**。
+/// 早期实现把 `model = ...` 追加到文件末尾 —— 那会落进最后一个 `[projects.x]` 表内部,
+/// 导致 codex 读不到顶层 model,静默回退到内置默认模型(表现为「模型切换无效、输出为空」)。
+///
+/// 因此这里:先把顶层键写到文件**开头**,再输出其余内容(剔除旧的 model 相关键)。
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn cfg_with(model_id: &str, provider_id: &str, key: &str) -> ModelConfigFile {
+        ModelConfigFile {
+            providers: vec![ProviderConfig {
+                id: provider_id.into(),
+                name: "DeepSeek".into(),
+                base_url: "https://api.deepseek.com/v1".into(),
+                api_key: key.into(),
+            }],
+            models: vec![ModelConfig {
+                id: model_id.into(),
+                provider: provider_id.into(),
+                context_window: Some(131072),
+            }],
+            current_model: model_id.into(),
+            reasoning_effort: String::new(),
+        }
+    }
+
+    /// 回归:thread_config 必须把 model + model_provider + 供应商表一起给全。
+    /// 只给 model 不给 provider,正是「切模型无效 / unknown model」的成因。
+    #[test]
+    fn thread_config_carries_model_and_provider_together() {
+        let cfg = cfg_with("deepseek-v4-flash", "deepseek", "sk-test");
+        let map = build_thread_config(&cfg, None).expect("应生成 config");
+
+        assert_eq!(map["model"], serde_json::json!("deepseek-v4-flash"));
+        assert_eq!(map["model_provider"], serde_json::json!("flydex_deepseek"));
+
+        let p = &map["model_providers.flydex_deepseek"];
+        assert_eq!(p["name"], serde_json::json!("DeepSeek"));
+        assert_eq!(p["base_url"], serde_json::json!("https://api.deepseek.com/v1"));
+        assert_eq!(p["experimental_bearer_token"], serde_json::json!("sk-test"));
+    }
+
+    /// 会话级覆盖优先于全局当前模型
+    #[test]
+    fn thread_config_honours_session_override() {
+        let mut cfg = cfg_with("deepseek-v4-flash", "deepseek", "sk-test");
+        cfg.models.push(ModelConfig {
+            id: "deepseek-reasoner".into(),
+            provider: "deepseek".into(),
+            context_window: None,
+        });
+        let map = build_thread_config(&cfg, Some("deepseek-reasoner")).unwrap();
+        assert_eq!(map["model"], serde_json::json!("deepseek-reasoner"));
+    }
+
+    /// 空串覆盖视为「未覆盖」
+    #[test]
+    fn thread_config_ignores_empty_override() {
+        let cfg = cfg_with("m1", "p1", "");
+        let map = build_thread_config(&cfg, Some("")).unwrap();
+        assert_eq!(map["model"], serde_json::json!("m1"));
+        // 空 api_key 不应写入 token 字段
+        assert!(map["model_providers.flydex_p1"].get("experimental_bearer_token").is_none());
+    }
+
+    /// 未知模型/供应商 → None(调用方回退到 codex 自身配置,而不是发一个错的 provider)
+    #[test]
+    fn thread_config_returns_none_for_unknown_model() {
+        let cfg = cfg_with("m1", "p1", "k");
+        assert!(build_thread_config(&cfg, Some("nope")).is_none());
+    }
 }

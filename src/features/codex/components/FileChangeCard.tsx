@@ -111,8 +111,27 @@ export function FileChangeCard({ message, repo }: { message: CodexMessage; repo?
   const decidedCount = Object.keys(decisions).length
   const pendingCount = changes.length - decidedCount
 
+  // Claude Code 风格统计:按 kind 聚合
+  const stats = changes.reduce(
+    (acc, c) => {
+      acc[c.kind] += 1
+      return acc
+    },
+    { add: 0, update: 0, delete: 0 } as Record<CodexFileChange['kind'], number>,
+  )
+  const statsText = [
+    stats.add > 0 ? `${stats.add} 新增` : null,
+    stats.update > 0 ? `${stats.update} 修改` : null,
+    stats.delete > 0 ? `${stats.delete} 删除` : null,
+  ]
+    .filter(Boolean)
+    .join(' · ')
+
   return (
-    <div className="rounded border-l-2 border-l-violet-500 bg-violet-500/5 py-2 pl-3">
+    <div
+      data-file-change="true"
+      className="rounded border-l-2 border-l-violet-500 bg-violet-500/5 py-2 pl-3 transition-shadow"
+    >
       {/* 头部 */}
       <button
         onClick={() => setExpanded(!expanded)}
@@ -121,6 +140,7 @@ export function FileChangeCard({ message, repo }: { message: CodexMessage; repo?
         {expanded ? <ChevronDown className="h-3 w-3" /> : <ChevronRight className="h-3 w-3" />}
         <span className="text-violet-300">File Change</span>
         <span className="font-mono">{changes.length} 个文件</span>
+        {statsText && <span className="text-violet-300/80">· {statsText}</span>}
         {pendingCount > 0 && <span className="text-amber-300">{pendingCount} 待处理</span>}
         <span className="ml-auto flex items-center gap-0.5 text-[10px] opacity-50">{timeStr}</span>
       </button>

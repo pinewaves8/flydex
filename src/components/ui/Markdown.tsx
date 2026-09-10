@@ -91,7 +91,14 @@ export function Markdown({ content }: MarkdownProps) {
               )
             },
             table({ children }) {
-              return <div className="overflow-x-auto">{children}</div>
+              // 注意:必须保留 <table> 元素本身 —— 只把 <table> 包进滚动容器。
+              // 若直接返回 <div>{children}</div>,thead/tbody 会变成 div 的直接子元素,
+              // React 会报 validateDOMNesting 警告且表格语义丢失。
+              return (
+                <div className="overflow-x-auto">
+                  <table className="w-full border-collapse">{children}</table>
+                </div>
+              )
             },
           }}
         >

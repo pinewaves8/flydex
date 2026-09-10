@@ -17,7 +17,7 @@ interface ProjectState {
   currentSessionId: string | null
   loading: boolean
 
-  loadProjects: () => Promise<void>
+  loadProjects: (baseDir?: string) => Promise<void>
   createProject: (name: string, path: string) => Promise<Project>
   renameProject: (id: string, name: string) => Promise<void>
   deleteProject: (id: string) => Promise<void>
@@ -69,30 +69,30 @@ export const useProjectStore = create<ProjectState>((set, get) => ({
   currentSessionId: null,
   loading: false,
 
-  loadProjects: async () => {
+  loadProjects: async (baseDir?: string) => {
     set({ loading: true })
     try {
       const projects = await projectService.list()
       set({ projects })
 
-      // 优先匹配 flydex 项目（使用固定路径匹配）
-      const flydexProject = projects.find(
-        (p) =>
-          p.path.toLowerCase() === 'c:\\llm\\flydex' ||
-          p.path.toLowerCase() === 'c:/llm/flydex' ||
-          p.name.toLowerCase() === 'flydex',
-      )
+      // 统一路径比较(忽略大小写 + 路径分隔符)
+      const norm = (p: string) => p.toLowerCase().replace(/\\/g, '/').replace(/\/+$/, '')
+      const normBase = baseDir ? norm(baseDir) : null
 
-      if (flydexProject) {
-        if (get().currentProjectId !== flydexProject.id) {
-          await get().setCurrentProject(flydexProject.id)
-        } else {
-          await get().loadSessions(flydexProject.id)
+      // 优先级 1:baseDir(workspace cwd)对应的项目 —— 保证 cwd / project / session 三者一致
+      if (normBase) {
+        const matched = projects.find((p) => norm(p.path) === normBase)
+        if (matched) {
+          if (get().currentProjectId !== matched.id) {
+            await get().setCurrentProject(matched.id)
+          } else {
+            await get().loadSessions(matched.id)
+          }
+          return
         }
-        return
       }
 
-      // 回退到持久化的项目
+      // 优先级 2:持久化的项目(localStorage 中的 currentProjectId)
       const persistedId = loadPersistedProjectId()
       const currentId = get().currentProjectId
 
@@ -102,9 +102,17 @@ export const useProjectStore = create<ProjectState>((set, get) => ({
         } else {
           await get().loadSessions(persistedId)
         }
-      } else if (currentId && projects.some((p) => p.id === currentId)) {
+        return
+      }
+
+      // 优先级 3:已加载的 currentProjectId 还在列表里
+      if (currentId && projects.some((p) => p.id === currentId)) {
         await get().loadSessions(currentId)
-      } else if (projects.length > 0) {
+        return
+      }
+
+      // 优先级 4:第一个项目
+      if (projects.length > 0) {
         await get().setCurrentProject(projects[0].id)
       }
     } finally {

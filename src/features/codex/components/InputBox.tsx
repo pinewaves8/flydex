@@ -2,8 +2,11 @@ import { invoke } from '@tauri-apps/api/core'
 import { Play, ShieldAlert, ListChecks, FolderOpen, ImagePlus, Loader2, X } from 'lucide-react'
 import { memo, useCallback, useEffect, useRef, useState } from 'react'
 
+import { CommandPalette } from './CommandPalette'
+import { FileMention } from './FileMention'
 import { MemorySettle } from './MemorySettle'
 
+import { listWorkdirFiles } from '@/services/initService'
 import { useCodexStore } from '@/stores/useCodexStore'
 import { useSecurityStore } from '@/stores/useSecurityStore'
 import { approvalLabel } from '@/types/security'
@@ -66,6 +69,17 @@ const InputBoxInner = function InputBox({
   // ── 本地状态(独立于父组件) ──
   const [command, setCommand] = useState('')
   const [attachments, setAttachments] = useState<Attachment[]>([])
+  // `/` 命令面板(对齐 Claude Code):输入 `/` 开头时打开,实时按字母筛选
+  const commandPaletteOpen = command.startsWith('/') && !command.includes(' ')
+  // 提取 query(包含前导 `/` 后面所有内容)
+  const paletteQuery = command.startsWith('/') ? command.split(' ')[0] : '/'
+  // `@`-mention 文件补全:工作目录的所有文件(workspaceCwd 变化时刷新)
+  const [allFiles, setAllFiles] = useState<string[]>([])
+  // 从 command 提取最后一个 @ 后的 query(在空格前)
+  // 例如 "改一下 @App.tsx 那段代码" → "@App.tsx"
+  const mentionMatch = /@([^@\s]*)$/.exec(command)
+  const fileMentionOpen = mentionMatch !== null && !command.includes('/ ') // 排除 `/` 命令
+  const fileMentionQuery = mentionMatch?.[1] ?? ''
   const [dragOver, setDragOver] = useState(false)
   const fileInputRef = useRef<HTMLInputElement>(null)
   const inputRef = useRef<HTMLTextAreaElement>(null)
@@ -90,6 +104,38 @@ const InputBoxInner = function InputBox({
       inputRef.current?.focus()
     }
   }, [pendingCommand])
+
+  // 加载工作目录的所有文件(@-mention 用),workspaceCwd 变化时刷新
+  useEffect(() => {
+    if (!workspaceCwd) {
+      setAllFiles([])
+      return
+    }
+    let cancelled = false
+    listWorkdirFiles(workspaceCwd, 3)
+      .then((files) => {
+        if (!cancelled) setAllFiles(files)
+      })
+      .catch(() => {
+        if (!cancelled) setAllFiles([])
+      })
+    return () => {
+      cancelled = true
+    }
+  }, [workspaceCwd])
+
+  /** FileMention 选中:把 @filename 插入到当前光标位置 */
+  const handleFileMentionSelect = useCallback((filename: string) => {
+    // 替换最后那个 @query 为 @filename
+    setCommand((prev) => prev.replace(/@[^\s]*$/, `@${filename} `))
+    requestAnimationFrame(() => inputRef.current?.focus())
+  }, [])
+
+  /** FileMention 关闭:把 @ 部分字符清掉 */
+  const handleFileMentionClose = useCallback(() => {
+    setCommand((prev) => prev.replace(/@[^\s]*$/, ''))
+    inputRef.current?.focus()
+  }, [])
 
   /** 附加一个图片文件:转 base64 → 调后端落盘 → 存入 attachments */
   const addImageFile = useCallback(
@@ -198,19 +244,39 @@ const InputBoxInner = function InputBox({
 
   const handleKeyDown = useCallback(
     (e: React.KeyboardEvent) => {
+      // 注意:`/` 命令面板 + `@`-mention 都自己挂载 window keydown 监听,
+      // 上箭头/下箭头/Enter/Escape 被它们拦截。这里只需处理 plan mode + 发送消息。
       if (e.ctrlKey && e.shiftKey && e.key === 'P') {
         e.preventDefault()
         useCodexStore.getState().setPlanMode(!useCodexStore.getState().planMode)
         return
       }
       // Enter 发送(Shift+Enter 换行)
+      // 但当 palette open(命令面板或文件补全)时,Enter 由它们处理(选中命令/文件),
+      // 这里 preventDefault 阻止默认行为,不调用 handleRun。
       if (e.key === 'Enter' && !e.shiftKey) {
         e.preventDefault()
-        void handleRun()
+        if (!commandPaletteOpen && !fileMentionOpen) {
+          void handleRun()
+        }
+        // palette/mention open 时不调用 handleRun,留给对应的 window listener
       }
     },
-    [handleRun],
+    [handleRun, commandPaletteOpen, fileMentionOpen],
   )
+
+  /** CommandPalette 选中命令:替换 input 值为选中命令(让用户继续输入参数) */
+  const handlePaletteSelect = useCallback((cmdName: string) => {
+    setCommand(`/${cmdName} `)
+    // 立即让 input 重新获得焦点(用户继续输入参数)
+    requestAnimationFrame(() => inputRef.current?.focus())
+  }, [])
+
+  /** CommandPalette 关闭:删除命令前缀字符,恢复普通输入 */
+  const handlePaletteClose = useCallback(() => {
+    setCommand('')
+    inputRef.current?.focus()
+  }, [])
 
   const securityConfig = useSecurityStore((s) => s.config)
 
@@ -248,26 +314,51 @@ const InputBoxInner = function InputBox({
       )}
       {/* 记忆沉淀入口(v4.1):会话完成后提炼候选 → 勾选 → 写入项目记忆 */}
       <MemorySettle workdir={currentSessionWorkdir ?? workspaceCwd ?? ''} />
+
+      {/* Plan Mode 显眼 badge —— 对齐 Claude Code:开启时明显提示,一键关闭 */}
+      {planMode && (
+        <div className="mb-2 flex items-center gap-2 rounded-md border border-amber-500/40 bg-amber-500/10 px-3 py-1.5 text-xs text-amber-300">
+          <ListChecks className="h-3.5 w-3.5 shrink-0" />
+          <div className="flex min-w-0 flex-1 items-baseline gap-1.5">
+            <span className="font-semibold">Plan Mode 已开启</span>
+            <span className="hidden text-amber-300/70 sm:inline">
+              — AI 只会输出计划,不执行写操作
+            </span>
+          </div>
+          <button
+            onClick={() => useCodexStore.getState().setPlanMode(false)}
+            disabled={status === 'running'}
+            title="关闭 Plan Mode,让 AI 直接执行(对齐 Claude Code 默认行为)"
+            className="flex shrink-0 items-center gap-1 rounded px-1.5 py-0.5 text-amber-300 transition-colors hover:bg-amber-500/20 disabled:opacity-40"
+          >
+            <X className="h-3 w-3" />
+            <span className="text-[10px]">关闭</span>
+          </button>
+        </div>
+      )}
+
       <div className="mb-2 flex items-center gap-2">
         <button
           onClick={() => useCodexStore.getState().setPlanMode(!planMode)}
           disabled={status === 'running'}
           className={`flex items-center gap-1 rounded px-2 py-1 text-[11px] font-medium transition-colors disabled:opacity-50 ${
             planMode
-              ? 'bg-primary/15 text-primary ring-1 ring-primary/40'
+              ? 'text-muted-foreground hover:bg-accent hover:text-foreground'
               : 'text-muted-foreground hover:bg-accent hover:text-foreground'
           }`}
-          title="计划模式:发送后先生成可编辑的分步计划,批准后再执行(不直接动手改文件)"
+          title={
+            planMode
+              ? 'Plan Mode 已开启(上方 badge 可一键关闭)'
+              : '开启 Plan Mode:发送后先生成可编辑的分步计划,批准后再执行'
+          }
         >
           <ListChecks className="h-3 w-3" />
-          Plan
+          {planMode ? 'Plan · 已开启' : 'Plan'}
         </button>
-        {planMode ? (
-          <span className="text-[10px] text-primary/70">
-            计划模式已开启:先生成计划,批准后再执行
+        {!planMode && (
+          <span className="text-[10px] text-muted-foreground/50">
+            点击开启 Plan Mode(默认直接执行)
           </span>
-        ) : (
-          <span className="text-[10px] text-muted-foreground/50">计划模式:先出方案,批准后动手</span>
         )}
       </div>
       <div className="mb-2 flex items-center gap-1.5">
@@ -314,7 +405,24 @@ const InputBoxInner = function InputBox({
           ))}
         </div>
       )}
-      <div className="flex gap-2">
+      <div className="relative flex gap-2">
+        {/* `/` 命令面板:对齐 Claude Code 风格,输入 / 弹出常用命令 + 字母筛选 */}
+        {commandPaletteOpen && (
+          <CommandPalette
+            query={paletteQuery}
+            onSelect={handlePaletteSelect}
+            onClose={handlePaletteClose}
+          />
+        )}
+        {/* `@`-mention 文件补全:对齐 Claude Code 风格,输入 @ + 文件名筛选 */}
+        {fileMentionOpen && (
+          <FileMention
+            query={fileMentionQuery}
+            files={allFiles}
+            onSelect={handleFileMentionSelect}
+            onClose={handleFileMentionClose}
+          />
+        )}
         {/* 隐藏的文件选择 input:多选图片 */}
         <input
           ref={fileInputRef}

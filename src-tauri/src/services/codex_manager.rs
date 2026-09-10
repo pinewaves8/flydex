@@ -5,6 +5,7 @@ use std::time::Duration;
 use tauri::{AppHandle, Emitter};
 
 use crate::services::appserver_client::AppServerClient;
+use crate::services::hooks::HooksService;
 use crate::services::security::SecurityService;
 use crate::types::codex::{CodexEvent, CodexEventBody};
 
@@ -90,7 +91,18 @@ impl CodexManager {
 
     /// 检测是否命中搜索意图（与前端 matchTriggers 对齐）
     fn is_search_intent(s: &str) -> bool {
-        const WORDS: &[&str] = &["搜索", "搜一下", "搜索一下", "查一下", "查找", "查询", "检索", "search", "look up", "find"];
+        const WORDS: &[&str] = &[
+            "搜索",
+            "搜一下",
+            "搜索一下",
+            "查一下",
+            "查找",
+            "查询",
+            "检索",
+            "search",
+            "look up",
+            "find",
+        ];
         let lower = s.to_lowercase();
         WORDS.iter().any(|w| lower.contains(w))
     }
@@ -121,7 +133,9 @@ impl CodexManager {
         if !out.status.success() || out.stdout.is_empty() {
             return None;
         }
-        String::from_utf8(out.stdout).ok().filter(|s| !s.trim().is_empty())
+        String::from_utf8(out.stdout)
+            .ok()
+            .filter(|s| !s.trim().is_empty())
     }
 
     pub fn run_command(
@@ -163,18 +177,28 @@ impl CodexManager {
         // 纯图片发送（无文字）时注入默认指令，让 codex 基于附加图片回复；两者皆空则报错。
         if final_command.trim().is_empty() {
             if images.as_ref().is_some_and(|v| !v.is_empty()) {
-                final_command = "请描述你看到的图片内容，并结合项目上下文给出分析和建议。".to_string();
+                final_command =
+                    "请描述你看到的图片内容，并结合项目上下文给出分析和建议。".to_string();
             } else {
                 return Err("指令不能为空：请先输入消息，或附加图片后发送。".to_string());
             }
         }
-        
+
         // 记忆注入（6.1）：L1 用户记忆 + L2 项目记忆（.flydex/MEMORY.md）拼到指令前。
         // 放在空指令保护之后，避免纯记忆被误当成用户指令发送。
-        let memory_block = crate::services::memory::MemoryService::build_inject_block(workdir.as_deref());
+        let memory_block =
+            crate::services::memory::MemoryService::build_inject_block(workdir.as_deref());
         if !memory_block.trim().is_empty() {
             final_command = format!("{}\n\n{}", memory_block.trim_end(), final_command);
         }
+
+        // 项目规范(AGENTS.md / CLAUDE.md)不再拼进 user message —— 否则:
+        //   1) 每轮重复发送(浪费 token)
+        //   2) 会被写进 thread 历史,随轮次不断累积(几十轮后上下文爆炸)
+        // 改为通过 thread/start 的 developer_instructions 注入到"系统层",与 Claude Code 一致。
+        let project_context = crate::services::system_prompt::ProjectContextLoader::build_context(
+            workdir.as_deref().unwrap_or(""),
+        );
         // 搜索预取（确定性兜底）：命中搜索意图时，由 flydex 代检索一次并注入结果，
         // 不依赖模型自觉调用 web_search。仅命中搜索触发词的指令生效，不影响其他对话。
         if let Some(prefetch) = Self::prefetch_search(&final_command) {
@@ -185,9 +209,11 @@ impl CodexManager {
         // 前端 UX：Started 事件（app-server 无真实 pid，用 0 占位）
         let _ = app.emit(
             "codex-output",
-            CodexEvent { run_id: run_id.clone(), body: CodexEventBody::Started { pid: 0 } },
+            CodexEvent {
+                run_id: run_id.clone(),
+                body: CodexEventBody::Started { pid: 0 },
+            },
         );
-
 
         // 确定 thread：resume 复用传入 thread_id（先 thread/resume 重新 open，
         // 否则 app-server 重启后 thread 不在内存 → turn/start 报 thread not found），
@@ -198,12 +224,34 @@ impl CodexManager {
             "approvalsReviewer": "user",
             "sandbox": sandbox,
         });
-        if let Some(m) = session_model.clone().filter(|s| !s.is_empty()) {
-            tp["model"] = serde_json::Value::String(m);
+        // 模型 + 供应商随请求下发(codex 的 per-thread config 层,优先级高于全局 config.toml)。
+        // 这样既不改用户的 Codex CLI 配置,也无需重启 daemon;resume 同样携带,
+        // 因此不存在「线程绑死旧 provider → 拿新模型名请求旧厂商 → unknown model」。
+        match crate::services::model::ModelService::thread_config(session_model.as_deref()) {
+            Some(cfg_map) => {
+                tp["config"] = serde_json::Value::Object(cfg_map);
+            }
+            None => {
+                let _ = app.emit(
+                    "codex-output",
+                    CodexEvent {
+                        run_id: run_id.clone(),
+                        body: CodexEventBody::Output {
+                            text: "▸ 未找到模型配置,将使用 codex 自身默认模型。".into(),
+                        },
+                    },
+                );
+            }
         }
+        // 项目规范作为 developer instructions 注入(系统层,不占对话历史)
+        if !project_context.trim().is_empty() {
+            tp["developer_instructions"] =
+                serde_json::Value::String(project_context.trim().to_string());
+        }
+
         let tid = match thread_id {
-            Some(tid) if !tid.trim().is_empty() => match client.thread_resume(&tid) {
-                Ok(_) => tid.clone(),
+            Some(tid) if !tid.trim().is_empty() => match client.thread_resume(&tid, tp.clone()) {
+                Ok(resumed_tid) => resumed_tid,
                 Err(e) => {
                     let _ = app.emit(
                         "codex-output",
@@ -230,14 +278,26 @@ impl CodexManager {
         if images.as_ref().is_some_and(|v| !v.is_empty()) {
             let _ = app.emit(
                 "codex-output",
-                CodexEvent { run_id: run_id.clone(), body: CodexEventBody::Output { text: "⚠️ app-server 驱动暂未接入图片输入，已忽略图片附件。".into() } },
+                CodexEvent {
+                    run_id: run_id.clone(),
+                    body: CodexEventBody::Output {
+                        text: "⚠️ app-server 驱动暂未接入图片输入，已忽略图片附件。".into(),
+                    },
+                },
             );
         }
 
-        let turn_id = client.turn_start(&tid, serde_json::json!([{"type": "text", "text": final_command}]), None)?;
+        let turn_id = client.turn_start(
+            &tid,
+            serde_json::json!([{"type": "text", "text": final_command}]),
+            None,
+        )?;
 
         // 记录活动 turn（供 stop 中断）
-        active_turns().lock().unwrap().insert(run_id.clone(), (tid.clone(), turn_id.clone()));
+        active_turns()
+            .lock()
+            .unwrap()
+            .insert(run_id.clone(), (tid.clone(), turn_id.clone()));
 
         // 阻塞等待该 turn 完成（读线程 turn/completed 时发信号）：
         // app-server 下 turn 由 daemon 异步执行，若此处直接返回，前端 run() 的
@@ -269,6 +329,13 @@ impl CodexManager {
                 let _ = client.turn_interrupt(&tid, &turn_id);
             }
         }
+        // Hooks:用户主动停止时触发(可配置:备份未保存改动/通知等)
+        HooksService::fire(
+            "Stop",
+            &serde_json::json!({
+                "run_id": run_id,
+            }),
+        );
         Ok(())
     }
 }

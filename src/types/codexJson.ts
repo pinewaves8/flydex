@@ -6,6 +6,11 @@ export type CodexJsonEvent =
   | { type: 'item.started'; item: CodexItem }
   | { type: 'item.completed'; item: CodexItem }
   | { type: 'turn.completed'; usage?: CodexUsage }
+  | { type: 'item.agent_message.delta'; item_id: string | null; delta: string }
+  | { type: 'item.reasoning.delta'; item_id: string | null; delta: string }
+  | { type: 'item.reasoning.summary.delta'; item_id: string | null; delta: string }
+  | { type: 'turn.plan.updated'; explanation?: string | null; plan: TurnPlanStep[] }
+  | { type: 'turn.diff.updated'; diff: string }
   | { type: 'error'; message: string }
 
 /** codex 杈撳嚭鐨勯」鐩?*/
@@ -77,6 +82,8 @@ export interface CodexMessage {
     | 'tool'
     | 'error'
     | 'system'
+    | 'reasoning'
+    | 'subagent'
     | 'usage'
     | 'file_change'
     | 'plan'
@@ -113,4 +120,10 @@ export interface TurnStats {
   reasoningTokens: number
   cacheReadTokens: number
   cacheWriteTokens: number
+}
+
+/** 模型任务清单的一步(来自 codex `turn/plan/updated`,对齐 Claude Code 的 TodoWrite) */
+export interface TurnPlanStep {
+  step: string
+  status: 'pending' | 'inProgress' | 'completed'
 }

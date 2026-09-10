@@ -4,6 +4,34 @@ export default {
   content: ["./index.html", "./src/**/*.{js,ts,jsx,tsx}"],
   theme: {
     extend: {
+      keyframes: {
+        // 步骤从非完成→完成时,checkbox 缩放弹出
+        checkPop: {
+          '0%': { transform: 'scale(0.4)', opacity: '0' },
+          '60%': { transform: 'scale(1.25)' },
+          '100%': { transform: 'scale(1)', opacity: '1' },
+        },
+        // 进行中步骤的背景脉冲(蓝色 ring 慢呼吸)
+        inProgressPulse: {
+          '0%, 100%': { boxShadow: '0 0 0 0 rgb(96 165 250 / 0.4)' },
+          '50%': { boxShadow: '0 0 0 4px rgb(96 165 250 / 0)' },
+        },
+        // 整个 PlanCard 完成时的庆祝高亮
+        completeGlow: {
+          '0%': { boxShadow: '0 0 0 0 rgb(34 197 94 / 0.6)' },
+          '100%': { boxShadow: '0 0 0 8px rgb(34 197 94 / 0)' },
+        },
+        // 进度条过渡(slide-in)
+        progressFill: {
+          from: { transform: 'scaleX(0)' },
+          to: { transform: 'scaleX(1)' },
+        },
+      },
+      animation: {
+        'check-pop': 'checkPop 280ms cubic-bezier(0.34, 1.56, 0.64, 1)',
+        'progress-pulse': 'inProgressPulse 1.6s ease-in-out infinite',
+        'complete-glow': 'completeGlow 800ms ease-out 1',
+      },
       colors: {
         border: "hsl(var(--border))",
         input: "hsl(var(--input))",

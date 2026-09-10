@@ -39,7 +39,9 @@ pub fn list_directory(path: String) -> Result<DirectoryEntry, String> {
         if name.starts_with('.') {
             continue;
         }
-        let ft = entry.file_type().map_err(|e| format!("读取类型失败: {e}"))?;
+        let ft = entry
+            .file_type()
+            .map_err(|e| format!("读取类型失败: {e}"))?;
         if ft.is_dir() {
             // 快速判断是否含可见子项（遇到第一个非隐藏项即止）
             let has_children = fs::read_dir(entry.path())
@@ -59,4 +61,55 @@ pub fn list_directory(path: String) -> Result<DirectoryEntry, String> {
     dirs.sort_by(|a, b| a.name.cmp(&b.name));
     files.sort();
     Ok(DirectoryEntry { path, dirs, files })
+}
+
+/// 递归列出 workdir 下所有文件路径(@-mention 用,max_depth 默认 3)
+#[tauri::command]
+pub fn list_files(workdir: String, max_depth: Option<usize>) -> Result<Vec<String>, String> {
+    let max = max_depth.unwrap_or(3);
+    let root = Path::new(&workdir).to_path_buf();
+    let mut out: Vec<String> = Vec::new();
+    walk_files(&root, 0, max, &root, &mut out).map_err(|e| format!("扫描失败: {e}"))?;
+    out.sort();
+    // 限制返回数量防止超大仓库卡顿
+    out.truncate(2000);
+    Ok(out)
+}
+
+/// 递归收集文件相对路径(跳过隐藏目录如 .git / node_modules / target / dist)
+fn walk_files(
+    dir: &Path,
+    depth: usize,
+    max_depth: usize,
+    root: &Path,
+    out: &mut Vec<String>,
+) -> std::io::Result<()> {
+    if depth > max_depth {
+        return Ok(());
+    }
+    let rd = fs::read_dir(dir)?;
+    for entry in rd {
+        let entry = entry?;
+        let name = entry.file_name().to_string_lossy().to_string();
+        if name.starts_with('.')
+            || name == "node_modules"
+            || name == "target"
+            || name == "dist"
+            || name == "__pycache__"
+            || name == ".flydex"
+        {
+            continue;
+        }
+        let path = entry.path();
+        let ft = entry.file_type()?;
+        if ft.is_dir() {
+            walk_files(&path, depth + 1, max_depth, root, out)?;
+        } else if ft.is_file() {
+            // 存相对路径(相对 workdir),Windows 用 \ 分隔
+            let rel = path.strip_prefix(root).unwrap_or(&path);
+            let normalized = rel.to_string_lossy().replace('\\', "/");
+            out.push(normalized);
+        }
+    }
+    Ok(())
 }

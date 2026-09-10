@@ -15,6 +15,8 @@ pub fn set_current_model(model_id: String) -> Result<ModelConfigFile, String> {
     }
     cfg.current_model = model_id;
     ModelService::save(&cfg)?;
+    // 无需同步 config.toml、也无需重启 daemon:
+    // 模型与供应商随每次 thread/start(resume) 的 `config` 参数下发,下一条消息即生效。
     Ok(cfg)
 }
 
@@ -55,11 +57,7 @@ pub fn delete_provider(provider_id: String) -> Result<ModelConfigFile, String> {
     cfg.models.retain(|m| m.provider != provider_id);
     // 若当前模型被删除，回退到第一个模型
     if !cfg.models.iter().any(|m| m.id == cfg.current_model) {
-        cfg.current_model = cfg
-            .models
-            .first()
-            .map(|m| m.id.clone())
-            .unwrap_or_default();
+        cfg.current_model = cfg.models.first().map(|m| m.id.clone()).unwrap_or_default();
     }
     ModelService::save(&cfg)?;
     Ok(cfg)
@@ -71,7 +69,11 @@ pub fn upsert_model(model: ModelConfig) -> Result<ModelConfigFile, String> {
     if model.id.trim().is_empty() {
         return Err("模型 id 不能为空".into());
     }
-    if !ModelService::load().providers.iter().any(|p| p.id == model.provider) {
+    if !ModelService::load()
+        .providers
+        .iter()
+        .any(|p| p.id == model.provider)
+    {
         return Err(format!("供应商不存在: {}", model.provider));
     }
     let mut cfg = ModelService::load();
@@ -90,11 +92,7 @@ pub fn delete_model(model_id: String) -> Result<ModelConfigFile, String> {
     let mut cfg = ModelService::load();
     cfg.models.retain(|m| m.id != model_id);
     if cfg.current_model == model_id {
-        cfg.current_model = cfg
-            .models
-            .first()
-            .map(|m| m.id.clone())
-            .unwrap_or_default();
+        cfg.current_model = cfg.models.first().map(|m| m.id.clone()).unwrap_or_default();
     }
     ModelService::save(&cfg)?;
     Ok(cfg)
@@ -113,7 +111,10 @@ pub fn test_model_connection(provider_id: String) -> Result<String, String> {
     let url = format!("{}/models", provider.base_url.trim_end_matches('/'));
     let mut req = ureq::get(&url).timeout(std::time::Duration::from_secs(15));
     if !provider.api_key.trim().is_empty() {
-        req = req.set("Authorization", &format!("Bearer {}", provider.api_key.trim()));
+        req = req.set(
+            "Authorization",
+            &format!("Bearer {}", provider.api_key.trim()),
+        );
     }
     let result = req.call();
     match result {
@@ -126,7 +127,10 @@ pub fn test_model_connection(provider_id: String) -> Result<String, String> {
             } else if status == 401 || status == 403 {
                 Err(format!("认证失败（HTTP {status}）：API Key 无效或未授权"))
             } else {
-                Ok(format!("端点可达（HTTP {status}），返回 {} 字节", body.len()))
+                Ok(format!(
+                    "端点可达（HTTP {status}），返回 {} 字节",
+                    body.len()
+                ))
             }
         }
         Err(ureq::Error::Status(code, resp)) => {
@@ -139,9 +143,7 @@ pub fn test_model_connection(provider_id: String) -> Result<String, String> {
                 Err(format!("HTTP {code}：{}", truncate(&body, 200)))
             }
         }
-        Err(ureq::Error::Transport(t)) => {
-            Err(format!("无法连接：{}", t))
-        }
+        Err(ureq::Error::Transport(t)) => Err(format!("无法连接：{}", t)),
     }
 }
 
@@ -173,7 +175,10 @@ pub fn test_model(model_id: String) -> Result<String, String> {
         .timeout(std::time::Duration::from_secs(60))
         .set("Content-Type", "application/json");
     if !provider.api_key.trim().is_empty() {
-        req = req.set("Authorization", &format!("Bearer {}", provider.api_key.trim()));
+        req = req.set(
+            "Authorization",
+            &format!("Bearer {}", provider.api_key.trim()),
+        );
     }
     match req.send_json(body) {
         Ok(resp) => {

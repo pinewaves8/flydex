@@ -41,7 +41,8 @@ macro_rules! debug_log {
 }
 
 /// codex CLI 入口（全局唯一）
-const CODEX_JS: &str = r"C:\Users\peter woo\AppData\Roaming\npm\node_modules\@openai\codex\bin\codex.js";
+const CODEX_JS: &str =
+    r"C:\Users\peter woo\AppData\Roaming\npm\node_modules\@openai\codex\bin\codex.js";
 
 /// 全局单例 app-server daemon
 static APPSERVER: OnceLock<Mutex<Option<Arc<AppServerClient>>>> = OnceLock::new();
@@ -60,6 +61,15 @@ static THREAD_CWD: OnceLock<Mutex<HashMap<String, String>>> = OnceLock::new();
 
 fn thread_cwd() -> &'static Mutex<HashMap<String, String>> {
     THREAD_CWD.get_or_init(|| Mutex::new(HashMap::new()))
+}
+
+/// 最近一次 `thread/tokenUsage/updated` 中该 thread 的**本轮**用量。
+///
+/// codex 通过该通知上报真实计数(payload: `{threadId, turnId, tokenUsage:{total,last,...}}`),
+/// 在 `turn/completed` 时取出附到事件上供前端显示 / 判断空响应。
+static LAST_TURN_USAGE: OnceLock<Mutex<HashMap<String, serde_json::Value>>> = OnceLock::new();
+fn last_turn_usage() -> &'static Mutex<HashMap<String, serde_json::Value>> {
+    LAST_TURN_USAGE.get_or_init(|| Mutex::new(HashMap::new()))
 }
 
 pub fn turn_done() -> &'static Mutex<HashMap<String, mpsc::Sender<()>>> {
@@ -90,9 +100,19 @@ fn now_secs() -> i64 {
 
 /// 发往 writer 线程的消息
 enum OutMsg {
-    Request { id: i64, method: String, params: Option<serde_json::Value> },
-    Notification { method: String, params: Option<serde_json::Value> },
-    Response { id: i64, result: serde_json::Value },
+    Request {
+        id: i64,
+        method: String,
+        params: Option<serde_json::Value>,
+    },
+    Notification {
+        method: String,
+        params: Option<serde_json::Value>,
+    },
+    Response {
+        id: i64,
+        result: serde_json::Value,
+    },
 }
 
 /// 会话元信息（resume/fork 复用）
@@ -151,10 +171,17 @@ impl AppServerClient {
 
     fn spawn(app: AppHandle) -> Result<Self, String> {
         let mut cmd = Command::new("node");
-        cmd.arg(CODEX_JS).arg("app-server").arg("--listen").arg("stdio://");
-        cmd.stdin(Stdio::piped()).stdout(Stdio::piped()).stderr(Stdio::piped());
+        cmd.arg(CODEX_JS)
+            .arg("app-server")
+            .arg("--listen")
+            .arg("stdio://");
+        cmd.stdin(Stdio::piped())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped());
         cmd.env("NO_COLOR", "1");
-        let mut child = cmd.spawn().map_err(|e| format!("spawn codex app-server 失败: {e}"))?;
+        let mut child = cmd
+            .spawn()
+            .map_err(|e| format!("spawn codex app-server 失败: {e}"))?;
         let stdin = child.stdin.take().ok_or("app-server 无 stdin")?;
         let stdout = child.stdout.take().ok_or("app-server 无 stdout")?;
         let stderr = child.stderr.take().ok_or("app-server 无 stderr")?;
@@ -162,6 +189,7 @@ impl AppServerClient {
         // stderr 必须持续读取：app-server 启动/MCP 调用会写 stderr 日志，
         // 若不读会填满管道缓冲（几 KB）导致 app-server 阻塞在 stderr 写入、
         // 不再处理任何 turn 消息（thread/start 早启动可成功，turn/start 后卡死）。
+        let stderr_app = app.clone();
         let _ = std::thread::Builder::new()
             .name("appserver-stderr".into())
             .spawn(move || {
@@ -169,6 +197,20 @@ impl AppServerClient {
                 for line in reader.lines() {
                     let l = line.unwrap_or_default();
                     debug_log!("[app-server-stderr] {}", l.chars().take(400).collect::<String>());
+                    // 把 ERROR 级别的 stderr 转发到前端,否则模型调用失败时用户完全看不到原因
+                    // (run_id 留空 → 前端过滤条件 `payload.run_id &&` 为假,所有会话都能收到)
+                    if l.contains(" ERROR ") || l.contains("ERROR codex") {
+                        let _ = stderr_app.emit(
+                            "codex-output",
+                            CodexEvent {
+                                run_id: String::new(),
+                                body: CodexEventBody::Json(serde_json::json!({
+                                    "type": "error",
+                                    "message": format!("[app-server] {}", l.chars().take(500).collect::<String>()),
+                                })),
+                            },
+                        );
+                    }
                 }
             });
 
@@ -194,9 +236,12 @@ impl AppServerClient {
                             }
                             Some(serde_json::to_string(&m).unwrap_or_default())
                         }
-                        OutMsg::Response { id, result } => {
-                            Some(serde_json::to_string(&serde_json::json!({ "id": id, "result": result })).unwrap_or_default())
-                        }
+                        OutMsg::Response { id, result } => Some(
+                            serde_json::to_string(
+                                &serde_json::json!({ "id": id, "result": result }),
+                            )
+                            .unwrap_or_default(),
+                        ),
                     };
                     let Some(payload) = payload else { continue };
                     if w.write_all(payload.as_bytes()).is_err() {
@@ -210,8 +255,10 @@ impl AppServerClient {
             .map_err(|e| format!("spawn writer 线程失败: {e}"))?;
         let _ = writer;
 
-        let pending: Arc<Mutex<HashMap<i64, mpsc::Sender<serde_json::Value>>>> = Arc::new(Mutex::new(HashMap::new()));
-        let run_registry: Arc<Mutex<HashMap<String, String>>> = Arc::new(Mutex::new(HashMap::new()));
+        let pending: Arc<Mutex<HashMap<i64, mpsc::Sender<serde_json::Value>>>> =
+            Arc::new(Mutex::new(HashMap::new()));
+        let run_registry: Arc<Mutex<HashMap<String, String>>> =
+            Arc::new(Mutex::new(HashMap::new()));
 
         let client = Self {
             _child: child,
@@ -257,7 +304,10 @@ impl AppServerClient {
                 for rid in runs {
                     let _ = app_r.emit(
                         "codex-done",
-                        CodexEvent { run_id: rid, body: CodexEventBody::Done { exit_code: 1 } },
+                        CodexEvent {
+                            run_id: rid,
+                            body: CodexEventBody::Done { exit_code: 1 },
+                        },
                     );
                 }
                 run_registry.lock().unwrap().clear();
@@ -281,7 +331,11 @@ impl AppServerClient {
     /// 发送请求并等待响应（超时兜底）。
     /// 瞬时错误自动重试（6.4 ③）：-32001 Server overloaded（官方建议重试）或
     /// 只读查询类方法超时；业务失败（thread not found / 审批拒绝 / 参数错误）不重试。
-    pub fn request(&self, method: &str, params: Option<serde_json::Value>) -> Result<serde_json::Value, String> {
+    pub fn request(
+        &self,
+        method: &str,
+        params: Option<serde_json::Value>,
+    ) -> Result<serde_json::Value, String> {
         const MAX_RETRY: u32 = 3;
         let mut attempt: u32 = 0;
         loop {
@@ -329,21 +383,34 @@ impl AppServerClient {
         err.contains("超时") && RETRYABLE_TIMEOUT_METHODS.contains(&method)
     }
 
-    fn request_once(&self, method: &str, params: Option<serde_json::Value>) -> Result<serde_json::Value, String> {
+    fn request_once(
+        &self,
+        method: &str,
+        params: Option<serde_json::Value>,
+    ) -> Result<serde_json::Value, String> {
         let id = self.next_id.fetch_add(1, Ordering::Relaxed);
         debug_log!("[flydex-appserver] >>> request {method} id={id}");
         let (tx, rx) = mpsc::channel();
         self.pending.lock().unwrap().insert(id, tx);
         self.out_tx
-            .send(OutMsg::Request { id, method: method.to_string(), params })
+            .send(OutMsg::Request {
+                id,
+                method: method.to_string(),
+                params,
+            })
             .map_err(|e| format!("daemon 通道已关闭: {e}"))?;
         match rx.recv_timeout(Duration::from_secs(90)) {
             Ok(v) => {
                 if v.is_null() {
-                    debug_log!("[flydex-appserver] <<< request {method} id={id} NULL (daemon exited)");
+                    debug_log!(
+                        "[flydex-appserver] <<< request {method} id={id} NULL (daemon exited)"
+                    );
                     Err(format!("请求 {method} 无响应（daemon 已退出）"))
                 } else if let Some(err) = v.get("error") {
-                    debug_log!("[flydex-appserver] <<< request {method} id={id} ERROR {:?}", err);
+                    debug_log!(
+                        "[flydex-appserver] <<< request {method} id={id} ERROR {:?}",
+                        err
+                    );
                     let code = err.get("code").and_then(|c| c.as_i64()).unwrap_or(0);
                     let msg = err.get("message").and_then(|m| m.as_str()).unwrap_or("");
                     Err(format!("{method} 错误: code={code} message={msg}"))
@@ -362,7 +429,10 @@ impl AppServerClient {
 
     /// 发送通知（不等待响应）
     pub fn notify(&self, method: &str, params: Option<serde_json::Value>) {
-        let _ = self.out_tx.send(OutMsg::Notification { method: method.to_string(), params });
+        let _ = self.out_tx.send(OutMsg::Notification {
+            method: method.to_string(),
+            params,
+        });
     }
 
     /// 对服务端请求（审批等）响应 result
@@ -405,17 +475,42 @@ impl AppServerClient {
             .and_then(|v| v.as_str())
             .unwrap_or("")
             .to_string();
-        thread_cwd().lock().unwrap().insert(thread_id.clone(), cwd.clone());
+        thread_cwd()
+            .lock()
+            .unwrap()
+            .insert(thread_id.clone(), cwd.clone());
         self.thread_registry.lock().unwrap().insert(
             thread_id.clone(),
-            ThreadMeta { thread_id: thread_id.clone(), model, cwd },
+            ThreadMeta {
+                thread_id: thread_id.clone(),
+                model,
+                cwd,
+            },
         );
         Ok(thread_id)
     }
 
     /// 恢复已有会话 thread（app-server 重启后 thread 需重新 open，否则 turn/start 报 thread not found）
-    pub fn thread_resume(&self, thread_id: &str) -> Result<String, String> {
-        let params = serde_json::json!({ "threadId": thread_id });
+    /// 恢复 thread。
+    ///
+    /// `overrides` 为 thread/start 用的参数表(cwd / approvalPolicy / sandbox / config …),
+    /// 这里只取出 resume 支持的子集并合并 —— 关键是 **`config`**:
+    /// 带上它,resume 的 thread 就会用当前模型/供应商,而不是创建时绑定的那个。
+    pub fn thread_resume(
+        &self,
+        thread_id: &str,
+        overrides: serde_json::Value,
+    ) -> Result<String, String> {
+        let mut params = serde_json::Map::new();
+        params.insert("threadId".into(), serde_json::Value::String(thread_id.to_string()));
+        for key in ["cwd", "approvalPolicy", "approvalsReviewer", "sandbox", "config"] {
+            if let Some(v) = overrides.get(key) {
+                if !v.is_null() {
+                    params.insert(key.to_string(), v.clone());
+                }
+            }
+        }
+        let params = serde_json::Value::Object(params);
         let resp = self.request("thread/resume", Some(params))?;
         let tid = resp
             .get("thread")
@@ -433,17 +528,29 @@ impl AppServerClient {
             .and_then(|v| v.as_str())
             .unwrap_or("")
             .to_string();
-        thread_cwd().lock().unwrap().insert(tid.clone(), cwd.clone());
+        thread_cwd()
+            .lock()
+            .unwrap()
+            .insert(tid.clone(), cwd.clone());
         self.thread_registry.lock().unwrap().insert(
             tid.clone(),
-            ThreadMeta { thread_id: tid.clone(), model, cwd },
+            ThreadMeta {
+                thread_id: tid.clone(),
+                model: model.clone(),
+                cwd,
+            },
         );
+        // model 仅用于日志(不再需要 generation 比对:config 已随 resume 下发)
+        let _ = model;
         Ok(tid)
     }
 
     /// 记录 thread 的最近 run_id（事件路由）
     pub fn bind_run(&self, thread_id: &str, run_id: &str) {
-        self.run_registry.lock().unwrap().insert(thread_id.to_string(), run_id.to_string());
+        self.run_registry
+            .lock()
+            .unwrap()
+            .insert(thread_id.to_string(), run_id.to_string());
     }
 
     /// 发送一轮消息；返回 (turn_id, 关联 thread_id)
@@ -471,15 +578,22 @@ impl AppServerClient {
 
     /// 中断 turn
     pub fn turn_interrupt(&self, thread_id: &str, turn_id: &str) -> Result<(), String> {
-        self.request("turn/interrupt", Some(serde_json::json!({
-            "threadId": thread_id, "turnId": turn_id
-        })))?;
+        self.request(
+            "turn/interrupt",
+            Some(serde_json::json!({
+                "threadId": thread_id, "turnId": turn_id
+            })),
+        )?;
         Ok(())
     }
 
     /// 动态切换审批模式（thread/settings/update）
     #[allow(dead_code)]
-    pub fn thread_settings_update(&self, thread_id: &str, patch: serde_json::Value) -> Result<(), String> {
+    pub fn thread_settings_update(
+        &self,
+        thread_id: &str,
+        patch: serde_json::Value,
+    ) -> Result<(), String> {
         let mut params = serde_json::json!({ "threadId": thread_id });
         if let Some(obj) = patch.as_object() {
             for (k, v) in obj {
@@ -516,13 +630,23 @@ impl AppServerClient {
             // ServerRequest（服务端请求，需客户端响应）
             let id = msg["id"].as_i64().unwrap_or(-1);
             let method = msg["method"].as_str().unwrap_or("").to_string();
-            let params = msg.get("params").cloned().unwrap_or(serde_json::Value::Null);
+            let params = msg
+                .get("params")
+                .cloned()
+                .unwrap_or(serde_json::Value::Null);
             Self::handle_server_request(id, &method, &params, run_registry, app);
             return;
         }
         // Notification
-        let method = msg.get("method").and_then(|v| v.as_str()).unwrap_or("").to_string();
-        let params = msg.get("params").cloned().unwrap_or(serde_json::Value::Null);
+        let method = msg
+            .get("method")
+            .and_then(|v| v.as_str())
+            .unwrap_or("")
+            .to_string();
+        let params = msg
+            .get("params")
+            .cloned()
+            .unwrap_or(serde_json::Value::Null);
         Self::handle_notification(&method, &params, run_registry, app);
     }
 
@@ -534,11 +658,22 @@ impl AppServerClient {
         run_registry: &Mutex<HashMap<String, String>>,
         app: &AppHandle,
     ) {
-        let thread_id = params.get("threadId").and_then(|v| v.as_str()).unwrap_or("");
-        let run_id = run_registry.lock().unwrap().get(thread_id).cloned().unwrap_or_default();
+        let thread_id = params
+            .get("threadId")
+            .and_then(|v| v.as_str())
+            .unwrap_or("");
+        let run_id = run_registry
+            .lock()
+            .unwrap()
+            .get(thread_id)
+            .cloned()
+            .unwrap_or_default();
 
-            // 审批请求 → 先判断再执行（Claude Code 权限模型：deny/allow/ask）
-        if method.contains("requestApproval") || method.contains("Approval") || method == "execCommandApproval" {
+        // 审批请求 → 先判断再执行（Claude Code 权限模型：deny/allow/ask）
+        if method.contains("requestApproval")
+            || method.contains("Approval")
+            || method == "execCommandApproval"
+        {
             let command = params
                 .get("command")
                 .and_then(|v| v.as_str())
@@ -574,14 +709,20 @@ impl AppServerClient {
             );
             debug_log!("[flydex-appserver] approval id={approval_id} decision={} method={method} command={}", decision.tag(), command.chars().take(200).collect::<String>());
             // Hooks：审批请求事件（携带命令与决策结果，对齐 Claude Code 权限钩子）
-            HooksService::fire("ApprovalRequested", &serde_json::json!({
-                "command": command,
-                "decision": decision.tag(),
-            }));
+            HooksService::fire(
+                "ApprovalRequested",
+                &serde_json::json!({
+                    "command": command,
+                    "decision": decision.tag(),
+                }),
+            );
             match &decision {
                 // deny：工具执行前直接拒绝（先判断再执行），并记录审计
                 RuleDecision::BuiltinDeny(reason) | RuleDecision::UserDeny(reason) => {
-                    Self::respond_global(id, serde_json::json!({ "decision": "decline", "reason": reason }));
+                    Self::respond_global(
+                        id,
+                        serde_json::json!({ "decision": "decline", "reason": reason }),
+                    );
                     let _ = SecurityService::add_history(ApprovalRecord {
                         id: approval_id,
                         timestamp: now_secs(),
@@ -605,7 +746,11 @@ impl AppServerClient {
                 RuleDecision::Ask => {
                     pending_approvals().lock().unwrap().insert(
                         approval_id,
-                        PendingApproval { server_id: id, command: command.clone(), method: method.to_string() },
+                        PendingApproval {
+                            server_id: id,
+                            command: command.clone(),
+                            method: method.to_string(),
+                        },
                     );
                 }
             }
@@ -654,7 +799,12 @@ impl AppServerClient {
                 .unwrap_or("")
                 .to_string();
         }
-        let run_id = run_registry.lock().unwrap().get(&thread_id).cloned().unwrap_or_default();
+        let run_id = run_registry
+            .lock()
+            .unwrap()
+            .get(&thread_id)
+            .cloned()
+            .unwrap_or_default();
 
         let event: Option<serde_json::Value> = match method {
             "thread/started" => {
@@ -674,6 +824,20 @@ impl AppServerClient {
             "item/started" => params
                 .get("item")
                 .map(|item| serde_json::json!({ "type": "item.started", "item": map_item(item) })),
+            // codex 的真实 token 计数通知:`tokenUsage.last` 即本轮用量
+            "thread/tokenUsage/updated" => {
+                if let Some(last) = params
+                    .get("tokenUsage")
+                    .and_then(|t| t.get("last"))
+                    .cloned()
+                {
+                    last_turn_usage()
+                        .lock()
+                        .unwrap()
+                        .insert(thread_id.clone(), last);
+                }
+                None
+            }
             "item/completed" => {
                 // Hooks：按 item 类型触发对应事件（对齐 Claude Code PostToolUse / FileChanged 等）
                 if let Some(item) = params.get("item") {
@@ -688,22 +852,27 @@ impl AppServerClient {
                         HooksService::fire(ev, item);
                     }
                 }
-                params
-                    .get("item")
-                    .map(|item| serde_json::json!({ "type": "item.completed", "item": map_item(item) }))
+                params.get("item").map(
+                    |item| serde_json::json!({ "type": "item.completed", "item": map_item(item) }),
+                )
             }
             "turn/completed" => {
                 // Hooks：本轮结束
                 HooksService::fire("TurnCompleted", params);
-                let usage = params.get("usage").cloned().unwrap_or(serde_json::Value::Null);
-                let mut ev = serde_json::json!({ "type": "turn.completed", "thread_id": thread_id });
-                if !usage.is_null() {
-                    ev["usage"] = usage;
+                // 本轮真实用量来自 thread/tokenUsage/updated(取出即清,避免下轮串味)
+                let usage = last_turn_usage().lock().unwrap().remove(&thread_id);
+                let mut ev =
+                    serde_json::json!({ "type": "turn.completed", "thread_id": thread_id });
+                if let Some(u) = usage {
+                    ev["usage"] = u;
                 }
                 // 本轮结束 → 通知前端结束 running（codex-done Done）
                 let _ = app.emit(
                     "codex-done",
-                    CodexEvent { run_id: run_id.clone(), body: CodexEventBody::Done { exit_code: 0 } },
+                    CodexEvent {
+                        run_id: run_id.clone(),
+                        body: CodexEventBody::Done { exit_code: 0 },
+                    },
                 );
                 // 通知 run_command 的 turn 等待者（invoke 在 turn 结束后才返回）
                 if let Some(tx) = turn_done().lock().unwrap().remove(&run_id) {
@@ -717,13 +886,39 @@ impl AppServerClient {
                 }
                 Some(ev)
             }
-            // 流式增量暂不单独推（前端用 item.completed 完整文本打字机）
-            "item/agentMessage/delta" | "item/commandExecution/outputDelta" | "item/plan/delta" => None,
+            // 模型的任务清单(codex 原生,等价 Claude Code 的 TodoWrite):
+            // 结构化 step + status,直接驱动进度显示,不再靠前端猜
+            "turn/plan/updated" => Some(serde_json::json!({
+                "type": "turn.plan.updated",
+                "thread_id": thread_id,
+                "explanation": params.get("explanation").cloned().unwrap_or(serde_json::Value::Null),
+                "plan": params.get("plan").cloned().unwrap_or(serde_json::Value::Array(vec![])),
+            })),
+            // 本轮 diff(codex 原生):文件变更卡片可直接用它,不必扫 git 反推
+            "turn/diff/updated" => params.get("diff").and_then(|d| d.as_str()).map(|diff| {
+                serde_json::json!({
+                    "type": "turn.diff.updated",
+                    "thread_id": thread_id,
+                    "diff": diff,
+                })
+            }),
+            // 流式增量(codex 原生):直接转发,前端实时累积显示。
+            // 取代了旧的「等 item.completed 再用定时器假打字机」——那让首字延迟等于整段生成时间,
+            // 并且在真实耗时之上额外叠加固定速率的"打字"时间。
+            "item/agentMessage/delta" => delta_event("item.agent_message.delta", params),
+            // 思考有两条流:summary(模型自写的精简摘要,OpenAI 系模型才有)
+            // 与 text(原始思维链,可达数千字符)。前端优先用 summary。
+            "item/reasoning/summaryTextDelta" => {
+                delta_event("item.reasoning.summary.delta", params)
+            }
+            "item/reasoning/textDelta" => delta_event("item.reasoning.delta", params),
             "error" => {
                 HooksService::fire("TurnError", params);
-                params.get("message").map(|m| serde_json::json!({
-                    "type": "error", "message": m,
-                }))
+                params.get("message").map(|m| {
+                    serde_json::json!({
+                        "type": "error", "message": m,
+                    })
+                })
             }
             // warning（MCP 启动/限流类）不映射为前端 error，避免误报
             "warning" => None,
@@ -731,13 +926,32 @@ impl AppServerClient {
         };
 
         if let Some(ev) = event {
-            debug_log!("[flydex-appserver] emit codex-output run_id={run_id} event={}", ev);
+            debug_log!(
+                "[flydex-appserver] emit codex-output run_id={run_id} event={}",
+                ev
+            );
             let _ = app.emit(
                 "codex-output",
-                CodexEvent { run_id, body: CodexEventBody::Json(ev) },
+                CodexEvent {
+                    run_id,
+                    body: CodexEventBody::Json(ev),
+                },
             );
         }
     }
+}
+
+/// 把 `{threadId, turnId, itemId, delta}` 形态的增量通知转成前端事件
+fn delta_event(kind: &str, params: &serde_json::Value) -> Option<serde_json::Value> {
+    let delta = params.get("delta").and_then(|d| d.as_str())?;
+    if delta.is_empty() {
+        return None;
+    }
+    Some(serde_json::json!({
+        "type": kind,
+        "item_id": params.get("itemId").cloned().unwrap_or(serde_json::Value::Null),
+        "delta": delta,
+    }))
 }
 
 /// 把 app-server item（camelCase）转成前端兼容的 exec 风格 item（snake_case）
@@ -759,7 +973,10 @@ fn map_item(item: &serde_json::Value) -> serde_json::Value {
         "error" => "error",
         other => other,
     };
-    out.insert("type".to_string(), serde_json::Value::String(mapped_type.to_string()));
+    out.insert(
+        "type".to_string(),
+        serde_json::Value::String(mapped_type.to_string()),
+    );
 
     if let Some(obj) = item.as_object() {
         for (k, v) in obj {
