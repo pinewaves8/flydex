@@ -13,5 +13,4 @@ pub mod model;
 pub mod security;
 pub mod skill;
 pub mod storage;
-pub mod system_prompt;
 pub mod tasks;

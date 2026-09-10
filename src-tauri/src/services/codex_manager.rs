@@ -192,13 +192,6 @@ impl CodexManager {
             final_command = format!("{}\n\n{}", memory_block.trim_end(), final_command);
         }
 
-        // 项目规范(AGENTS.md / CLAUDE.md)不再拼进 user message —— 否则:
-        //   1) 每轮重复发送(浪费 token)
-        //   2) 会被写进 thread 历史,随轮次不断累积(几十轮后上下文爆炸)
-        // 改为通过 thread/start 的 developer_instructions 注入到"系统层",与 Claude Code 一致。
-        let project_context = crate::services::system_prompt::ProjectContextLoader::build_context(
-            workdir.as_deref().unwrap_or(""),
-        );
         // 搜索预取（确定性兜底）：命中搜索意图时，由 flydex 代检索一次并注入结果，
         // 不依赖模型自觉调用 web_search。仅命中搜索触发词的指令生效，不影响其他对话。
         if let Some(prefetch) = Self::prefetch_search(&final_command) {
@@ -224,13 +217,16 @@ impl CodexManager {
             "approvalsReviewer": "user",
             "sandbox": sandbox,
         });
-        // 模型 + 供应商随请求下发(codex 的 per-thread config 层,优先级高于全局 config.toml)。
-        // 这样既不改用户的 Codex CLI 配置,也无需重启 daemon;resume 同样携带,
-        // 因此不存在「线程绑死旧 provider → 拿新模型名请求旧厂商 → unknown model」。
-        match crate::services::model::ModelService::thread_config(session_model.as_deref()) {
-            Some(cfg_map) => {
-                tp["config"] = serde_json::Value::Object(cfg_map);
-            }
+        // per-thread config 层(优先级高于全局 ~/.codex/config.toml):
+        // 1) 模型 + 供应商 —— 这样既不改用户的 Codex CLI 配置,也无需重启 daemon;
+        //    resume 同样携带,不存在「线程绑死旧 provider → unknown model」。
+        // 2) 项目文档候选名 —— 交给 codex 自己的 AGENTS.md 加载器(它原生就读
+        //    AGENTS.override.md → AGENTS.md,并按 project_doc_fallback_filenames
+        //    逐个回退),我们不再自行读取与注入,避免同一份文件每轮送两遍。
+        let mut cfg_map = match crate::services::model::ModelService::thread_config(
+            session_model.as_deref(),
+        ) {
+            Some(m) => m,
             None => {
                 let _ = app.emit(
                     "codex-output",
@@ -241,13 +237,15 @@ impl CodexManager {
                         },
                     },
                 );
+                serde_json::Map::new()
             }
-        }
-        // 项目规范作为 developer instructions 注入(系统层,不占对话历史)
-        if !project_context.trim().is_empty() {
-            tp["developer_instructions"] =
-                serde_json::Value::String(project_context.trim().to_string());
-        }
+        };
+        // codex 在每个目录按顺序取首个命中,故这些只在没有 AGENTS.md 时才生效
+        cfg_map.insert(
+            "project_doc_fallback_filenames".into(),
+            serde_json::json!(["CLAUDE.md", "CONVENTIONS.md", ".flydex/CONVENTIONS.md"]),
+        );
+        tp["config"] = serde_json::Value::Object(cfg_map);
 
         let tid = match thread_id {
             Some(tid) if !tid.trim().is_empty() => match client.thread_resume(&tid, tp.clone()) {

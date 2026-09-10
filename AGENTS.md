@@ -1,8 +1,8 @@
 # Flydex 项目规范
 
-> 本文件是 Flydex 的开发规范。它同时会被 codex 与 Flydex 自身加载
-> (Flydex 的 `system_prompt.rs` 会在项目根查找 `AGENTS.md`)，所以这里的约定
-> 对"人写代码"和"AI 写代码"同等生效。
+> 本文件是 Flydex 的开发规范。它由 **codex 原生加载**（`AGENTS.override.md` →
+> `AGENTS.md`，从项目根逐级到 cwd 拼接）。因此无论是用 codex CLI、还是用 Flydex
+> 本身（Flydex 也走同一套 harness）开发本项目，这些约定都同等生效。
 
 ---
 
@@ -58,6 +58,7 @@ codex/codex-rs/app-server-protocol/src/protocol/v2/          # 各请求/通知�
 | 任务清单 | `turn/plan/updated`（`Vec<TurnPlanStep{step, status}>`） |
 | 本轮 diff | `turn/diff/updated` |
 | Token 用量 | `thread/tokenUsage/updated` |
+| 项目规范加载 | codex 原生读取 `AGENTS.override.md` → `AGENTS.md`（从项目根逐级到 cwd 拼接），可用 `project_doc_fallback_filenames` 追加 `CLAUDE.md` 等回退名 |
 | 审查 diff | `git_review_diff` + `write_review_diff`（Flydex 自有，配合 codex 审查模式） |
 
 ### 2.4 待收敛清单（按收益排序）
@@ -65,7 +66,6 @@ codex/codex-rs/app-server-protocol/src/protocol/v2/          # 各请求/通知�
 | 优先级 | 目标 | 现状 | 应改为 |
 |---|---|---|---|
 | 高 | 会话搜索 | 每次按键加载全部会话文件、逐条比对 | `thread/search` / `thread/searchOccurrences` |
-| 高 | AGENTS.md 注入 | `system_prompt.rs` 自读+截断，经 `developer_instructions` 注入 → **每轮重复发送同一份文件** | 传 `{"project_doc_fallback_filenames": [...]}` 让 codex 自己读，删除 `system_prompt.rs` |
 | 中 | 上下文压缩 | 手动按钮 + 自实现摘要 | `thread/compact/start` + `thread/compacted` 通知，可做自动压缩 |
 | 中 | 会话/项目存储 | 自有 `storage.rs`（含回收站/fork/导出）与 `projects.json` | `thread/*` / `project/*`，单一数据源，并白得 `thread/revert` 回退能力 |
 | 低 | 文件变更检测 | 扫 `git_status_changes` 反推 | `turn/diff/updated` / `fs/changed` |
