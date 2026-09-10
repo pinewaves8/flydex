@@ -200,6 +200,26 @@ fn main() {
         .count();
     println!("    其中 provider 以 flydex_ 开头(即 Flydex 创建的线程): {flydex_owned} 条");
 
+    // ── 2a. 回收站面板依赖的 archived 列表 ──
+    println!("
+== 2a. thread/list archived=true(回收站面板的数据源) ==");
+    match p.request(
+        "thread/list",
+        Some(json!({
+            "sortKey": "updated_at", "sortDirection": "desc",
+            "limit": 100, "archived": true, "useStateDbOnly": true,
+        })),
+    ) {
+        Ok(v) => {
+            let n = v.get("data").and_then(|d| d.as_array()).map(|a| a.len()).unwrap_or(0);
+            println!("OK  归档的线程 {n} 条");
+        }
+        Err(e) => {
+            println!("FAIL(回收站面板会空): {e}");
+            failures.push(format!("archived 列表不可用: {e}"));
+        }
+    }
+
     // ── 2b. thread/list 带 projectId 过滤(实验性参数,可能是双 Option) ──
     println!("
 == 2b. thread/list 的 projectId 过滤 ==");
@@ -474,6 +494,127 @@ fn main() {
         }
     }
 
+
+    // ── 9. --fork-probe:验证级联删除的前提 ──
+    //
+    // 自建线程 → fork 出子线程 → 按「子先父后」删除,**全程不碰任何已有线程**。
+    // 为什么必须自建:待验证的正是"codex 会不会拒绝删被引用的父线程",而这一步本身就是
+    // 不可逆的 —— 拿别人的会话去赌这个前提,一旦不成立就是数据损失。
+    if args.iter().any(|a| a == "--fork-probe") {
+        println!("\n== 9. 级联删除的前提(fork 引用 / 删除顺序) ==");
+        let probe_root =
+            std::env::temp_dir().join(format!("flydex-fork-probe-{}", std::process::id()));
+        std::fs::create_dir_all(&probe_root).ok();
+
+        let parent = p
+            .request(
+                "thread/start",
+                Some(json!({ "cwd": probe_root.to_string_lossy(), "ephemeral": false })),
+            )
+            .and_then(|v| {
+                v.get("thread")
+                    .and_then(|t| t.get("id"))
+                    .and_then(|i| i.as_str())
+                    .map(str::to_string)
+                    .ok_or_else(|| "thread/start 无 thread.id".to_string())
+            });
+
+        match parent {
+            Err(e) => failures.push(format!("无法建探针线程: {e}")),
+            Ok(parent_id) => {
+                println!("    自建父线程 {}", &parent_id[..8.min(parent_id.len())]);
+                // 跑一小轮:fork 需要一个已完成的分叉点
+                let _ = p.request(
+                    "turn/start",
+                    Some(json!({
+                        "threadId": parent_id,
+                        "input": [{ "type": "text", "text": "reply with the single word: ok" }],
+                    })),
+                );
+                // 等本轮结束(未结束的轮次不能被 fork 引用)
+                let deadline = std::time::Instant::now() + std::time::Duration::from_secs(120);
+                let mut last_turn: Option<String> = None;
+                while std::time::Instant::now() < deadline {
+                    if let Ok(v) = p.request(
+                        "thread/turns/list",
+                        Some(json!({ "threadId": parent_id, "limit": 5, "itemsView": "full" })),
+                    ) {
+                        last_turn = v
+                            .get("data")
+                            .and_then(|d| d.as_array())
+                            .and_then(|a| {
+                                a.iter().find(|t| {
+                                    t.get("status").and_then(|s| s.as_str()) != Some("inProgress")
+                                })
+                            })
+                            .and_then(|t| t.get("id"))
+                            .and_then(|v| v.as_str())
+                            .map(str::to_string);
+                        if last_turn.is_some() {
+                            break;
+                        }
+                    }
+                    std::thread::sleep(std::time::Duration::from_secs(2));
+                }
+
+                match last_turn {
+                    None => println!("    ⚠ 本轮未在超时内完成,跳过 fork 测试"),
+                    Some(ltt) => {
+                        let child = p
+                            .request(
+                                "thread/fork",
+                                Some(json!({ "threadId": parent_id, "lastTurnId": ltt })),
+                            )
+                            .and_then(|v| {
+                                v.get("thread")
+                                    .and_then(|t| t.get("id"))
+                                    .and_then(|i| i.as_str())
+                                    .map(str::to_string)
+                                    .ok_or_else(|| "fork 无 thread.id".to_string())
+                            });
+                        match child {
+                            Err(e) => println!("    fork 失败: {e}"),
+                            Ok(child_id) => {
+                                println!("    fork 出子线程 {}", &child_id[..8.min(child_id.len())]);
+
+                                // (1) 有子线程时删父 → 预期被拒
+                                match p
+                                    .request("thread/delete", Some(json!({ "threadId": parent_id })))
+                                {
+                                    Err(e) => {
+                                        let m: String = e.chars().take(140).collect();
+                                        println!("    [1] 有分支时删父 → 被拒绝 ✔(级联排序因此必需)");
+                                        println!("        {m}");
+                                    }
+                                    Ok(_) => {
+                                        // 这是**已知结论**而非缺陷:codex 0.149.1 不拒绝。
+                                        // 记在这里是为了下次有人重读源码时别再把注释当真。
+                                        println!("    [1] 有分支时删父 → 成功(与源码注释相反)");
+                                        println!("        ⇒ 级联不是协议要求,而是产品决定:不删子就会留孤儿");
+                                    }
+                                }
+
+                                // (2) 先删子
+                                match p
+                                    .request("thread/delete", Some(json!({ "threadId": child_id })))
+                                {
+                                    Ok(_) => println!("    [2] 先删子 → 成功 ✔"),
+                                    Err(e) => failures.push(format!("删子失败: {e}")),
+                                }
+                                // (3) 再删父(此时已无引用)
+                                match p
+                                    .request("thread/delete", Some(json!({ "threadId": parent_id })))
+                                {
+                                    Ok(_) => println!("    [3] 再删父 → 成功 ✔(叶子优先的顺序可行)"),
+                                    Err(e) => failures.push(format!("删父失败: {e}")),
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
 
     println!("\n================ 结论 ================");
     if failures.is_empty() {

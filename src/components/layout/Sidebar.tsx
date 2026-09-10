@@ -16,7 +16,7 @@ import { useEffect, useRef, useState } from 'react'
 
 import { useProjectStore } from '@/stores/useProjectStore'
 import { useUIStore, type View } from '@/stores/useUIStore'
-import { threadTitle } from '@/types/thread'
+import { forkDescendantCount, threadTitle } from '@/types/thread'
 import type { ThreadRow } from '@/types/thread'
 
 const NAV_ITEMS: { view: View; label: string; icon: typeof MessageSquare }[] = [
@@ -145,8 +145,16 @@ export function Sidebar() {
 
   const handlePurge = async (e: React.MouseEvent, thread: ThreadRow) => {
     e.stopPropagation()
+    // 后端会连同 fork 出的后代一起删(codex 不级联,只删父会留下孤儿),先把量级告诉用户
+    const forks = forkDescendantCount([...threads, ...archivedThreads], thread.id)
+    const extra =
+      forks > 0
+        ? `
+将一并删除由它分叉出的 ${forks} 个会话。`
+        : ''
     const ok = window.confirm(
-      `永久删除「${threadTitle(thread)}」？\n此操作不可撤销，且会删除磁盘上的会话记录。`,
+      `永久删除「${threadTitle(thread)}」？${extra}
+此操作不可撤销，且会删除磁盘上的会话记录。`,
     )
     if (!ok) return
     await deleteThread(thread.id)

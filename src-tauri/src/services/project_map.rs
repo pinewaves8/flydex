@@ -139,6 +139,30 @@ impl ProjectMap {
         ProjectMapFile::load().projects
     }
 
+    /// 查某个 Flydex 项目对应的 codex project id
+    ///
+    /// 映射表是缓存;查不到说明该项目还没同步过(P1 的 `sync` 每次启动都会跑),
+    /// 此时调用方应退化为「只删本地条目」。
+    pub fn codex_project_id_for(flydex_project_id: &str) -> Option<String> {
+        ProjectMapFile::load()
+            .projects
+            .get(flydex_project_id)
+            .map(|e| e.codex_project_id.clone())
+    }
+
+    /// 删掉指向某个 codex project 的映射条目(项目被删后调用)
+    pub fn remove_mapping(codex_project_id: &str) -> Result<(), String> {
+        let mut file = ProjectMapFile::load();
+        let before = file.projects.len();
+        file.projects
+            .retain(|_, e| e.codex_project_id != codex_project_id);
+        if file.projects.len() == before {
+            return Ok(());
+        }
+        file.updated_at = now_ms();
+        file.save()
+    }
+
     /// 把 Flydex 的项目列表同步到 codex,并回填已有线程的归属
     ///
     /// 幂等,可重复调用。**单个项目失败不中断整体**,问题收集进 `warnings`。

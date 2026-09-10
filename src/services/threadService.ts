@@ -1,6 +1,7 @@
 import { invoke } from '@tauri-apps/api/core'
 
 import type {
+  CascadeOutcome,
   ProjectEntry,
   ThreadSettings,
   ProjectSyncOutcome,
@@ -105,11 +106,11 @@ export const threadService = {
   /**
    * 永久删除（**不可逆**，rollout 也会被删）
    *
-   * 被 fork 引用时 codex 会拒绝 —— 错误**原样抛出**，调用方必须展示给用户，
-   * 不能吞(第三原则)。级联删除后代见 P5。
+   * 连同由它 fork 出的后代一起删（codex 自己不级联，只删父会留下孤儿分支）。
+   * 返回值里的 `failures` 非空时调用方**必须展示**，不能吞（第三原则）。
    */
-  delete(threadId: string): Promise<void> {
-    return invoke<void>('delete_thread', { threadId })
+  delete(threadId: string): Promise<CascadeOutcome> {
+    return invoke<CascadeOutcome>('delete_thread', { threadId })
   },
 
   /** 一级搜索:命中的会话 + 片段 */

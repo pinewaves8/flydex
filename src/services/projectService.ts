@@ -1,6 +1,7 @@
 import { invoke } from '@tauri-apps/api/core'
 
 import type { Project } from '@/types/project'
+import type { ProjectDeleteOutcome } from '@/types/thread'
 
 /**
  * 项目管理 Service
@@ -24,7 +25,8 @@ export const projectService = {
   },
 
   /** 删除项目 */
-  async delete(projectId: string): Promise<void> {
-    await invoke('delete_project', { projectId })
+  /** 删除项目（连带删除其全部会话）。返回结果里可能带 failures，调用方需展示 */
+  async delete(projectId: string): Promise<ProjectDeleteOutcome> {
+    return invoke<ProjectDeleteOutcome>('delete_project', { projectId })
   },
 }

@@ -114,3 +114,48 @@ export interface ThreadSettings {
   /** 毫秒 */
   updatedAt: number
 }
+
+/**
+ * 一次级联删除的结果
+ *
+ * `failures` 非空时必须展示给用户 —— 删除是不可逆的,静默吞掉会让人
+ * 以为删干净了(第三原则)。
+ */
+export interface CascadeOutcome {
+  deleted: string[]
+  failures: string[]
+}
+
+/** 删项目的结果 */
+export interface ProjectDeleteOutcome {
+  deletedThreads: number
+  /** 线程有删不掉时保持 false —— 此时 project 与本地条目都保留,便于重试 */
+  projectDeleted: boolean
+  failures: string[]
+}
+
+/**
+ * 某个会话的 fork 后代数量(用于删除前的确认文案)
+ *
+ * 只基于**当前已加载的列表**统计:跨项目/已归档的分支可能不在其中。
+ * 真正的删除由后端拉全量 fork 图完成,所以这里的数字只是给用户的量级提示。
+ */
+export function forkDescendantCount(all: ThreadRow[], rootId: string): number {
+  const children = new Map<string, string[]>()
+  for (const t of all) {
+    if (t.forkedFromId) {
+      const arr = children.get(t.forkedFromId) ?? []
+      arr.push(t.id)
+      children.set(t.forkedFromId, arr)
+    }
+  }
+  const seen = new Set<string>()
+  const stack = [...(children.get(rootId) ?? [])]
+  while (stack.length) {
+    const id = stack.pop()!
+    if (seen.has(id)) continue
+    seen.add(id)
+    stack.push(...(children.get(id) ?? []))
+  }
+  return seen.size
+}

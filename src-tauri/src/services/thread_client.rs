@@ -205,7 +205,9 @@ impl ThreadClient {
             .map(|_| ())
     }
 
-    /// **硬删除,不可逆**。被 fork 引用时会失败 —— 调用方必须先按拓扑逆序删后代。
+    /// **硬删除,不可逆**。codex **不会**级联删除分支,也不会因为有分支而拒绝
+    /// (实测,见 `thread_cascade` 的模块说明)—— 想要"连分支一起删"必须由调用方
+    /// 自己按叶子优先的顺序逐个删,否则会留下孤儿分支。
     pub fn delete(app: &AppHandle, thread_id: &str) -> Result<(), String> {
         Self::client(app)?
             .request("thread/delete", Some(json!({ "threadId": thread_id })))

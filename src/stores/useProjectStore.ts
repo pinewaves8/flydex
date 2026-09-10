@@ -215,15 +215,37 @@ export const useProjectStore = create<ProjectState>((set, get) => ({
     }))
   },
 
+  /**
+   * 删除项目(**连带删除该项目下的全部会话**)
+   *
+   * 会话有删不掉时后端会保留 project 与本地条目,这里据实提示、不做乐观删除 ——
+   * 否则用户会以为删干净了,实际留下无归属孤儿。
+   */
   deleteProject: async (id) => {
-    await projectService.delete(id)
+    const outcome = await projectService.delete(id)
+    if (!outcome.projectDeleted) {
+      set({
+        threadWarnings: [
+          `项目未删除:有 ${outcome.failures.length} 个会话删不掉 —— ${outcome.failures.join(';')}`,
+        ],
+      })
+      // 刷新一次,把已删掉的会话从列表里去掉
+      await get().loadThreads()
+      return
+    }
+    const wasCurrent = get().currentProjectId === id
     set((state) => ({
       projects: state.projects.filter((p) => p.id !== id),
-      currentProjectId: state.currentProjectId === id ? null : state.currentProjectId,
-      sessions: state.currentProjectId === id ? [] : state.sessions,
+      currentProjectId: wasCurrent ? null : state.currentProjectId,
+      // 本地映射也失效了(后端已清),从缓存里去掉 —— 否则它会被当成"已同步"
+      projectMappings: Object.fromEntries(
+        Object.entries(state.projectMappings).filter(([k]) => k !== id),
+      ),
     }))
-    if (get().currentProjectId === id) {
+    if (wasCurrent) {
       persistProjectId(null)
+      await get().setCurrentThread(null)
+      set({ threads: [], archivedThreads: [] })
     }
   },
 
@@ -425,12 +447,28 @@ export const useProjectStore = create<ProjectState>((set, get) => ({
   /**
    * 永久删除(codex `thread/delete`,不可逆)
    *
-   * 被分支引用时 codex 会拒绝 —— 错误**必须让用户看到**(第三原则),不能静默失败。
+   * 连同 fork 出的后代一起删(codex 不级联,只删父会留下孤儿分支)。
+   * **部分失败也要逐条报出来**(第三原则):静默吞掉会让人以为清理干净了。
    */
   deleteThread: async (id) => {
     try {
-      await threadService.delete(id)
-      set((state) => ({ archivedThreads: state.archivedThreads.filter((t) => t.id !== id) }))
+      const outcome = await threadService.delete(id)
+      const gone = new Set(outcome.deleted)
+      set((state) => {
+        const warnings = [...state.threadWarnings]
+        if (outcome.failures.length > 0) {
+          warnings.push(
+            `有 ${outcome.failures.length} 个会话未能删除:${outcome.failures.join(';')}`,
+          )
+        }
+        return {
+          archivedThreads: state.archivedThreads.filter((t) => !gone.has(t.id)),
+          threads: state.threads.filter((t) => !gone.has(t.id)),
+          currentThreadId:
+            state.currentThreadId && gone.has(state.currentThreadId) ? null : state.currentThreadId,
+          threadWarnings: warnings,
+        }
+      })
     } catch (e) {
       set({ threadWarnings: [`永久删除失败: ${String(e)}`] })
     }

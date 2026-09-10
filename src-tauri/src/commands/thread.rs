@@ -9,6 +9,7 @@ use tauri::AppHandle;
 
 use crate::models::thread::{ThreadOccurrence, ThreadRow, ThreadSearchHit};
 use crate::services::project_map::{ProjectEntry, ProjectMap, ProjectSyncOutcome};
+use crate::services::thread_cascade::{CascadeOutcome, ThreadCascade};
 use crate::services::thread_client::ThreadClient;
 use crate::services::thread_settings::{ThreadSettings, ThreadSettingsService};
 
@@ -97,11 +98,15 @@ pub fn unarchive_thread(app: AppHandle, thread_id: String) -> Result<(), String>
     ThreadClient::unarchive(&app, &thread_id)
 }
 
-/// **永久删除,不可逆**。被 fork 引用时 codex 会拒绝 —— 错误原样回传,由 UI 展示
-/// (级联删除后代是 P5 的事)。
+/// **永久删除,不可逆**
+///
+/// 连同由它 fork 出的全部后代一起删(叶子优先)。
+///
+/// codex 自己**不级联**也**不拒绝** —— 只删父会留下孤儿分支,所以级联由这里做。
+/// 删不掉的逐条回传,由 UI 展示(第三原则)。
 #[tauri::command]
-pub fn delete_thread(app: AppHandle, thread_id: String) -> Result<(), String> {
-    ThreadClient::delete(&app, &thread_id)
+pub fn delete_thread(app: AppHandle, thread_id: String) -> Result<CascadeOutcome, String> {
+    ThreadCascade::delete_threads(&app, &[thread_id])
 }
 
 /// 一级搜索:命中的会话 + 片段(粒度是会话,非消息)

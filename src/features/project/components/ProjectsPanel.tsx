@@ -82,7 +82,19 @@ export function ProjectsPanel() {
   const handleDelete = async (e: React.MouseEvent, project: Project) => {
     e.stopPropagation()
     setError(null)
-    await deleteProject(project.id)
+    // 删项目会**连带删掉该项目下的全部会话**(不可撤销),必须先确认
+    const ok = window.confirm(
+      `删除项目「${project.name}」？
+
+将一并永久删除该项目下的全部会话，此操作不可撤销。`,
+    )
+    if (!ok) return
+    try {
+      await deleteProject(project.id)
+    } catch (err) {
+      // 失败必须可见 —— 后端在有会话删不掉时会保留项目与本地条目
+      setError(String(err))
+    }
   }
 
   const startRename = (e: React.MouseEvent, project: Project) => {
