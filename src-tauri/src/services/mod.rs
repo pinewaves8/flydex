@@ -10,6 +10,7 @@ pub mod init_writer;
 pub mod mcp;
 pub mod memory;
 pub mod model;
+pub mod project_map;
 pub mod security;
 pub mod skill;
 pub mod storage;

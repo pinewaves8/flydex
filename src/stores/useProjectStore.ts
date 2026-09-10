@@ -2,6 +2,7 @@
 
 import { projectService } from '@/services/projectService'
 import { sessionService } from '@/services/sessionService'
+import { threadService } from '@/services/threadService'
 import { useCodexStore } from '@/stores/useCodexStore'
 import type { ExportFormat, Project, SessionMeta, SessionSearchHit } from '@/types/project'
 
@@ -16,6 +17,10 @@ interface ProjectState {
   searchHits: SessionSearchHit[]
   currentSessionId: string | null
   loading: boolean
+  /** flydex project id → codex project id(由 sync_projects 回填) */
+  projectMappings: Record<string, string>
+  /** 项目归属同步中的非致命问题,由 UI 展示(codex 不可用等) */
+  projectSyncWarnings: string[]
 
   loadProjects: (baseDir?: string) => Promise<void>
   createProject: (name: string, path: string) => Promise<Project>
@@ -68,12 +73,27 @@ export const useProjectStore = create<ProjectState>((set, get) => ({
   searchHits: [],
   currentSessionId: null,
   loading: false,
+  projectMappings: {},
+  projectSyncWarnings: [],
 
   loadProjects: async (baseDir?: string) => {
     set({ loading: true })
     try {
       const projects = await projectService.list()
       set({ projects })
+
+      // 把 Flydex 项目同步到 codex `project/*`(三路匹配 + 已有线程归属回填)。
+      // 幂等、可重复调用;失败不阻塞启动 —— 但问题**必须可见**(第三原则),
+      // 所以收集进 projectSyncWarnings 由 UI 展示,而不是 console 里静默。
+      try {
+        const outcome = await threadService.syncProjects()
+        set({
+          projectMappings: outcome.mappings,
+          projectSyncWarnings: outcome.warnings,
+        })
+      } catch (e) {
+        set({ projectSyncWarnings: [`项目归属同步失败: ${String(e)}`] })
+      }
 
       // 统一路径比较(忽略大小写 + 路径分隔符)
       const norm = (p: string) => p.toLowerCase().replace(/\\/g, '/').replace(/\/+$/, '')

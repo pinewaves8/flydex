@@ -13,6 +13,9 @@ use tauri::AppHandle;
 use crate::models::thread::{CodexProject, ThreadOccurrence, ThreadRow, ThreadSearchHit};
 use crate::services::appserver_client::AppServerClient;
 
+/// 写进 codex project metadata 的键 —— 用于把 Flydex 项目 id 与 codex project 关联
+pub const FLYDEX_PROJECT_META_KEY: &str = "flydex.projectId";
+
 /// `thread/list` 单页最大条数(codex 侧 clamp 到 [1,100])
 const PAGE_LIMIT: u32 = 100;
 /// 列表翻页上限,防止异常情况下无限循环
@@ -182,6 +185,7 @@ impl ThreadClient {
     }
 
     /// **硬删除,不可逆**。被 fork 引用时会失败 —— 调用方必须先按拓扑逆序删后代。
+    #[allow(dead_code)] // P5 接线
     pub fn delete(app: &AppHandle, thread_id: &str) -> Result<(), String> {
         Self::client(app)?
             .request("thread/delete", Some(json!({ "threadId": thread_id })))
@@ -191,6 +195,7 @@ impl ThreadClient {
     /// 从某轮之后分叉。`last_turn_id` 含该轮;`before_turn_id` 不含(两者互斥)。
     ///
     /// 注意:`ThreadForkParams` **没有 projectId**,分叉后需另调 `metadata_update` 归属。
+    #[allow(dead_code)] // P6 接线
     pub fn fork(
         app: &AppHandle,
         thread_id: &str,
@@ -363,7 +368,7 @@ impl ThreadClient {
             Some(json!({
                 "name": name,
                 "roots": [{ "path": root }],
-                "metadata": { "flydex.projectId": flydex_project_id },
+                "metadata": { FLYDEX_PROJECT_META_KEY: flydex_project_id },
                 "idempotencyKey": idempotency_key,
             })),
         )?;
@@ -372,6 +377,7 @@ impl ThreadClient {
             .ok_or_else(|| format!("project/create 无 project: {resp}"))
     }
 
+    #[allow(dead_code)] // P5 接线
     pub fn project_update(
         app: &AppHandle,
         project_id: &str,
@@ -392,6 +398,7 @@ impl ThreadClient {
 
     /// 只删 project,**不会删 thread**(codex 语义:仅把 thread.projectId 置空)。
     /// 要连带删会话必须由调用方先逐个 `thread/delete`。
+    #[allow(dead_code)] // P5 接线
     pub fn project_delete(app: &AppHandle, project_id: &str) -> Result<(), String> {
         Self::client(app)?
             .request("project/delete", Some(json!({ "projectId": project_id })))
@@ -399,6 +406,7 @@ impl ThreadClient {
     }
 
     /// 列出**任意 project 之外**的线程(用于建 fork 图时跨项目查找后代)
+    #[allow(dead_code)] // P5 接线
     pub fn list_all_unfiltered(app: &AppHandle, archived: bool) -> Result<Vec<ThreadRow>, String> {
         Self::list_all(app, archived, None)
     }

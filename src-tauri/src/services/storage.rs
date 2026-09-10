@@ -89,6 +89,48 @@ impl Storage {
         Self::list_sessions_internal(project_id, false)
     }
 
+    /// 读出旧会话文件里已有的 `(codex threadId, flydex projectId)` 对应关系。
+    ///
+    /// 仅供一次性把已有 thread 归到 codex project 时使用(见 `project_map::backfill_threads`)。
+    /// **纯只读** —— 这些文件是旧会话只读归档的唯一副本,不得修改。
+    pub fn list_session_thread_projects() -> Vec<(String, String)> {
+        let dir = Self::sessions_dir();
+        if !dir.exists() {
+            return Vec::new();
+        }
+        let mut out = Vec::new();
+        let Ok(entries) = fs::read_dir(&dir) else {
+            return out;
+        };
+        for entry in entries.flatten() {
+            let path = entry.path();
+            if path.extension().and_then(|e| e.to_str()) != Some("json") {
+                continue;
+            }
+            let Ok(content) = fs::read_to_string(&path) else {
+                continue;
+            };
+            let Ok(v) = serde_json::from_str::<serde_json::Value>(&content) else {
+                continue;
+            };
+            // 兼容 camelCase 与旧 snake_case 两种键名
+            let get = |k: &str, alt: &str| {
+                v.get(k)
+                    .or_else(|| v.get(alt))
+                    .and_then(|x| x.as_str())
+                    .filter(|s| !s.is_empty())
+                    .map(str::to_string)
+            };
+            if let (Some(tid), Some(pid)) = (
+                get("threadId", "thread_id"),
+                get("projectId", "project_id"),
+            ) {
+                out.push((tid, pid));
+            }
+        }
+        out
+    }
+
     /// 列出回收站（仅已删除的）
     pub fn list_trashed_sessions() -> Vec<SessionMeta> {
         Self::list_sessions_internal(None, true)

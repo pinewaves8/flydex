@@ -45,6 +45,11 @@ use commands::skill::{
 };
 use commands::task::{task_create, task_delete, task_list, task_update};
 use commands::terminal::resolve_dir;
+use commands::thread::{
+    archive_thread, list_threads, load_earlier_turns, load_thread_turns, project_map_entries,
+    read_thread, rename_thread, search_thread_occurrences, search_threads, sync_projects,
+    unarchive_thread,
+};
 use commands::workspace::{list_directory, list_files};
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
@@ -99,6 +104,18 @@ pub fn run() {
             // workspace
             list_directory,
             list_files,
+            // thread(codex 原生会话)
+            sync_projects,
+            project_map_entries,
+            list_threads,
+            read_thread,
+            load_thread_turns,
+            load_earlier_turns,
+            rename_thread,
+            archive_thread,
+            unarchive_thread,
+            search_threads,
+            search_thread_occurrences,
             // security
             get_security,
             set_sandbox_mode,
