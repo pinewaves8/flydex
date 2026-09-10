@@ -1,0 +1,66 @@
+name: test
+
+# 只在 push / PR 时跑。
+#
+# **刻意不放进 pre-commit 钩子**:flydex 自己每轮对话结束都会对被操作的项目
+# `git add -A && git commit`(见 src-tauri/src/services/git_checkpoint.rs),而
+# git commit 必然触发钩子 —— 那会让测试跑在代理的热路径上,更要命的是:提交失败时
+# checkpoint 直接 `return None`,不重试也不提示,「每轮自动快照」会**静默失效**。
+# CI 只在 push 时跑,正好绕开这条路径。
+
+on:
+  push:
+  pull_request:
+
+# 同一分支连续 push 时,取消还在跑的旧任务(省额度,也避免看到过期的结果)
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  frontend:
+    name: 前端(类型 / 测试 / 构建)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: pnpm/action-setup@v4
+        with:
+          # 与本地一致。package.json 里没有 packageManager 字段,
+          # 不显式指定的话 runner 上拿到的版本可能和本地差一截。
+          version: 11.23.0
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: pnpm
+
+      - run: pnpm install --frozen-lockfile
+
+      # 三步分开,失败时一眼能看出是类型、测试还是打包的问题
+      - run: pnpm typecheck
+      - run: pnpm test
+      - run: pnpm build
+
+  rust:
+    name: Rust(单元测试)
+    # 跑在 windows 上而不是 ubuntu:Tauri 在 Linux 需要额外装
+    # webkit2gtk/libappindicator 等系统库,而本项目本就是 Windows 目标
+    # (路径处理里有 verbatim 前缀等 Windows 专属逻辑)。跑在真实目标平台上,
+    # 少一层"CI 过了但本地不过"的可能。
+    runs-on: windows-latest
+    defaults:
+      run:
+        working-directory: src-tauri
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: dtolnay/rust-toolchain@stable
+
+      # Tauri 依赖树很大,不缓存的话每次都要冷编几分钟
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: src-tauri
+
+      # 只跑 lib 的单元测试(不构建桌面应用),这正是本地那条命令
+      - run: cargo test --lib
