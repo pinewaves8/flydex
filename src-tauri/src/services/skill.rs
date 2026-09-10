@@ -176,10 +176,14 @@ pub struct ValidationReport {
 /// 审计日志落盘（与 appserver 日志一致）
 fn audit_log(line: &str) {
     eprintln!("{line}");
+    let log = crate::services::storage::Storage::log_file("flydex-appserver.log");
+    if let Some(dir) = log.parent() {
+        let _ = std::fs::create_dir_all(dir);
+    }
     if let Ok(mut f) = std::fs::OpenOptions::new()
         .create(true)
         .append(true)
-        .open(r"C:\llm\flydex\logs\flydex-appserver.log")
+        .open(&log)
     {
         let _ = writeln!(f, "{line}");
     }

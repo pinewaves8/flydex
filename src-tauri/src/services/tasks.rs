@@ -24,7 +24,9 @@ impl TasksService {
         Self { data_dir: dir }
     }
 
-    /// 注入数据目录（测试用）
+
+    /// 指定数据目录(仅测试用 —— 测试要写到临时目录,不能碰用户的 ~/.flydex)
+    #[cfg(test)]
     pub fn with_dir(dir: PathBuf) -> Self {
         Self { data_dir: dir }
     }

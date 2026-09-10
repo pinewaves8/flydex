@@ -35,11 +35,7 @@ use commands::security::{
     list_permission_rules, record_approval, remove_permission_rule, security_test_rule,
     set_approval_policy, set_auto_checkpoint, set_sandbox_mode,
 };
-use commands::session::{
-    create_session, delete_session, export_session, fork_session, list_sessions,
-    list_trashed_sessions, load_session, rename_session, restore_session, save_session,
-    search_messages, search_sessions, trash_session,
-};
+use commands::session::{export_session, list_sessions, load_session};
 use commands::skill::{
     skill_create, skill_delete, skill_import, skill_list, skill_read, skill_validate,
 };
@@ -84,19 +80,11 @@ pub fn run() {
             create_project,
             update_project,
             delete_project,
-            // session
+            // session(旧会话只读归档)
             list_sessions,
-            list_trashed_sessions,
             load_session,
-            create_session,
-            save_session,
-            delete_session,
-            rename_session,
-            trash_session,
-            restore_session,
-            fork_session,
-            search_sessions,
-            search_messages,
+            export_session,
+            load_session,
             export_session,
             // task
             task_list,

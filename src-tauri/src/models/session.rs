@@ -90,17 +90,6 @@ impl From<&Session> for SessionMeta {
     }
 }
 
-/// 搜索结果（带匹配片段）
-#[derive(Debug, Clone, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
-pub struct SessionSearchHit {
-    pub session: SessionMeta,
-    /// 匹配的字段（title 或 content）
-    #[serde(alias = "match_field")]
-    pub match_field: String,
-    /// 匹配的片段（最多 120 字符）
-    pub snippet: String,
-}
 
 
 #[cfg(test)]

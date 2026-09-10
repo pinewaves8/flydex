@@ -6,7 +6,7 @@ import { projectService } from '@/services/projectService'
 import { sessionService } from '@/services/sessionService'
 import { threadService } from '@/services/threadService'
 import { useCodexStore } from '@/stores/useCodexStore'
-import type { ExportFormat, Project, SessionMeta, SessionSearchHit } from '@/types/project'
+import type { ExportFormat, Project, SessionMeta } from '@/types/project'
 import { isInsidePath } from '@/types/thread'
 import type { ThreadRow, ThreadTurn } from '@/types/thread'
 
@@ -20,9 +20,6 @@ const MAX_REVEAL_PAGES = 10
 interface ProjectState {
   projects: Project[]
   currentProjectId: string | null
-  sessions: SessionMeta[]
-  trashedSessions: SessionMeta[]
-  searchHits: SessionSearchHit[]
   currentSessionId: string | null
   loading: boolean
   /** flydex project id → codex project id(由 sync_projects 回填) */
@@ -81,19 +78,8 @@ interface ProjectState {
   deleteProject: (id: string) => Promise<void>
   setCurrentProject: (id: string | null) => Promise<void>
 
-  loadSessions: (projectId?: string) => Promise<void>
-  createSession: (title: string, workdir: string, model?: string | null) => Promise<string>
-  deleteSession: (id: string) => Promise<void>
-  renameSession: (id: string, title: string) => Promise<void>
   setCurrentSession: (id: string | null) => void
-  setSessionModel: (id: string, model: string | null) => Promise<void>
 
-  trashSession: (id: string) => Promise<void>
-  restoreSession: (id: string) => Promise<void>
-  purgeSession: (id: string) => Promise<void>
-  loadTrashed: () => Promise<void>
-  searchSessions: (query: string) => Promise<void>
-  clearSearch: () => void
   exportSession: (id: string, format: ExportFormat) => Promise<string>
 }
 
@@ -621,39 +607,6 @@ export const useProjectStore = create<ProjectState>((set, get) => ({
 
   dismissThreadWarnings: () => set({ threadWarnings: [] }),
 
-  loadSessions: async (projectId) => {
-    const pid = projectId ?? get().currentProjectId ?? undefined
-    const sessions = await sessionService.list(pid)
-    set({ sessions })
-  },
-
-  createSession: async (title, workdir, model) => {
-    const projectId = get().currentProjectId ?? 'default'
-    const session = await sessionService.create(projectId, title, workdir, model)
-    set((state) => ({
-      sessions: [session, ...state.sessions],
-      currentSessionId: session.id,
-    }))
-    useCodexStore.getState().setCurrentSessionId(session.id)
-    useCodexStore.getState().loadSession({ messages: [], threadId: null })
-    return session.id
-  },
-
-  deleteSession: async (id) => {
-    await sessionService.delete(id)
-    set((state) => ({
-      sessions: state.sessions.filter((s) => s.id !== id),
-      currentSessionId: state.currentSessionId === id ? null : state.currentSessionId,
-    }))
-  },
-
-  renameSession: async (id, title) => {
-    await sessionService.rename(id, title)
-    set((state) => ({
-      sessions: state.sessions.map((s) => (s.id === id ? { ...s, title } : s)),
-    }))
-  },
-
   setCurrentSession: (id) => {
     // 旧会话没有 threadId:把当前线程清掉,否则侧边栏会高亮着另一个会话
     set({ currentSessionId: id, currentThreadId: null })
@@ -673,57 +626,6 @@ export const useProjectStore = create<ProjectState>((set, get) => ({
       useCodexStore.getState().setCurrentSessionId(null)
     }
   },
-
-  setSessionModel: async (id, model) => {
-    const loaded = await sessionService.load(id)
-    if (!loaded) return
-    const updated = { ...loaded, model, updatedAt: Date.now() }
-    await sessionService.save(updated)
-    set((state) => ({
-      sessions: state.sessions.map((s) => (s.id === id ? { ...s, model } : s)),
-    }))
-  },
-
-  trashSession: async (id) => {
-    if (get().currentSessionId === id) {
-      useCodexStore.getState().setCurrentSessionId(null)
-      useCodexStore.getState().reset()
-      set({ currentSessionId: null })
-    }
-    await sessionService.trash(id)
-    set((state) => ({
-      sessions: state.sessions.filter((s) => s.id !== id),
-    }))
-  },
-
-  restoreSession: async (id) => {
-    await sessionService.restore(id)
-    await get().loadSessions()
-    await get().loadTrashed()
-  },
-
-  purgeSession: async (id) => {
-    await sessionService.delete(id)
-    set((state) => ({
-      trashedSessions: state.trashedSessions.filter((s) => s.id !== id),
-    }))
-  },
-
-  loadTrashed: async () => {
-    const trashed = await sessionService.listTrashed()
-    set({ trashedSessions: trashed })
-  },
-
-  searchSessions: async (query) => {
-    if (!query.trim()) {
-      set({ searchHits: [] })
-      return
-    }
-    const hits = await sessionService.search(query)
-    set({ searchHits: hits })
-  },
-
-  clearSearch: () => set({ searchHits: [] }),
 
   exportSession: async (id, format) => {
     return sessionService.export(id, format)

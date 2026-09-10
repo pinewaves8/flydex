@@ -12,6 +12,7 @@ import {
   type TaskPriority,
   type TaskStatus,
 } from '@/types/task'
+import { threadTitle } from '@/types/thread'
 
 const STATUS_STYLE: Record<TaskStatus, string> = {
   todo: 'bg-muted text-muted-foreground',
@@ -148,7 +149,10 @@ export function TaskPanel({
   const [creating, setCreating] = useState(false)
   const [error, setError] = useState('')
 
-  const sessions = useProjectStore((s) => s.sessions)
+  // 会话标题映射:主线会话用 codex 的标题,旧会话用它自己的标题。
+  // (此前只看旧的 sessions,迁移后就一直是空的 —— 任务会显示成没有会话。)
+  const threads = useProjectStore((s) => s.threads)
+  const legacySessions = useProjectStore((s) => s.legacySessions)
 
   const reload = async () => {
     setLoading(true)
@@ -168,9 +172,12 @@ export function TaskPanel({
   }, [open, projectId])
 
   const sessionTitle = useMemo(() => {
-    const map = new Map(sessions.map((s) => [s.id, s.title]))
+    const map = new Map<string, string>([
+      ...threads.map((t) => [t.id, threadTitle(t)] as const),
+      ...legacySessions.map((s) => [s.id, s.title] as const),
+    ])
     return (id?: string | null) => (id ? (map.get(id) ?? null) : null)
-  }, [sessions])
+  }, [threads, legacySessions])
 
   if (!open) return null
 

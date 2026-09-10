@@ -58,10 +58,14 @@ pub fn checkpoint_workspace(cwd: &str) -> Option<String> {
     }
     // 落日志文件（与 appserver 一致，便于脱机排查快照是否触发）
     eprintln!("[flydex] git checkpoint cwd={cwd} msg={msg}");
+    let log = crate::services::storage::Storage::log_file("flydex-appserver.log");
+    if let Some(dir) = log.parent() {
+        let _ = std::fs::create_dir_all(dir);
+    }
     if let Ok(mut f) = std::fs::OpenOptions::new()
         .create(true)
         .append(true)
-        .open(r"C:\llm\flydex\logs\flydex-appserver.log")
+        .open(&log)
     {
         use std::io::Write;
         let _ = writeln!(f, "[flydex] git checkpoint cwd={cwd} msg={msg}");

@@ -24,15 +24,22 @@ use crate::services::hooks::HooksService;
 use crate::services::security::{ApprovalRecord, RuleDecision, SecurityService};
 use crate::types::codex::{CodexEvent, CodexEventBody};
 
-/// 调试日志：同时输出到 stderr 与 logs/flydex-appserver.log（脱机排查用）
+/// 调试日志：同时输出到 stderr 与日志文件（脱机排查用）
+///
+/// 日志落在 `~/.flydex/logs/`（由 `storage::log_file` 统一给出），
+/// 不写开发机上的绝对路径 —— 那样换台机器目录不存在，日志会静默丢失。
 macro_rules! debug_log {
     ($($arg:tt)*) => {{
         let s = format!($($arg)*);
         eprintln!("{s}");
+        let log = crate::services::storage::Storage::log_file("flydex-appserver.log");
+        if let Some(dir) = log.parent() {
+            let _ = std::fs::create_dir_all(dir);
+        }
         if let Ok(mut f) = std::fs::OpenOptions::new()
             .create(true)
             .append(true)
-            .open(r"C:\llm\flydex\logs\flydex-appserver.log")
+            .open(&log)
         {{
             use std::io::Write;
             let _ = writeln!(f, "{s}");
@@ -40,9 +47,8 @@ macro_rules! debug_log {
     }};
 }
 
-/// codex CLI 入口（全局唯一）
-const CODEX_JS: &str =
-    r"C:\Users\peter woo\AppData\Roaming\npm\node_modules\@openai\codex\bin\codex.js";
+// codex CLI 入口由 `codex_locator` 解析(环境变量 → PATH → npm root → 常见位置),
+// **不再硬编码本机路径** —— 那样换台机器/重装 node 就必然启动失败。
 
 /// 全局单例 app-server daemon
 static APPSERVER: OnceLock<Mutex<Option<Arc<AppServerClient>>>> = OnceLock::new();
@@ -170,8 +176,9 @@ impl AppServerClient {
     }
 
     fn spawn(app: AppHandle) -> Result<Self, String> {
-        let mut cmd = Command::new("node");
-        cmd.arg(CODEX_JS)
+        let entry = crate::services::codex_locator::locate()?;
+        let mut cmd = Command::new(&entry.program);
+        cmd.args(&entry.args)
             .arg("app-server")
             .arg("--listen")
             .arg("stdio://");

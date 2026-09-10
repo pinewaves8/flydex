@@ -82,15 +82,6 @@ pub fn deletion_order(edges: &[(String, Option<String>)], roots: &[String]) -> V
     ordered.into_iter().map(|(id, _)| id).collect()
 }
 
-/// 从 `(id, parent)` 列表里找出 `roots` 的全部后代(不含 roots 自身)
-pub fn descendants_of(edges: &[(String, Option<String>)], roots: &[String]) -> HashSet<String> {
-    let root_set: HashSet<&str> = roots.iter().map(|s| s.as_str()).collect();
-    let order = deletion_order(edges, roots);
-    order
-        .into_iter()
-        .filter(|id| !root_set.contains(id.as_str()))
-        .collect()
-}
 
 pub struct ThreadCascade;
 
@@ -241,11 +232,4 @@ mod tests {
         assert_eq!(deletion_order(&e, &s(&["z"])), s(&["z"]));
     }
 
-    #[test]
-    fn descendants_excludes_roots() {
-        let e = edges(&[("a", None), ("b", Some("a")), ("c", Some("b")), ("x", None)]);
-        let d = descendants_of(&e, &s(&["a"]));
-        assert!(d.contains("b") && d.contains("c"));
-        assert!(!d.contains("a") && !d.contains("x"));
-    }
 }

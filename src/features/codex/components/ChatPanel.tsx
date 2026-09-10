@@ -940,17 +940,29 @@ export function ChatPanel() {
           useCodexStore.getState().appendOutput({ text: '没有可重跑的上一次输入', kind: 'system' })
         }
         break
-      case 'export':
-        // 导出会话为 Markdown 并下载
+      case 'export': {
+        // 导出当前会话为 Markdown 并下载。
+        // 优先走 codex 线程(那是迁移后的主路径);只有在看只读旧会话时才走旧通道。
+        const project = useProjectStore.getState()
+        const tid = project.currentThreadId
+        const sid = project.currentSessionId
         try {
-          const sid = useProjectStore.getState().currentSessionId
-          if (!sid) break
-          const content = await exportSession(sid, 'markdown')
+          let content: string
+          let name: string
+          if (tid) {
+            content = await project.exportThread(tid, 'markdown')
+            name = `thread-${tid.slice(0, 8)}`
+          } else if (sid) {
+            content = await exportSession(sid, 'markdown')
+            name = `session-${sid}`
+          } else {
+            break
+          }
           const blob = new Blob([content], { type: 'text/markdown' })
           const url = URL.createObjectURL(blob)
           const a = document.createElement('a')
           a.href = url
-          a.download = `session-${sid}.md`
+          a.download = `${name}.md`
           a.click()
           URL.revokeObjectURL(url)
           useCodexStore.getState().appendOutput({ text: '已导出 Markdown', kind: 'system' })
@@ -958,6 +970,7 @@ export function ChatPanel() {
           useCodexStore.getState().appendOutput({ text: `导出失败: ${String(e)}`, kind: 'stderr' })
         }
         break
+      }
       case 'shell':
         // 内部 shell 提示（仅记录到 output）
         useCodexStore.getState().appendOutput({
