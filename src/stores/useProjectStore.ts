@@ -32,6 +32,8 @@ interface ProjectState {
   archivedThreads: ThreadRow[]
   /** 当前打开的线程 id(就是 codex threadId) */
   currentThreadId: string | null
+  /** 当前会话的模型覆盖(null = 跟随全局);持久化在 ~/.flydex/thread_settings.json */
+  currentThreadModel: string | null
   /** 列表/打开过程中的非致命问题(第三原则:可见) */
   threadWarnings: string[]
 
@@ -49,6 +51,8 @@ interface ProjectState {
   unarchiveThread: (id: string) => Promise<void>
   deleteThread: (id: string) => Promise<void>
   dismissThreadWarnings: () => void
+  /** 切换会话级模型覆盖并持久化 */
+  setThreadModel: (model: string | null) => Promise<void>
   /** 当前项目对应的 codex project id；未同步上时为 null */
   codexProjectId: () => string | null
 
@@ -128,6 +132,7 @@ export const useProjectStore = create<ProjectState>((set, get) => ({
   threads: [],
   archivedThreads: [],
   currentThreadId: null,
+  currentThreadModel: null,
   threadWarnings: [],
 
   loadProjects: async (baseDir?: string) => {
@@ -280,7 +285,7 @@ export const useProjectStore = create<ProjectState>((set, get) => ({
    * 自然建出来,那时才有 preview。
    */
   newThread: () => {
-    set({ currentThreadId: null })
+    set({ currentThreadId: null, currentThreadModel: null })
     persistThreadId(null)
     const codex = useCodexStore.getState()
     codex.reset()
@@ -290,6 +295,21 @@ export const useProjectStore = create<ProjectState>((set, get) => ({
   adoptThread: (id) => {
     set({ currentThreadId: id })
     persistThreadId(id)
+  },
+
+  /**
+   * 切模型只改偏好,不新建 thread —— 每轮 resume 都会把新 config 下发给 codex,
+   * 不需要靠"换模型=换会话"来绕开跨模型 resume 的警告。
+   */
+  setThreadModel: async (model) => {
+    const id = get().currentThreadId
+    set({ currentThreadModel: model })
+    if (!id) return
+    try {
+      await threadService.setModel(id, model)
+    } catch (e) {
+      set({ threadWarnings: [`保存模型选择失败: ${String(e)}`] })
+    }
   },
 
   loadArchivedThreads: async () => {
@@ -313,10 +333,21 @@ export const useProjectStore = create<ProjectState>((set, get) => ({
     const codex = useCodexStore.getState()
     if (!id) {
       codex.reset()
+      set({ currentThreadModel: null })
       return
     }
     // 先清空,避免上一个会话的消息残留(标题/滚动都会串)
     codex.reset()
+    // 恢复该会话的模型覆盖(与消息并行拉取,失败不影响打开会话)
+    void threadService
+      .getSettings(id)
+      .then((s) => {
+        // 竞态保护:期间用户可能又切了会话
+        if (get().currentThreadId === id) set({ currentThreadModel: s.model })
+      })
+      .catch((e) => {
+        set({ threadWarnings: [`读取会话偏好失败: ${String(e)}`] })
+      })
     try {
       const [turns, cursor] = await threadService.loadTurns(id)
       const { messages, turns: metas } = turnsToMessages(turns as ThreadTurn[])

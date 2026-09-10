@@ -10,6 +10,7 @@ use tauri::AppHandle;
 use crate::models::thread::{ThreadOccurrence, ThreadRow, ThreadSearchHit};
 use crate::services::project_map::{ProjectEntry, ProjectMap, ProjectSyncOutcome};
 use crate::services::thread_client::ThreadClient;
+use crate::services::thread_settings::{ThreadSettings, ThreadSettingsService};
 
 /// 把 Flydex 项目同步到 codex `project/*`,并回填已有线程的归属。幂等,可在每次启动时调用。
 #[tauri::command]
@@ -110,3 +111,17 @@ pub fn search_thread_occurrences(
     ThreadClient::search_occurrences(&app, &thread_id, &query, limit.unwrap_or(50))
 }
 
+/// 读会话级 UI 偏好(目前只有模型覆盖)
+///
+/// 这些是 Flydex 的展示偏好,codex 的 Thread 里没有对应字段 ——
+/// 见 `services::thread_settings` 的模块说明。
+#[tauri::command]
+pub fn get_thread_settings(thread_id: String) -> ThreadSettings {
+    ThreadSettingsService::get(&thread_id)
+}
+
+/// 设置会话级模型覆盖。`model = None` 表示跟随全局默认。
+#[tauri::command]
+pub fn set_thread_model(thread_id: String, model: Option<String>) -> Result<(), String> {
+    ThreadSettingsService::set_model(&thread_id, model)
+}

@@ -101,3 +101,16 @@ export interface ThreadTurn {
   error: { message: string } | null
   items: ThreadItem[]
 }
+
+/**
+ * 会话级 UI 偏好
+ *
+ * codex 的 `Thread` 没有这些字段,也不影响 codex 的行为 —— 纯属 Flydex 的展示偏好,
+ * 存在 `~/.flydex/thread_settings.json`(见 Rust 侧 `services/thread_settings.rs`)。
+ */
+export interface ThreadSettings {
+  /** 会话级模型覆盖;null = 跟随全局默认 */
+  model: string | null
+  /** 毫秒 */
+  updatedAt: number
+}

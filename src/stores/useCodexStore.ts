@@ -1,7 +1,5 @@
 ﻿import { create } from 'zustand'
 
-import { sessionService } from '@/services/sessionService'
-import { useProjectStore } from '@/stores/useProjectStore'
 import type { CodexOutputLine, CodexStatus } from '@/types/codex'
 import type { CodexMessage, CodexFileChange, CodexUsage, TurnPlanStep } from '@/types/codexJson'
 
@@ -86,9 +84,6 @@ export function clearLive(): void {
   useCodexStore.setState({ live: null })
 }
 
-/** 自动保存 debounce 时间（毫秒） */
-const AUTOSAVE_DEBOUNCE_MS = 2000
-
 /** 输出 buffer 节流刷新间隔（毫秒） */
 const OUTPUT_FLUSH_INTERVAL_MS = 60
 
@@ -133,8 +128,6 @@ interface CodexState {
   turns: ThreadTurnMeta[]
   /** 再往前翻一页用的游标；null = 已到最开头 */
   turnsCursor: string | null
-  /** 是否有待保存的变更*/
-  dirty: boolean
   /** 待写入输入框的命令前缀(由 SkillPalette 等外部触发);InputBox 监听后清空 */
   pendingCommand: string | null
   setPendingCommand: (cmd: string | null) => void
@@ -180,8 +173,6 @@ interface CodexState {
   reset: () => void
   /** 设置当前会话 id（启用自动保存）；传 null 关闭自动保存 */
   setCurrentSessionId: (id: string | null) => void
-  /** 标记脏并触发自动保存（手点立及保存） */
-  flushAutosave: () => Promise<void>
   /** 加载会话数据（旧会话只读渲染用，见 P8）*/
   loadSession: (data: { messages: CodexMessage[]; threadId: string | null }) => void
   /** 从 codex turns 重建会话（打开线程时用；P3 起这是主路径） */
@@ -242,60 +233,6 @@ function scheduleOutputFlush() {
   }, OUTPUT_FLUSH_INTERVAL_MS)
 }
 
-/**
- * 自动保存调度：监听 store 状态变化，debounce 后异步写入磁盘
- *
- * 为什么放这里：避免 ChatPanel 读 load+save的竞态，统一在 store 层调度
- * 为什么用 subscribe：zustand store 不应该依赖 React 的批量更新机制
- */
-function setupAutosave(): () => void {
-  let timer: ReturnType<typeof setTimeout> | null = null
-  let lastMessages: CodexMessage[] | null = null
-  let lastThreadId: string | null = null
-  let cancelled = false
-
-  const unsub = useCodexStore.subscribe((state, prevState) => {
-    if (cancelled) return
-    // 只关心 dirty 标志和 messages/threadId
-    if (!state.dirty && !prevState.dirty) return
-    if (state.currentSessionId === null) return
-    if (timer) clearTimeout(timer)
-    timer = setTimeout(async () => {
-      if (cancelled) return
-      const s = useCodexStore.getState()
-      if (!s.dirty || !s.currentSessionId) return
-      // 跳过无变化
-      if (s.messages === lastMessages && s.threadId === lastThreadId && s.currentSessionId) {
-        return
-      }
-      lastMessages = s.messages
-      lastThreadId = s.threadId
-      try {
-        const session = await sessionService.load(s.currentSessionId)
-        if (!session) return
-        session.messages = s.messages
-        session.threadId = s.threadId
-        session.updatedAt = Date.now()
-        await sessionService.save(session)
-        useCodexStore.setState({ dirty: false })
-        void useProjectStore.getState().loadSessions()
-      } catch (e) {
-        console.error('[autosave] failed:', e)
-      }
-    }, AUTOSAVE_DEBOUNCE_MS)
-  })
-
-  // 返回 unsub:取消订阅 + 清掉 pending timer + 标记 cancelled 防止异步 setState 触发
-  return () => {
-    cancelled = true
-    unsub()
-    if (timer) {
-      clearTimeout(timer)
-      timer = null
-    }
-  }
-}
-
 const useCodexStore = create<CodexState>((set, get) => ({
   status: 'idle',
   output: [],
@@ -317,7 +254,6 @@ const useCodexStore = create<CodexState>((set, get) => ({
   currentSessionId: null,
   turns: [],
   turnsCursor: null,
-  dirty: false,
   pendingCommand: null,
   livePlan: null,
   lastToolCompleteAt: 0,
@@ -344,7 +280,7 @@ const useCodexStore = create<CodexState>((set, get) => ({
       if (messages.length > MAX_MESSAGES) {
         messages = messages.slice(messages.length - MAX_MESSAGES)
       }
-      return { messages, dirty: true }
+      return { messages }
     })
     return id
   },
@@ -365,10 +301,9 @@ const useCodexStore = create<CodexState>((set, get) => ({
   updateMessageKind: (id, kind) =>
     set((state) => ({
       messages: state.messages.map((m) => (m.id === id ? { ...m, kind } : m)),
-      dirty: true,
     })),
   setExitCode: (code) => set({ exitCode: code }),
-  setThreadId: (id) => set({ threadId: id, dirty: true }),
+  setThreadId: (id) => set({ threadId: id }),
   setUsage: (usage) => set({ usage }),
   setPendingRunId: (id) => set({ pendingRunId: id }),
   setRunStartedAt: (ts) => set({ runStartedAt: ts }),
@@ -423,27 +358,8 @@ const useCodexStore = create<CodexState>((set, get) => ({
       livePlan: null,
       turns: [],
       turnsCursor: null,
-      dirty: false,
     }),
-  setCurrentSessionId: (id) => set({ currentSessionId: id, dirty: false }),
-  flushAutosave: async () => {
-    // 立即触发保存（不缩 debounce）
-    const state = get()
-    const sid = state.currentSessionId
-    if (!sid) return
-    try {
-      const session = await sessionService.load(sid)
-      if (!session) return
-      session.messages = state.messages
-      session.threadId = state.threadId
-      session.updatedAt = Date.now()
-      await sessionService.save(session)
-      set({ dirty: false })
-      void useProjectStore.getState().loadSessions()
-    } catch (e) {
-      console.error('[flushAutosave] failed:', e)
-    }
-  },
+  setCurrentSessionId: (id) => set({ currentSessionId: id }),
   loadThread: (data) =>
     set({
       status: 'idle',
@@ -465,7 +381,6 @@ const useCodexStore = create<CodexState>((set, get) => ({
       seenFileChanges: [],
       baselineFileChanges: [],
       livePlan: null,
-      dirty: false,
     }),
   prependTurns: (data) =>
     set((state) => {
@@ -497,20 +412,12 @@ const useCodexStore = create<CodexState>((set, get) => ({
       seenFileChanges: [],
       baselineFileChanges: [],
       livePlan: null,
-      dirty: false,
     }),
   flushOutputBuffer,
 }))
 
-// 初始化自动保存调度（必须在 useCodexStore 创建之后调用，
-// 否则 setupAutosave 内部访问 useCodexStore.subscribe 会触发 TDZ）
-const disposeAutosave = setupAutosave()
-
-// 页面/窗口卸载时清理:取消订阅 + 清掉 pending timer,防止异步操作触发
-// "setState on unmounted component" 警告或内存泄漏
 if (typeof window !== 'undefined') {
   const cleanup = () => {
-    disposeAutosave()
     if (outputFlushTimer) {
       clearTimeout(outputFlushTimer)
       outputFlushTimer = null

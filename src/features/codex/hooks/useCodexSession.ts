@@ -604,6 +604,8 @@ export function useCodexSession() {
           runId,
           model: model ?? null,
           images,
+          // 新线程要归到当前项目下;有 thread 时后端不会用这个值
+          projectId: useProjectStore.getState().codexProjectId(),
         })
         // 兜底：如果 done 事件丢失，强制更新状态
         if (useCodexStore.getState().status === 'running') {

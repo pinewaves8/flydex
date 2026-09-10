@@ -46,6 +46,24 @@ fn active_turns() -> &'static Mutex<HashMap<String, (String, String)>> {
 /// 解析 JSONL 事件推送到前端；支持审批（写 stdin）与停止（kill）。
 pub struct CodexManager;
 
+/// 每次运行的覆盖项(全部来自前端)
+///
+/// 收成一个结构体而不是继续加位置参数 —— 这些字段都只在「这一次运行」有效,
+/// 且调用点只有一个(commands/codex.rs)。
+#[derive(Debug, Default, Clone)]
+pub struct RunOverrides {
+    /// 会话级模型覆盖(`None` = 用全局配置)
+    pub model: Option<String>,
+    pub images: Option<Vec<String>>,
+    /// 沙箱模式覆盖(子代理可配)
+    pub sandbox: Option<String>,
+    /// codex project id —— **仅新建线程时**用于归属。
+    ///
+    /// `thread/start` 的参数里**没有** projectId(与 `thread/fork` 同一处协议缺口),
+    /// 所以新建后要补一次 `thread/metadata/update` 把线程归到项目下。
+    pub project_id: Option<String>,
+}
+
 impl CodexManager {
     /// 执行一条 codex 命令（阻塞到进程结束，输出流式推送）
     ///
@@ -145,14 +163,12 @@ impl CodexManager {
         mode: CodexExecMode,
         thread_id: Option<String>,
         run_id: String,
-        session_model: Option<String>,
-        images: Option<Vec<String>>,
-        sandbox: Option<String>,
+        ov: RunOverrides,
     ) -> Result<(), String> {
         // 沙箱边界：per-run 覆盖（子代理可配）> 计划/审查强制只读 > 全局配置
         // （通过 app-server thread/start 的 sandbox 参数传递，见下方 thread_start）
         let sec = SecurityService::load();
-        let sandbox = match sandbox {
+        let sandbox = match ov.sandbox.clone() {
             Some(s) => s,
             None => match mode {
                 CodexExecMode::Plan | CodexExecMode::Review => "read-only".to_string(),
@@ -176,7 +192,7 @@ impl CodexManager {
         // 空指令保护：codex exec 强制要求 prompt，空串会报 "No prompt provided"。
         // 纯图片发送（无文字）时注入默认指令，让 codex 基于附加图片回复；两者皆空则报错。
         if final_command.trim().is_empty() {
-            if images.as_ref().is_some_and(|v| !v.is_empty()) {
+            if ov.images.as_ref().is_some_and(|v| !v.is_empty()) {
                 final_command =
                     "请描述你看到的图片内容，并结合项目上下文给出分析和建议。".to_string();
             } else {
@@ -224,7 +240,7 @@ impl CodexManager {
         //    AGENTS.override.md → AGENTS.md,并按 project_doc_fallback_filenames
         //    逐个回退),我们不再自行读取与注入,避免同一份文件每轮送两遍。
         let mut cfg_map = match crate::services::model::ModelService::thread_config(
-            session_model.as_deref(),
+            ov.model.as_deref(),
         ) {
             Some(m) => m,
             None => {
@@ -265,7 +281,27 @@ impl CodexManager {
                     client.thread_start(tp)?
                 }
             },
-            _ => client.thread_start(tp)?,
+            _ => {
+                let new_tid = client.thread_start(tp)?;
+                // 新线程归属项目。thread/start 没有 projectId 参数,只能建完补一次
+                // thread/metadata/update —— 失败不影响对话,但必须让用户看见(第三原则)
+                if let Some(pid) = ov.project_id.as_deref().filter(|p| !p.is_empty()) {
+                    if let Err(e) = crate::services::thread_client::ThreadClient::set_project(
+                        &app, &new_tid, Some(pid),
+                    ) {
+                        let _ = app.emit(
+                            "codex-output",
+                            CodexEvent {
+                                run_id: run_id.clone(),
+                                body: CodexEventBody::Output {
+                                    text: format!("⚠️ 新会话未能归入当前项目：{e}"),
+                                },
+                            },
+                        );
+                    }
+                }
+                new_tid
+            }
         };
 
         // 绑定 run_id（事件路由）
@@ -273,7 +309,7 @@ impl CodexManager {
 
         // 图像附件：app-server 的 UserInput 支持 image 类型（data URL），
         // Phase 1 仅支持文本输入，图片后续接入。
-        if images.as_ref().is_some_and(|v| !v.is_empty()) {
+        if ov.images.as_ref().is_some_and(|v| !v.is_empty()) {
             let _ = app.emit(
                 "codex-output",
                 CodexEvent {

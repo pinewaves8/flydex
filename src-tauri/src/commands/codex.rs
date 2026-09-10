@@ -29,6 +29,7 @@ pub async fn run_codex(
     model: Option<String>,
     images: Option<Vec<String>>,
     sandbox: Option<String>,
+    project_id: Option<String>,
 ) -> Result<(), String> {
     let exec_mode = match mode.as_deref() {
         Some("resume") => CodexExecMode::Resume,
@@ -41,7 +42,20 @@ pub async fn run_codex(
     });
 
     tokio::task::spawn_blocking(move || {
-        CodexManager::run_command(app, command, workdir, exec_mode, thread_id, rid, model, images, sandbox)
+        CodexManager::run_command(
+            app,
+            command,
+            workdir,
+            exec_mode,
+            thread_id,
+            rid,
+            crate::services::codex_manager::RunOverrides {
+                model,
+                images,
+                sandbox,
+                project_id,
+            },
+        )
     })
     .await
     .map_err(|e| format!("Task join error: {}", e))?

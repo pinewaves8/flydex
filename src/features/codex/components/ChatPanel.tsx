@@ -789,14 +789,9 @@ export function ChatPanel() {
     [threads, currentThreadId],
   )
   const currentThreadWorkdir = currentThread?.cwd
-  /**
-   * 会话级模型覆盖(null = 跟随全局)
-   *
-   * 只活在内存里:codex 的 Thread 没有这个字段,属纯 UI 偏好。
-   * 每轮 resume 都会把 config 下发给 codex,所以覆盖无需落到 thread 上。
-   * (持久化到 ~/.flydex/thread_settings.json 是 P4 的事)
-   */
-  const [threadModel, setThreadModel] = useState<string | null>(null)
+  // 会话级模型覆盖(持久化在 ~/.flydex/thread_settings.json)
+  const threadModel = useProjectStore((s) => s.currentThreadModel)
+  const setThreadModel = useProjectStore((s) => s.setThreadModel)
   const exportSession = useProjectStore((s) => s.exportSession)
   const lastUserInput = useRef<string>('')
 
@@ -1190,10 +1185,21 @@ ${scenarioGuide[report.scenario]}
     [status, currentThreadWorkdir, threadModel, workspaceCwd, run],
   )
 
+  // ── TEMP(E2E):构建期注入一次性自测消息,验证写路径。验证完删除 ──
+  // 必须放在 handleSend 声明之后:放在前面会在依赖数组里访问到未初始化的
+  // useCallback(TDZ),整棵树直接崩成白板。
+  const E2E_PROMPT = import.meta.env.VITE_E2E_PROMPT as string | undefined
+  const e2eFired = useRef(false)
+  useEffect(() => {
+    if (!E2E_PROMPT || e2eFired.current || status === 'running') return
+    e2eFired.current = true
+    void handleSend(E2E_PROMPT, [])
+  }, [E2E_PROMPT, status, handleSend])
+
   // 切模型:只记偏好,不新建 thread —— 每轮 resume 都会把新 config 下发给 codex,
   // 不需要靠"换模型=换会话"来绕开跨模型 resume 的警告(旧 hack 已删)
   const handleModelChange = (modelId: string) => {
-    setThreadModel(modelId === '__global__' ? null : modelId)
+    void setThreadModel(modelId === '__global__' ? null : modelId)
   }
 
   const statusCfg = STATUS_CONFIG[status]

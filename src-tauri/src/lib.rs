@@ -46,8 +46,10 @@ use commands::skill::{
 use commands::task::{task_create, task_delete, task_list, task_update};
 use commands::terminal::resolve_dir;
 use commands::thread::{
-    archive_thread, delete_thread, list_threads, load_earlier_turns, load_thread_turns,
-    project_map_entries, read_thread, rename_thread, search_thread_occurrences, search_threads,
+    archive_thread, delete_thread, get_thread_settings, list_threads, load_earlier_turns,
+    load_thread_turns,
+    project_map_entries, read_thread, rename_thread, search_thread_occurrences,
+    search_threads, set_thread_model,
     sync_projects, unarchive_thread,
 };
 use commands::workspace::{list_directory, list_files};
@@ -115,6 +117,8 @@ pub fn run() {
             archive_thread,
             unarchive_thread,
             delete_thread,
+            get_thread_settings,
+            set_thread_model,
             search_threads,
             search_thread_occurrences,
             // security

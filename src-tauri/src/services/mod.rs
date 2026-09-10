@@ -16,3 +16,4 @@ pub mod skill;
 pub mod storage;
 pub mod tasks;
 pub mod thread_client;
+pub mod thread_settings;

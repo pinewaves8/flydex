@@ -2,6 +2,7 @@ import { invoke } from '@tauri-apps/api/core'
 
 import type {
   ProjectEntry,
+  ThreadSettings,
   ProjectSyncOutcome,
   ThreadOccurrence,
   ThreadRow,
@@ -79,6 +80,16 @@ export const threadService = {
   /** 从回收站恢复 */
   unarchive(threadId: string): Promise<void> {
     return invoke<void>('unarchive_thread', { threadId })
+  },
+
+  /** 会话级 UI 偏好(codex 的 Thread 里没有这些字段,属 Flydex 侧数据) */
+  getSettings(threadId: string): Promise<ThreadSettings> {
+    return invoke<ThreadSettings>('get_thread_settings', { threadId })
+  },
+
+  /** 设置会话级模型覆盖。`null` = 跟随全局默认 */
+  setModel(threadId: string, model: string | null): Promise<void> {
+    return invoke<void>('set_thread_model', { threadId, model })
   },
 
   /**
