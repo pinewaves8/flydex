@@ -62,5 +62,15 @@ jobs:
         with:
           workspaces: src-tauri
 
+      # `dist/` 是前端产物,被 gitignore —— 但 `tauri::generate_context!()` 在
+      # **编译期**就要求 frontendDist 存在,否则直接 proc macro panic:
+      #   The `frontendDist` configuration is set to `"../dist"` but this path doesn't exist
+      # lib 的单元测试不会真的实例化 App,所以建个空目录就够(已本地验证:
+      # 空 dist 下 89 个测试全过)。不在这里跑前端构建 —— 那是上面那个 job 的事,
+      # 重复一遍只会让 Rust job 慢一大截。
+      - name: 建占位 dist(Tauri 编译期需要)
+        run: mkdir -p ../dist
+        shell: bash
+
       # 只跑 lib 的单元测试(不构建桌面应用),这正是本地那条命令
       - run: cargo test --lib
