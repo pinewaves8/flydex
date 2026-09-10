@@ -77,6 +77,10 @@ jobs:
       # TEMP:失败时把关键行发成注解 —— 定位这个 job 首次失败的根因用的。
       # 起因是 GitHub 的日志接口需要仓库管理权限,匿名拿不到,而注解可以。
       # 查清原因后这一步应改回朴素的 `cargo test --lib`。
+      #
+      # 上一版只 grep 了 `error` 开头的行,结果一条都没抓到 —— 说明**不是编译错误**,
+      # 而是测试失败(那类输出是 `test result: FAILED` / `panicked at`)。所以这一版
+      # 抓测试失败的签名,并把输出尾部一并带上兜底。
       - name: cargo test --lib
         shell: bash
         run: |
@@ -84,11 +88,9 @@ jobs:
           if cargo test --lib 2>&1 | tee /tmp/ci.out; then
             exit 0
           fi
-          echo "::error::cargo test 失败,关键行如下"
-          grep -nE "^error(\[|:)" /tmp/ci.out | head -10 | while IFS= read -r l; do
-            echo "::error::$l"
-          done
-          grep -A 6 "^error" /tmp/ci.out | head -50 | while IFS= read -r l; do
-            echo "::error::  $l"
-          done
+          echo "::error::cargo test 失败;行数=$(wc -l < /tmp/ci.out)"
+          grep -nE "test result|FAILED|panicked|assertion|^failures:|^---- |thread '" /tmp/ci.out \
+            | head -40 | while IFS= read -r l; do echo "::error::SIG $l"; done
+          echo "::error::---- 输出尾部 ----"
+          tail -40 /tmp/ci.out | while IFS= read -r l; do echo "::error::TAIL $l"; done
           exit 1
