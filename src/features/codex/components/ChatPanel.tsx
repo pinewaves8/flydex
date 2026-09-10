@@ -1185,24 +1185,6 @@ ${scenarioGuide[report.scenario]}
     [status, currentThreadWorkdir, threadModel, workspaceCwd, run],
   )
 
-  // ── TEMP(E2E):构建期注入一次性自测消息,验证写路径。验证完删除 ──
-  // 必须放在 handleSend 声明之后:放在前面会在依赖数组里访问到未初始化的
-  // useCallback(TDZ),整棵树直接崩成白板。
-  const E2E_PROMPT = import.meta.env.VITE_E2E_PROMPT as string | undefined
-  const e2eFired = useRef(false)
-  useEffect(() => {
-    if (!E2E_PROMPT || e2eFired.current || status === 'running') return
-    e2eFired.current = true
-    // 延后到项目映射同步完成后,否则 codexProjectId() 还是 null。
-    // 故意不返回 cleanup:effect 的 deps 在启动期会频繁变化,cleanup 会把定时器
-    // 反复清掉导致永远不触发。一次性守卫已经保证只会排一次。
-    setTimeout(() => {
-      // 先新建会话(清空 threadId),否则会 resume 已自动打开的线程
-      useProjectStore.getState().newThread()
-      setTimeout(() => void handleSend(E2E_PROMPT, []), 500)
-    }, 8000)
-  }, [E2E_PROMPT, status, handleSend])
-
   // 切模型:只记偏好,不新建 thread —— 每轮 resume 都会把新 config 下发给 codex,
   // 不需要靠"换模型=换会话"来绕开跨模型 resume 的警告(旧 hack 已删)
   const handleModelChange = (modelId: string) => {

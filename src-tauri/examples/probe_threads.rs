@@ -465,6 +465,16 @@ fn main() {
     }
 
 
+    // ── 8. --delete-thread <threadId>:清理测试会话(硬删除,不可逆) ──
+    if let Some(pos) = args.iter().position(|a| a == "--delete-thread") {
+        let tid = args.get(pos + 1).cloned().unwrap_or_default();
+        match p.request("thread/delete", Some(json!({ "threadId": tid }))) {
+            Ok(_) => println!("已删除 {tid}"),
+            Err(e) => println!("删除 {tid} 失败: {e}"),
+        }
+    }
+
+
     println!("\n================ 结论 ================");
     if failures.is_empty() {
         println!("全部假设验证通过");
