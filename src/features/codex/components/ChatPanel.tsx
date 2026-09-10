@@ -1193,7 +1193,10 @@ ${scenarioGuide[report.scenario]}
   useEffect(() => {
     if (!E2E_PROMPT || e2eFired.current || status === 'running') return
     e2eFired.current = true
-    void handleSend(E2E_PROMPT, [])
+    // 延后到项目映射同步完成后,否则 codexProjectId() 还是 null。
+    // 故意不返回 cleanup:effect 的 deps 在启动期会频繁变化,cleanup 会把定时器
+    // 反复清掉导致永远不触发。一次性守卫已经保证只会排一次。
+    setTimeout(() => void handleSend(E2E_PROMPT, []), 8000)
   }, [E2E_PROMPT, status, handleSend])
 
   // 切模型:只记偏好,不新建 thread —— 每轮 resume 都会把新 config 下发给 codex,
