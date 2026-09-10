@@ -247,7 +247,9 @@ function TurnBlockView({
   // codex 的 fork 只认已结束的轮;正在跑的那轮(或状态仍是 inProgress 的)不给入口
   const forkable = !!group.turnId && !!onFork && !running && turnMeta?.status !== 'inProgress'
   return (
-    <div className="group/turn border-l border-border/40 pl-3">
+    // 没有 turnId 的是「不属于任何轮」的消息(旧会话、前端合成卡片):
+    // 不给它们套轮容器的左边框,否则旧会话的观感会和迁移前不一样
+    <div className={group.turnId ? 'group/turn border-l border-border/40 pl-3' : 'group/turn'}>
       {/* 轮标题:有 turnId 才显示(前端合成的卡片不构成一轮) */}
       {group.turnId && (
         <div className="mb-1 flex items-center gap-2 text-[10px] text-muted-foreground/70">
@@ -720,6 +722,7 @@ export function ChatPanel() {
   const pendingScrollToMessageId = useCodexStore((s) => s.pendingScrollToMessageId)
   // 同时监听会话变化,新会话加载时重置滚动位置 / 播切换动画
   const currentThreadId = useProjectStore((s) => s.currentThreadId)
+  const currentSessionId = useProjectStore((s) => s.currentSessionId)
 
   // session 切换流畅动画:切会话时先 opacity=0,200ms 后恢复 1
   const [switchFading, setSwitchFading] = useState(false)
@@ -729,6 +732,13 @@ export function ChatPanel() {
     const t = setTimeout(() => setSwitchFading(false), 200)
     return () => clearTimeout(t)
   }, [currentThreadId])
+
+  /**
+   * 正在看的是迁移前的旧会话(只读)
+   *
+   * 判据:有旧会话 id 但没有当前线程 —— 两者互斥,一个就够说明问题。
+   */
+  const readOnlyLegacy = !currentThreadId && !!currentSessionId
 
   // 更早历史的分页游标 + thread 元信息(轮标题/耗时/失败态)
   const turnsCursor = useCodexStore((s) => s.turnsCursor)
@@ -1578,16 +1588,26 @@ ${scenarioGuide[report.scenario]}
           </span>
         </button>
       )}
-      <InputBox
-        status={status}
-        threadId={threadId}
-        approval={approval}
-        respondApproval={respondApproval}
-        onSend={handleSend}
-        currentSessionWorkdir={currentThreadWorkdir}
-        workspaceCwd={workspaceCwd}
-        planMode={planMode}
-      />
+      {/* 旧会话(只读):它的内容不在 codex 里,发消息会静默新建一个会话 ——
+          与其让用户困惑,不如直接说明并禁用输入 */}
+      {readOnlyLegacy ? (
+        <div className="border-t border-border bg-muted/20 px-4 py-3 text-center text-xs text-muted-foreground">
+          这是迁移前的旧会话,仅作只读归档 —— 它没有保存过你的提问,无法继续对话。
+          <br />
+          要接着聊,请点侧边栏的 <span className="font-medium">+</span> 新建会话。
+        </div>
+      ) : (
+        <InputBox
+          status={status}
+          threadId={threadId}
+          approval={approval}
+          respondApproval={respondApproval}
+          onSend={handleSend}
+          currentSessionWorkdir={currentThreadWorkdir}
+          workspaceCwd={workspaceCwd}
+          planMode={planMode}
+        />
+      )}
 
       {/* init 流程恢复 banner —— 项目切换时检测 .flydex/init-state.json,
           显示"上次的 init 进行到 X,继续?"让用户感知状态 */}

@@ -1,4 +1,6 @@
 import {
+  Archive,
+  Download,
   FolderOpen,
   Settings,
   Terminal,
@@ -14,6 +16,7 @@ import {
 } from 'lucide-react'
 import { useEffect, useRef, useState } from 'react'
 
+import { exportFileMeta } from '@/features/codex/threadExport'
 import { useProjectStore } from '@/stores/useProjectStore'
 import { useUIStore, type View } from '@/stores/useUIStore'
 import { forkDescendantCount, threadTitle } from '@/types/thread'
@@ -95,6 +98,10 @@ export function Sidebar() {
   const archiveThread = useProjectStore((s) => s.archiveThread)
   const unarchiveThread = useProjectStore((s) => s.unarchiveThread)
   const deleteThread = useProjectStore((s) => s.deleteThread)
+  const exportThread = useProjectStore((s) => s.exportThread)
+  const legacySessions = useProjectStore((s) => s.legacySessions)
+  const currentSessionId = useProjectStore((s) => s.currentSessionId)
+  const setCurrentSession = useProjectStore((s) => s.setCurrentSession)
   const threadWarnings = useProjectStore((s) => s.threadWarnings)
   const dismissThreadWarnings = useProjectStore((s) => s.dismissThreadWarnings)
 
@@ -158,6 +165,25 @@ export function Sidebar() {
     )
     if (!ok) return
     await deleteThread(thread.id)
+  }
+
+  /** 导出会话内容为文件(自己拉全量历史后渲染,见 threadExport.ts) */
+  const handleExport = async (e: React.MouseEvent, thread: ThreadRow) => {
+    e.stopPropagation()
+    try {
+      const content = await exportThread(thread.id, 'markdown')
+      const { ext, mime } = exportFileMeta('markdown')
+      const blob = new Blob([content], { type: mime })
+      const url = URL.createObjectURL(blob)
+      const a = document.createElement('a')
+      a.href = url
+      a.download = `thread-${thread.id.slice(0, 8)}.${ext}`
+      a.click()
+      URL.revokeObjectURL(url)
+    } catch (err) {
+      // 导出失败必须可见 —— 用户会以为文件已经存下来了
+      window.alert(`导出失败: ${String(err)}`)
+    }
   }
 
   // 渲染单个会话项（支持 fork 树缩进与分支徽标）
@@ -230,6 +256,13 @@ export function Sidebar() {
               title="重命名"
             >
               <Pencil className="h-3 w-3" />
+            </button>
+            <button
+              onClick={(e) => handleExport(e, thread)}
+              className="rounded p-1 text-muted-foreground transition-colors hover:bg-accent hover:text-accent-foreground"
+              title="导出为 Markdown"
+            >
+              <Download className="h-3 w-3" />
             </button>
             <button
               onClick={(e) => handleArchive(e, thread.id)}
@@ -317,6 +350,44 @@ export function Sidebar() {
           </div>
         ) : (
           buildForkTree(threads).map((thread) => renderThreadItem(thread))
+        )}
+
+        {/* 迁移前的老会话:内容早已不在 codex 里,只能只读看(见 P8) */}
+        {legacySessions.length > 0 && (
+          <>
+            <div
+              className="mt-3 mb-1 px-1 text-[10px] font-medium uppercase text-muted-foreground/70"
+              title="迁移到 codex 之前的历史会话。它们只落了 AI 侧内容、没有你的提问,无法重建成对话,因此只读保留。"
+            >
+              旧会话(只读) · {legacySessions.length}
+            </div>
+            {legacySessions.map((s) => (
+              <div
+                key={s.id}
+                onClick={() => {
+                  setCurrentSession(s.id)
+                  setCurrentView('codex')
+                }}
+                className={`group mb-1 flex cursor-pointer items-center gap-2 rounded-md py-1 pr-2 transition-colors ${
+                  currentSessionId === s.id
+                    ? 'bg-accent text-accent-foreground'
+                    : 'hover:bg-accent/50'
+                }`}
+                style={{ paddingLeft: 8 }}
+              >
+                <Archive className="h-3.5 w-3.5 shrink-0 text-muted-foreground/60" />
+                <div className="min-w-0 flex-1">
+                  <div className="truncate text-sm text-muted-foreground" title={s.title}>
+                    {s.title}
+                  </div>
+                  <div className="truncate text-[10px] text-muted-foreground/70">
+                    {relativeTime(s.updatedAt)}
+                    {s.messageCount !== undefined && <> · {s.messageCount} 条消息</>}
+                  </div>
+                </div>
+              </div>
+            ))}
+          </>
         )}
       </div>
 

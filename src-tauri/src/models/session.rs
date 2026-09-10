@@ -51,6 +51,12 @@ pub struct SessionMeta {
     /// 会话级模型覆盖
     #[serde(default)]
     pub model: Option<String>,
+    /// 该旧会话对应的 codex threadId(迁移时写入)
+    ///
+    /// 有值 = 内容已经能从 codex 侧读到,侧边栏按线程展示,不必再作为「旧会话」列出;
+    /// 无值 = 迁移前的老会话,只能只读渲染(见 P8 的只读归档)。
+    #[serde(default, alias = "thread_id")]
+    pub thread_id: Option<String>,
     #[serde(alias = "created_at")]
     pub created_at: i64,
     #[serde(alias = "updated_at")]
@@ -74,6 +80,7 @@ impl From<&Session> for SessionMeta {
             title: s.title.clone(),
             workdir: s.workdir.clone(),
             model: s.model.clone(),
+            thread_id: s.thread_id.clone(),
             created_at: s.created_at,
             updated_at: s.updated_at,
             message_count: s.messages.len(),

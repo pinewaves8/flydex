@@ -56,6 +56,15 @@ export const threadService = {
     return invoke<[unknown[], string | null]>('load_thread_turns', { threadId, limit })
   },
 
+  /**
+   * 取某个会话的**全部**轮次(时间正序),供导出使用
+   *
+   * 会把分页翻完 —— 导出必须是完整对话,不能只导当前看到的这一页。
+   */
+  loadAllTurns(threadId: string): Promise<unknown[]> {
+    return invoke<unknown[]>('load_all_turns', { threadId })
+  },
+
   /** 往更早的历史翻一页 */
   loadEarlierTurns(
     threadId: string,

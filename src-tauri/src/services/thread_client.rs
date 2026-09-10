@@ -182,6 +182,31 @@ impl ThreadClient {
         Ok((turns, backwards))
     }
 
+    /// 取**全部** turns(时间正序)
+    ///
+    /// 导出用:codex 没有导出接口,所以只能自己把历史翻完再渲染。
+    /// `max_pages` 兜住异常数据(每页 100 轮,50 页 = 5000 轮已远超实际)。
+    pub fn all_turns(
+        app: &AppHandle,
+        thread_id: &str,
+        max_pages: u32,
+    ) -> Result<Vec<Value>, String> {
+        let mut collected: Vec<Value> = Vec::new();
+        let mut cursor: Option<String> = None;
+        for _ in 0..max_pages {
+            let (mut turns, _next, backwards) =
+                Self::turns_page(app, thread_id, cursor.as_deref(), 100)?;
+            collected.append(&mut turns);
+            match backwards {
+                Some(c) if !c.is_empty() => cursor = Some(c),
+                _ => break,
+            }
+        }
+        // 分页是倒序取的,导出要正序
+        collected.reverse();
+        Ok(collected)
+    }
+
     /// 继续往前翻(用 `backwardsCursor`)
     pub fn earlier_turns(
         app: &AppHandle,

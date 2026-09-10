@@ -196,3 +196,11 @@ pub fn fork_thread(
     })
 }
 
+/// 取某个会话的**全部**轮次(时间正序),供导出使用
+///
+/// codex 没有导出接口(陷阱 J),所以导出由 Flydex 自己把历史翻完再渲染。
+#[tauri::command]
+pub fn load_all_turns(app: AppHandle, thread_id: String) -> Result<Vec<serde_json::Value>, String> {
+    ThreadClient::all_turns(&app, &thread_id, 50)
+}
+

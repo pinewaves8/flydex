@@ -47,6 +47,8 @@ export interface SessionMeta {
   workdir: string
   /** 会话级模型覆盖 */
   model?: string | null
+  /** 对应的 codex threadId;有值说明内容已能从 codex 侧读到 */
+  threadId?: string | null
   createdAt: number
   updatedAt: number
   /** 消息数量（列表展示用） */

@@ -1,5 +1,6 @@
 ﻿import { create } from 'zustand'
 
+import { renderExport } from '@/features/codex/threadExport'
 import { turnsToMessages } from '@/features/codex/threadItems'
 import { projectService } from '@/services/projectService'
 import { sessionService } from '@/services/sessionService'
@@ -33,6 +34,13 @@ interface ProjectState {
   threads: ThreadRow[]
   /** 回收站(archived=true 的线程) */
   archivedThreads: ThreadRow[]
+  /**
+   * 迁移前的老会话(没有 threadId,内容无法从 codex 侧读到)
+   *
+   * 只读归档:能看、能导出,但不参与对话 —— 它们的消息没有用户侧内容
+   * (早年 Flydex 只落 AI 侧日志),注入回 codex 会产生畸形上下文。
+   */
+  legacySessions: SessionMeta[]
   /** 当前打开的线程 id(就是 codex threadId) */
   currentThreadId: string | null
   /** 当前会话的模型覆盖(null = 跟随全局);持久化在 ~/.flydex/thread_settings.json */
@@ -46,6 +54,8 @@ interface ProjectState {
   /** 认领刚由 codex 建出的 thread(新会话首次发消息后) */
   adoptThread: (id: string) => Promise<void>
   loadArchivedThreads: () => Promise<void>
+  /** 载入迁移前的老会话(只读归档) */
+  loadLegacySessions: () => Promise<void>
   setCurrentThread: (id: string | null) => Promise<void>
   /** 再往前翻一页(打开会话时首屏之外的更早历史) */
   loadEarlierTurns: () => Promise<void>
@@ -60,6 +70,8 @@ interface ProjectState {
   forkThreadAtTurn: (turnId: string) => Promise<void>
   /** 打开命中的会话并滚动定位到具体那一条(搜索结果跳转用) */
   revealSearchHit: (threadId: string, query: string) => Promise<void>
+  /** 导出某个会话(自行拉全量历史后渲染) */
+  exportThread: (threadId: string, format: ExportFormat) => Promise<string>
   /** 当前项目对应的 codex project id；未同步上时为 null */
   codexProjectId: () => string | null
 
@@ -139,6 +151,7 @@ export const useProjectStore = create<ProjectState>((set, get) => ({
   archivedThreads: [],
   currentThreadId: null,
   currentThreadModel: null,
+  legacySessions: [],
   threadWarnings: [],
 
   loadProjects: async (baseDir?: string) => {
@@ -159,6 +172,9 @@ export const useProjectStore = create<ProjectState>((set, get) => ({
       } catch (e) {
         set({ projectSyncWarnings: [`项目归属同步失败: ${String(e)}`] })
       }
+
+      // 旧会话(只读归档)与线程并行加载 —— 很小,且失败不影响启动
+      void get().loadLegacySessions()
 
       // 统一路径比较(忽略大小写 + 路径分隔符)
       const norm = (p: string) => p.toLowerCase().replace(/\\/g, '/').replace(/\/+$/, '')
@@ -348,6 +364,20 @@ export const useProjectStore = create<ProjectState>((set, get) => ({
   },
 
   /**
+   * 导出会话内容
+   *
+   * codex 没有导出接口,所以这里自己把**全部**轮次拉下来(不是只导当前这一页),
+   * 再用与界面同一份映射渲染 —— 见 features/codex/threadExport.ts。
+   */
+  exportThread: async (threadId, format) => {
+    const thread = get().threads.find((t) => t.id === threadId)
+    if (!thread) throw new Error('找不到该会话')
+    const turns = await threadService.loadAllTurns(threadId)
+    const { messages } = turnsToMessages(turns as ThreadTurn[])
+    return renderExport(format, thread, messages)
+  },
+
+  /**
    * 打开某个会话,并滚动定位到查询命中的那一条
    *
    * 定位分两层,但**第二层在当前 codex 上不可用**:
@@ -437,6 +467,21 @@ export const useProjectStore = create<ProjectState>((set, get) => ({
       await threadService.setModel(id, model)
     } catch (e) {
       set({ threadWarnings: [`保存模型选择失败: ${String(e)}`] })
+    }
+  },
+
+  /**
+   * 载入迁移前的老会话
+   *
+   * 只用 `~/.flydex/sessions/*.json`(**只读**,它们是这些内容的唯一副本)。
+   * 有 threadId 的那些已经在主线列表里了,这里只留没有的,避免同一段对话出现两次。
+   */
+  loadLegacySessions: async () => {
+    try {
+      const all = await sessionService.list()
+      set({ legacySessions: all.filter((s) => !s.threadId) })
+    } catch (e) {
+      set({ threadWarnings: [`读取旧会话失败: ${String(e)}`] })
     }
   },
 
@@ -610,7 +655,9 @@ export const useProjectStore = create<ProjectState>((set, get) => ({
   },
 
   setCurrentSession: (id) => {
-    set({ currentSessionId: id })
+    // 旧会话没有 threadId:把当前线程清掉,否则侧边栏会高亮着另一个会话
+    set({ currentSessionId: id, currentThreadId: null })
+    if (id) persistThreadId(null)
     if (id) {
       useCodexStore.getState().loadSession({ messages: [], threadId: null })
       void sessionService.load(id).then((session) => {
