@@ -353,8 +353,19 @@ export const useProjectStore = create<ProjectState>((set, get) => ({
       })
       return
     }
+    // **已经打开着会话时也一律不自动切换**。
+    // 列表可能暂时不包含它(刚建出的 thread 还没落到 state db / 还没有 preview),
+    // 那种情况下"切到列表第一个"会把用户正在聊的会话顶掉 —— 这比"列表少一条"糟得多。
+    // 真正的失效场景(会话被删/被归档)由 deleteThread / archiveThread 显式置空,不靠这里兜。
+    if (current) {
+      useCodexStore.getState().appendOutput({
+        text: `[DIAG] loadThreads 已有当前会话(${current.slice(0, 8)}),保持不动`,
+        kind: 'stderr',
+      })
+      return
+    }
     useCodexStore.getState().appendOutput({
-      text: `[DIAG] loadThreads 自动打开 pick=${pick ?? 'null'}(原 current=${current ?? 'null'})`,
+      text: `[DIAG] loadThreads 自动打开 pick=${pick ?? 'null'}(原 current=null)`,
       kind: 'stderr',
     })
     if (pick) await get().setCurrentThread(pick)

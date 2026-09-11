@@ -715,8 +715,6 @@ export function ChatPanel() {
     respondApproval,
     approvePlan,
     cancelPlan,
-    clear,
-    newSession,
   } = useCodexSession()
   const planMode = useCodexStore((s) => s.planMode)
   const [showSkillPalette, setShowSkillPalette] = useState(false)
@@ -1003,7 +1001,7 @@ export function ChatPanel() {
         })
         break
       case 'clear':
-        clear()
+        useProjectStore.getState().newThread()
         break
       case 'dismiss':
       default:
@@ -1423,16 +1421,16 @@ ${scenarioGuide[report.scenario]}
             )}
           </button>
           <button
-            onClick={newSession}
+            onClick={() => useProjectStore.getState().newThread()}
             disabled={status === 'running'}
             className="flex items-center gap-1 rounded px-2 py-1 text-xs text-muted-foreground hover:bg-accent hover:text-accent-foreground disabled:opacity-50"
-            title="New session"
+            title="新建会话(与侧边栏 + 同一个入口)"
           >
             <Plus className="h-3 w-3" />
             New
           </button>
           <button
-            onClick={clear}
+            onClick={() => useProjectStore.getState().newThread()}
             disabled={status === 'running'}
             className="flex items-center gap-1 rounded px-2 py-1 text-xs text-muted-foreground hover:bg-accent hover:text-accent-foreground disabled:opacity-50"
           >

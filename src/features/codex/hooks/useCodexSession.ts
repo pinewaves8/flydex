@@ -667,11 +667,6 @@ export function useCodexSession() {
     }
   }, [])
 
-  // 清空输出（保留 thread_id）
-  const clear = useCallback(() => {
-    useCodexStore.getState().reset()
-  }, [])
-
   // 批准计划并执行：退出计划模式，resume 同一会话按批准的计划逐步执行
   const approvePlan = useCallback(
     async (steps: string[]) => {
@@ -698,12 +693,6 @@ export function useCodexSession() {
     useCodexStore.getState().appendMessage({ kind: 'system', content: '▸ 已取消计划，等待新指令' })
   }, [])
 
-  // 新建会话（清空 thread_id）
-  const newSession = useCallback(() => {
-    useCodexStore.getState().reset()
-    useCodexStore.getState().setThreadId(null)
-  }, [])
-
   return {
     status,
     output,
@@ -719,7 +708,5 @@ export function useCodexSession() {
     respondApproval,
     approvePlan,
     cancelPlan,
-    clear,
-    newSession,
   }
 }
