@@ -510,6 +510,12 @@ export function useCodexSession() {
             } else {
               void project.loadThreads()
             }
+            // **补两次延迟刷新**:新线程的元数据(标题取自首条消息的 preview)可能还没
+            // 落到 codex 的 state db —— 而 `thread/list` 会隐藏 preview 为空的线程。
+            // 只刷一次的话,刚建出的新会话会**短暂地从列表里消失**(看起来像被删了),
+            // 直到下一次刷新才回来。这里是幂等的,多刷几次没有副作用。
+            setTimeout(() => void project.loadThreads(), 1500)
+            setTimeout(() => void project.loadThreads(), 5000)
           }
           // 会话完成/失败通知（按设置开关控制）
           const settings = useSettingsStore.getState()

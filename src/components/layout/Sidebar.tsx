@@ -187,8 +187,18 @@ export function Sidebar() {
     }
   }
 
-  /** 渲染草稿会话占位项:点了 + 但还没发出第一条消息,codex 里尚无 thread */
-  const renderDraftItem = () => (
+  /**
+   * 渲染「当前会话」的占位项
+   *
+   * 两种情况都会用到:
+   * - 草稿:点了 + 但还没发第一条消息,codex 里尚无 thread
+   * - **已认领但列表尚未收录**:codex 的 `thread/list` 会隐藏 preview 为空的线程,
+   *   而新线程的 preview(取自首条消息)可能还没落到 state db —— 那段窗口里
+   *   当前会话会从列表里"消失",看起来像被删了
+   *
+   * 判据是「当前会话不在列表里」,所以列表补上之后它会自然被真实项取代。
+   */
+  const renderPendingItem = (subtitle: string) => (
     <div
       onClick={() => setCurrentView('codex')}
       style={{ paddingLeft: 8 }}
@@ -197,7 +207,7 @@ export function Sidebar() {
       <MessageSquare className="h-3.5 w-3.5 shrink-0" />
       <div className="min-w-0 flex-1">
         <div className="truncate text-sm">新会话</div>
-        <div className="truncate text-[10px] opacity-70">草稿 · 发出第一条消息后保存</div>
+        <div className="truncate text-[10px] opacity-70">{subtitle}</div>
       </div>
     </div>
   )
@@ -358,7 +368,11 @@ export function Sidebar() {
       )}
 
       <div className="flex-1 overflow-y-auto px-2 pb-2">
-        {draftActive && renderDraftItem()}
+        {draftActive
+          ? renderPendingItem('草稿 · 发出第一条消息后保存')
+          : currentThreadId && !threads.some((t) => t.id === currentThreadId)
+            ? renderPendingItem('正在载入会话信息…')
+            : null}
         {threads.length === 0 && !draftActive ? (
           <div className="px-2 py-4 text-center text-xs text-muted-foreground">
             暂无会话
