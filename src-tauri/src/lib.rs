@@ -43,10 +43,9 @@ use commands::task::{task_create, task_delete, task_list, task_update};
 use commands::terminal::resolve_dir;
 use commands::thread::{
     archive_thread, compact_thread, delete_thread, fork_thread, get_thread_settings, list_threads,
-    load_all_turns, load_earlier_turns, load_thread_turns,
-    project_map_entries, read_thread, rename_thread, search_thread_occurrences,
-    search_threads, set_thread_model, set_thread_project,
-    sync_projects, unarchive_thread,
+    load_all_turns, load_earlier_turns, load_thread_turns, project_map_entries, read_thread,
+    rename_thread, revert_thread, search_thread_occurrences, search_threads, set_thread_model,
+    set_thread_project, sync_projects, unarchive_thread,
 };
 use commands::workspace::{list_directory, list_files};
 
@@ -84,8 +83,6 @@ pub fn run() {
             list_sessions,
             load_session,
             export_session,
-            load_session,
-            export_session,
             // task
             task_list,
             task_create,
@@ -106,6 +103,7 @@ pub fn run() {
             archive_thread,
             unarchive_thread,
             compact_thread,
+            revert_thread,
             delete_thread,
             fork_thread,
             get_thread_settings,

@@ -227,6 +227,11 @@ impl CodexManager {
             "approvalPolicy": "on-request",
             "approvalsReviewer": "user",
             "sandbox": sandbox,
+            // 历史模式:`thread/revert`(回退到某一轮)**只支持 paginated**,
+            // 而默认是 legacy(实测) —— 不显式指定的话,回退功能对新会话也用不了。
+            // 已实测 paginated 线程在 read/resume/list 上一切照常,所以可以放心用。
+            // 注意:**已存在的 legacy 会话不受影响,也无法回退**(历史模式不可改)。
+            "historyMode": "paginated",
         });
         // per-thread config 层(优先级高于全局 ~/.codex/config.toml):
         // 1) 模型 + 供应商 —— 这样既不改用户的 Codex CLI 配置,也无需重启 daemon;

@@ -22,6 +22,13 @@ export interface ThreadRow {
   /** 毫秒 */
   updatedAt: number
   cwd: string
+  /**
+   * 历史模式:`legacy`(默认)或 `paginated`
+   *
+   * **`thread/revert`(回退到某一轮)只支持 `paginated`** —— 实测。前端据它决定
+   * 「回退」按钮能不能用,免得给一个必然报错的入口。
+   */
+  historyMode: string
   modelProvider: string
   status: string
   archived: boolean

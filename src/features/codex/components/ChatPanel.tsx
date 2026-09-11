@@ -18,6 +18,7 @@ import {
   Users,
   User,
   GitFork,
+  Undo2,
   ListChecks,
 } from 'lucide-react'
 import { memo, useCallback, useEffect, useMemo, useRef, useState } from 'react'
@@ -222,6 +223,8 @@ function TurnBlockView({
   ordinal,
   running,
   onFork,
+  canRevert,
+  onRevert,
   onApprovePlan,
   onCancelPlan,
   planDisabled,
@@ -236,6 +239,9 @@ function TurnBlockView({
   /** 该轮是否还在进行中 —— 进行中的轮不能被引用为分叉点 */
   running: boolean
   onFork?: (turnId: string, ordinal: number) => void
+  /** 该会话能否回退(仅 paginated 历史模式) */
+  canRevert: boolean
+  onRevert?: (turnId: string, ordinal: number) => void
   onApprovePlan?: (steps: string[]) => void
   onCancelPlan?: () => void
   planDisabled?: boolean
@@ -244,7 +250,10 @@ function TurnBlockView({
 }) {
   const failed = turnMeta?.status === 'failed' || turnMeta?.status === 'interrupted'
   // codex 的 fork 只认已结束的轮;正在跑的那轮(或状态仍是 inProgress 的)不给入口
-  const forkable = !!group.turnId && !!onFork && !running && turnMeta?.status !== 'inProgress'
+  const settled = !running && turnMeta?.status !== 'inProgress'
+  // codex 的 fork/revert 都只认已结束的轮
+  const forkable = !!group.turnId && !!onFork && settled
+  const revertable = !!group.turnId && !!onRevert && canRevert && settled
   return (
     // 没有 turnId 的是「不属于任何轮」的消息(旧会话、前端合成卡片):
     // 不给它们套轮容器的左边框,否则旧会话的观感会和迁移前不一样
@@ -259,16 +268,28 @@ function TurnBlockView({
               {turnMeta?.status === 'interrupted' ? '已中断' : '失败'}
             </span>
           )}
-          {forkable && (
-            <button
-              onClick={() => onFork!(group.turnId!, ordinal)}
-              className="ml-auto flex items-center gap-1 rounded border border-border px-1.5 py-0.5 opacity-0 transition-opacity hover:bg-accent hover:text-foreground group-hover/turn:opacity-100"
-              title={`在此轮之后分叉(保留前 ${ordinal} 轮上下文)`}
-            >
-              <GitFork className="h-3 w-3" />
-              在此分叉
-            </button>
-          )}
+          <div className="ml-auto flex items-center gap-1">
+            {revertable && (
+              <button
+                onClick={() => onRevert!(group.turnId!, ordinal)}
+                className="flex items-center gap-1 rounded border border-border px-1.5 py-0.5 opacity-0 transition-opacity hover:bg-accent hover:text-foreground group-hover/turn:opacity-100"
+                title={`回退到第 ${ordinal} 轮之前(丢弃之后的轮次;不会撤销文件改动)`}
+              >
+                <Undo2 className="h-3 w-3" />
+                回退到此前
+              </button>
+            )}
+            {forkable && (
+              <button
+                onClick={() => onFork!(group.turnId!, ordinal)}
+                className="flex items-center gap-1 rounded border border-border px-1.5 py-0.5 opacity-0 transition-opacity hover:bg-accent hover:text-foreground group-hover/turn:opacity-100"
+                title={`在此轮之后分叉(保留前 ${ordinal} 轮上下文)`}
+              >
+                <GitFork className="h-3 w-3" />
+                在此分叉
+              </button>
+            )}
+          </div>
         </div>
       )}
       <div className="space-y-3">
@@ -1243,6 +1264,22 @@ ${scenarioGuide[report.scenario]}
     [turnMetas],
   )
 
+  // 只有 paginated 历史模式的会话能回退(codex 约束;老会话是 legacy,不可改)
+  const canRevert = currentThread?.historyMode === 'paginated'
+
+  const handleRevertToTurn = useCallback((turnId: string, ordinal: number) => {
+    const ok = window.confirm(
+      [
+        `回退到第 ${ordinal} 轮之前?`,
+        '',
+        `第 ${ordinal} 轮及其之后的所有轮次将被丢弃(对话历史缩短)。`,
+        '注意:这不会撤销工作区里的文件改动 —— codex 只回退对话历史。',
+      ].join('\n'),
+    )
+    if (!ok) return
+    void useProjectStore.getState().revertToTurn(turnId)
+  }, [])
+
   const handleForkAtTurn = useCallback((turnId: string, ordinal: number) => {
     const ok = window.confirm(
       `在此轮(第 ${ordinal} 轮)之后分叉出新会话?
@@ -1434,6 +1471,14 @@ ${scenarioGuide[report.scenario]}
                 </button>
               </div>
             )}
+            {/* 老会话是 legacy 历史模式,codex 不支持回退(模式建会话时就定了,改不了)。
+                说一句,免得用户以为"回退按钮不见了"是 bug。 */}
+            {currentThread && !canRevert && messages.length > 0 && (
+              <div className="text-[10px] text-muted-foreground/60">
+                ▸ 此会话建立时不支持回退(legacy 历史模式),因此没有「回退到此前」按钮 ——
+                新建的会话可以回退。
+              </div>
+            )}
             {/* 结构化消息:按轮分组,组内把连续的工具调用合并为一段 */}
             {buildTurnGroups(messages).map((group, gi, groups) => (
               <TurnBlockView
@@ -1444,6 +1489,8 @@ ${scenarioGuide[report.scenario]}
                 // 只在跑的时候把最后一轮当进行中:历史里的 inProgress 由 turnMeta 判定
                 running={status === 'running' && gi === groups.length - 1}
                 onFork={handleForkAtTurn}
+                canRevert={canRevert}
+                onRevert={handleRevertToTurn}
                 repo={currentThreadWorkdir || workspaceCwd}
                 onApprovePlan={approvePlan}
                 onCancelPlan={cancelPlan}

@@ -47,6 +47,11 @@ pub struct ThreadRow {
     /// **毫秒**(已从 codex 的秒换算)
     pub updated_at: i64,
     pub cwd: String,
+    /// 历史模式:`legacy` / `paginated`
+    ///
+    /// **`thread/revert` 只支持 `paginated`**(实测),而线程默认是 `legacy` ——
+    /// 所以前端要靠它决定「回退」按钮能不能出现,免得给一个必然报错的入口。
+    pub history_mode: String,
     pub model_provider: String,
     /// `notLoaded` / `idle` / `systemError` / `active`
     pub status: String,
@@ -88,6 +93,11 @@ impl ThreadRow {
             created_at: secs_to_ms("createdAt"),
             updated_at: secs_to_ms("updatedAt"),
             cwd: strip_verbatim_prefix(v.get("cwd").and_then(|x| x.as_str()).unwrap_or("")),
+            history_mode: v
+                .get("historyMode")
+                .and_then(|x| x.as_str())
+                .unwrap_or("legacy")
+                .to_string(),
             model_provider: v
                 .get("modelProvider")
                 .and_then(|x| x.as_str())

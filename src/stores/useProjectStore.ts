@@ -72,6 +72,8 @@ interface ProjectState {
   forkThreadAtTurn: (turnId: string) => Promise<void>
   /** 压缩当前会话的上下文(codex 原生;会重写历史) */
   compactCurrentThread: () => Promise<void>
+  /** 回退到某一轮之前(丢弃其后的所有轮次;**不会撤销文件改动**) */
+  revertToTurn: (turnId: string) => Promise<void>
   /** 打开命中的会话并滚动定位到具体那一条(搜索结果跳转用) */
   revealSearchHit: (threadId: string, query: string) => Promise<void>
   /** 导出某个会话(自行拉全量历史后渲染) */
@@ -431,6 +433,24 @@ export const useProjectStore = create<ProjectState>((set, get) => ({
           : `「${query}」在更早的历史里,已往前翻 ${MAX_REVEAL_PAGES} 页仍未到 —— 可在会话里继续往上翻。`,
       ],
     })
+  },
+
+  /**
+   * 回退到某一轮之前(codex `thread/revert`)
+   *
+   * **只回退对话历史,不撤销工作区文件改动** —— 与 Claude Code 的 rewind 不同,
+   * 所以调用方(UI)必须先把这点讲清楚再让用户点。
+   * 同步接口,返回后重新拉一次即可。
+   */
+  revertToTurn: async (turnId) => {
+    const id = get().currentThreadId
+    if (!id) return
+    try {
+      await threadService.revert(id, turnId)
+      await get().setCurrentThread(id)
+    } catch (e) {
+      set({ threadWarnings: [`回退失败: ${String(e)}`] })
+    }
   },
 
   /**

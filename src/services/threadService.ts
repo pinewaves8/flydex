@@ -134,6 +134,19 @@ export const threadService = {
     return invoke<void>('compact_thread', { threadId })
   },
 
+  /**
+   * 把会话回退到某一轮**之前**(codex `thread/revert`)
+   *
+   * 两条硬约束(都实测过):
+   * - **只回退对话历史,不撤销工作区文件改动**
+   * - **只支持 `paginated` 历史模式的会话**;legacy 会话会直接报错
+   *
+   * 是同步接口:返回即完成(不像压缩那样要轮询)。
+   */
+  revert(threadId: string, beforeTurnId: string): Promise<void> {
+    return invoke<void>('revert_thread', { threadId, beforeTurnId })
+  },
+
   /** 会话级 UI 偏好(codex 的 Thread 里没有这些字段,属 Flydex 侧数据) */
   getSettings(threadId: string): Promise<ThreadSettings> {
     return invoke<ThreadSettings>('get_thread_settings', { threadId })

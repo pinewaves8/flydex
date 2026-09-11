@@ -299,6 +299,23 @@ impl ThreadClient {
             .map(|_| ())
     }
 
+    /// 把会话历史回退到某一轮**之前**(codex `thread/revert`)
+    ///
+    /// 三条要知道的(实测):
+    /// 1. **只改持久化的对话历史,不撤销工作区文件改动** —— 与 Claude Code 的
+    ///    rewind 不同,所以 UI 必须把这点讲清楚
+    /// 2. **只支持 `paginated` 历史模式**的线程;legacy 线程会直接报
+    ///    "thread/revert only supports paginated threads"
+    /// 3. 是**同步**接口:响应即完成信号(不像压缩那样要轮询)
+    pub fn revert(app: &AppHandle, thread_id: &str, before_turn_id: &str) -> Result<(), String> {
+        Self::client(app)?
+            .request(
+                "thread/revert",
+                Some(json!({ "threadId": thread_id, "beforeTurnId": before_turn_id })),
+            )
+            .map(|_| ())
+    }
+
     /// 把线程归入某个 codex project;传 `None` 表示清除归属
     pub fn set_project(
         app: &AppHandle,

@@ -19,6 +19,7 @@ const thread: ThreadRow = {
   createdAt: Date.UTC(2026, 0, 2, 3, 4, 5),
   updatedAt: Date.UTC(2026, 0, 3, 3, 4, 5),
   cwd: 'C:/work',
+  historyMode: 'paginated',
   modelProvider: 'flydex_deepseek',
   status: 'idle',
   archived: false,

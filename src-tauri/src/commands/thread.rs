@@ -212,3 +212,17 @@ pub fn load_all_turns(app: AppHandle, thread_id: String) -> Result<Vec<serde_jso
 pub fn compact_thread(app: AppHandle, thread_id: String) -> Result<(), String> {
     ThreadClient::compact(&app, &thread_id)
 }
+
+/// 把会话回退到某一轮之前(codex `thread/revert`)
+///
+/// **只回退对话历史,不会撤销工作区里的文件改动**;且只支持 paginated 模式的会话。
+/// 调用方必须先确认这两点(见前端)。
+#[tauri::command]
+pub fn revert_thread(
+    app: AppHandle,
+    thread_id: String,
+    before_turn_id: String,
+) -> Result<(), String> {
+    ThreadClient::revert(&app, &thread_id, &before_turn_id)
+}
+

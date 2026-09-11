@@ -885,7 +885,146 @@ fn main() {
                     }
                     println!("    压缩后该会话的 item 类型: {kinds:?}");
                 }
+                match p.request("thread/delete", Some(json!({ "threadId": tid }))) {
+                    Ok(_) => println!("    已清理自建线程"),
+                    Err(e) => println!("    ⚠ 清理失败(需手动删 {tid}): {e}"),
+                }
+            }
+        }
+    }
+
+
+    // ── 11. --revert-probe:验证 thread/revert(回退到某一轮之前) ──
+    //
+    // 自建线程跑两轮再回退,**不碰任何已有会话** —— 回退会丢弃历史,不可逆。
+    if args.iter().any(|a| a == "--revert-probe") {
+        println!("\n== 11. thread/revert(回退到某一轮之前) ==");
+        let d = std::env::temp_dir().join(format!("flydex-revert-probe-{}", std::process::id()));
+        std::fs::create_dir_all(&d).ok();
+
+        let tid = p
+            .request(
+                "thread/start",
+                Some(json!({
+                    "cwd": d.to_string_lossy(),
+                    "ephemeral": false,
+                    // 默认是 legacy,而 revert 只认 paginated
+                    "historyMode": "paginated",
+                })),
+            )
+            .and_then(|v| {
+                v.get("thread")
+                    .and_then(|t| t.get("id"))
+                    .and_then(|i| i.as_str())
+                    .map(str::to_string)
+                    .ok_or_else(|| "thread/start 无 thread.id".to_string())
+            });
+
+        match tid {
+            Err(e) => failures.push(format!("无法建探针线程(historyMode=paginated): {e}")),
+            Ok(tid) => {
+                println!("    自建线程(paginated){}", &tid[..8.min(tid.len())]);
+                // 跑两轮,拿到两个 turnId
+                let mut turn_ids: Vec<String> = Vec::new();
+                for n in 1..=2 {
+                    let _ = p.request(
+                        "turn/start",
+                        Some(json!({
+                            "threadId": tid,
+                            "input": [{ "type": "text", "text": format!("这是第 {n} 轮,只回复 ok") }],
+                        })),
+                    );
+                    if p.wait_notification("turn/completed", 120).is_some() {
+                        if let Ok(v) = p.request(
+                            "thread/turns/list",
+                            Some(json!({ "threadId": tid, "limit": 10, "itemsView": "full", "sortDirection": "asc" })),
+                        ) {
+                            if let Some(arr) = v.get("data").and_then(|d| d.as_array()) {
+                                turn_ids = arr
+                                    .iter()
+                                    .filter_map(|t| t.get("id").and_then(|x| x.as_str()).map(str::to_string))
+                                    .collect();
+                            }
+                        }
+                    } else {
+                        println!("    ⚠ 第 {n} 轮未在超时内完成");
+                    }
+                }
+                println!("    回退前有 {} 轮: {:?}", turn_ids.len(),
+                    turn_ids.iter().map(|t| &t[..6.min(t.len())]).collect::<Vec<_>>());
+
+                if turn_ids.len() < 2 {
+                    println!("    ⚠ 轮数不足两个,跳过回退测试(该用例需要至少两轮)");
+                } else {
+                    let second = turn_ids[1].clone();
+                    println!("    回退到第 2 轮**之前**(即只保留第 1 轮)");
+                    match p.request(
+                        "thread/revert",
+                        Some(json!({ "threadId": tid, "beforeTurnId": second })),
+                    ) {
+                        Err(e) => {
+                            println!("    回退失败: {e}");
+                            failures.push(format!("thread/revert 失败: {e}"));
+                        }
+                        Ok(v) => {
+                            println!("    回退响应 OK(同步接口,响应即完成信号)");
+                            let meta = v.get("thread").cloned().unwrap_or(Value::Null);
+                            println!("    响应里的 thread.turns = {:?}(文档说恒为空)",
+                                meta.get("turns"));
+                        }
+                    }
+                    // 回退后历史里还剩几轮?
+                    match p.request(
+                        "thread/turns/list",
+                        Some(json!({ "threadId": tid, "limit": 10, "itemsView": "full", "sortDirection": "asc" })),
+                    ) {
+                        Ok(v) => {
+                            let n = v.get("data").and_then(|d| d.as_array()).map(|a| a.len()).unwrap_or(0);
+                            if n == 1 {
+                                println!("    回退后剩 {n} 轮 ✔(第 2 轮及其之后被丢弃)");
+                            } else {
+                                println!("    ⚠ 回退后剩 {n} 轮,预期 1 轮");
+                                failures.push(format!("回退后轮数为 {n},预期 1"));
+                            }
+                        }
+                        Err(e) => println!("    回退后 turns/list 失败: {e}"),
+                    }
+                }
                 // 清理:删掉自建线程
+                // 回归:paginated 线程在其它接口上是否照常?这是采用该模式的**前提** ——
+                // 为了回退能力把新会话变成"异类"就不划算。
+                println!("    —— 回归检查(paginated 线程是否照常)——");
+                match p.request("thread/read", Some(json!({ "threadId": tid, "includeTurns": false }))) {
+                    Ok(v) => println!("      thread/read      OK  historyMode={:?}",
+                        v.get("thread").and_then(|t| t.get("historyMode"))),
+                    Err(e) => failures.push(format!("paginated 线程 thread/read 失败: {e}")),
+                }
+                match p.request("thread/resume", Some(json!({ "threadId": tid }))) {
+                    Ok(_) => println!("      thread/resume    OK"),
+                    Err(e) => failures.push(format!("paginated 线程 thread/resume 失败: {e}")),
+                }
+                match p.request(
+                    "thread/list",
+                    Some(json!({ "limit": 100, "useStateDbOnly": true })),
+                ) {
+                    Ok(v) => {
+                        let found = v
+                            .get("data")
+                            .and_then(|d| d.as_array())
+                            .map(|a| a.iter().any(|t| {
+                                t.get("id").and_then(|x| x.as_str()) == Some(tid.as_str())
+                            }))
+                            .unwrap_or(false);
+                        if found {
+                            println!("      thread/list      能列出该线程 OK");
+                        } else {
+                            println!("      ⚠ thread/list 里找不到该线程");
+                            failures.push("paginated 线程在 thread/list 里不可见".into());
+                        }
+                    }
+                    Err(e) => failures.push(format!("thread/list 失败: {e}")),
+                }
+
                 match p.request("thread/delete", Some(json!({ "threadId": tid }))) {
                     Ok(_) => println!("    已清理自建线程"),
                     Err(e) => println!("    ⚠ 清理失败(需手动删 {tid}): {e}"),

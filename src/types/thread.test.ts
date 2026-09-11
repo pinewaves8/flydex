@@ -40,6 +40,7 @@ function row(v: Partial<ThreadRow> & { id: string }): ThreadRow {
     createdAt: 0,
     updatedAt: 0,
     cwd: '',
+    historyMode: 'legacy',
     modelProvider: '',
     status: 'idle',
     archived: false,
