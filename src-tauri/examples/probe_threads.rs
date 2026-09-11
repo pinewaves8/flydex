@@ -1142,6 +1142,89 @@ fn main() {
     }
 
 
+    // ── 13. --model-probe:model/list 与 config/read 返回什么 ──
+    if args.iter().any(|a| a == "--model-probe") {
+        println!("\n== 13. model/list / config/read ==");
+        match p.request("model/list", Some(json!({}))) {
+            Ok(v) => {
+                let arr = v.get("data").and_then(|d| d.as_array()).cloned()
+                    .or_else(|| v.as_array().cloned())
+                    .unwrap_or_default();
+                println!("    model/list → {} 项", arr.len());
+                for m in arr.iter().take(6) {
+                    println!("      {}", serde_json::to_string(m).unwrap_or_default()
+                        .chars().take(220).collect::<String>());
+                }
+            }
+            Err(e) => println!("    model/list 失败: {e}"),
+        }
+        match p.request("config/read", Some(json!({}))) {
+            Ok(v) => println!("    config/read →\n      {}", serde_json::to_string(&v)
+                .unwrap_or_default().chars().take(900).collect::<String>()),
+            Err(e) => println!("    config/read 失败: {e}"),
+        }
+        match p.request("modelProvider/capabilities/read", Some(json!({}))) {
+            Ok(v) => println!("    modelProvider/capabilities/read → {}",
+                serde_json::to_string(&v).unwrap_or_default().chars().take(400).collect::<String>()),
+            Err(e) => println!("    modelProvider/capabilities/read 失败: {e}"),
+        }
+    }
+
+
+    // ── 14. --align-probe:P14/P15 候选的可行性摸底(只读,不启动 turn) ──
+    if args.iter().any(|a| a == "--align-probe") {
+        println!("\n== 14. 候选接口可行性(只读) ==");
+        // 注意:探针的 cwd 是 src-tauri(跑 cargo run 的地方),而源码在上一级 ——
+        // 根目录传错会让搜索"合理地"返回 0 条,别把它当成接口不可用。
+        let root = std::env::current_dir()
+            .ok()
+            .and_then(|d| d.parent().map(|p| p.to_string_lossy().to_string()))
+            .unwrap_or_else(|| ".".to_string());
+        println!("    搜索根目录: {root}");
+
+        // (1) fuzzyFileSearch —— 能否替代 Flydex 自实现的 @-mention 过滤?
+        match p.request(
+            "fuzzyFileSearch",
+            Some(json!({ "query": "inputbox", "roots": [root] })),
+        ) {
+            Ok(v) => {
+                let n = v.get("files").and_then(|f| f.as_array()).map(|a| a.len())
+                    .or_else(|| v.get("data").and_then(|f| f.as_array()).map(|a| a.len()))
+                    .unwrap_or(0);
+                println!("    fuzzyFileSearch → {n} 个结果");
+                println!("      样例: {}", serde_json::to_string(&v).unwrap_or_default()
+                    .chars().take(300).collect::<String>());
+            }
+            Err(e) => println!("    fuzzyFileSearch 失败: {e}"),
+        }
+
+        // (2) hooks/list —— Flydex 自维护 hooks.json
+        match p.request("hooks/list", Some(json!({ "cwds": [root] }))) {
+            Ok(v) => println!("    hooks/list → {}", serde_json::to_string(&v)
+                .unwrap_or_default().chars().take(400).collect::<String>()),
+            Err(e) => println!("    hooks/list 失败: {e}"),
+        }
+
+        // (3) skills/list —— Flydex 自维护 skills
+        match p.request("skills/list", Some(json!({ "cwds": [root] }))) {
+            Ok(v) => println!("    skills/list → {}", serde_json::to_string(&v)
+                .unwrap_or_default().chars().take(500).collect::<String>()),
+            Err(e) => println!("    skills/list 失败: {e}"),
+        }
+
+        // (4) fs/readDirectory —— Flydex 自实现 list_directory
+        match p.request("fs/readDirectory", Some(json!({ "path": format!("{root}/src/features/codex/components") }))) {
+            Ok(v) => {
+                let n = v.get("entries").and_then(|e| e.as_array()).map(|a| a.len())
+                    .or_else(|| v.get("data").and_then(|e| e.as_array()).map(|a| a.len()))
+                    .unwrap_or(0);
+                println!("    fs/readDirectory → {n} 个条目");
+            }
+            Err(e) => println!("    fs/readDirectory 失败: {e}"),
+        }
+    }
+
+
     println!("\n================ 结论 ================");
     if failures.is_empty() {
         println!("全部假设验证通过");
