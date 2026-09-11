@@ -1,7 +1,7 @@
 ﻿import { create } from 'zustand'
 
 import { renderExport } from '@/features/codex/threadExport'
-import { turnsToMessages } from '@/features/codex/threadItems'
+import { isCompactedTurns, turnsToMessages } from '@/features/codex/threadItems'
 import { projectService } from '@/services/projectService'
 import { sessionService } from '@/services/sessionService'
 import { threadService } from '@/services/threadService'
@@ -16,6 +16,9 @@ const CURRENT_PROJECT_KEY = 'flydex.currentProjectId'
 const CURRENT_THREAD_KEY = 'flydex.currentThreadId'
 /** 跳转到搜索命中时,最多往前翻多少页 turns(每页 20 轮) */
 const MAX_REVEAL_PAGES = 10
+/** 压缩的轮询间隔与上限(压缩是一次模型调用,以分钟计) */
+const COMPACT_POLL_MS = 3000
+const COMPACT_MAX_POLLS = 100
 
 interface ProjectState {
   projects: Project[]
@@ -42,6 +45,8 @@ interface ProjectState {
   currentThreadId: string | null
   /** 当前会话的模型覆盖(null = 跟随全局);持久化在 ~/.flydex/thread_settings.json */
   currentThreadModel: string | null
+  /** 正在压缩上下文(压缩是完整模型调用,以分钟计) */
+  compacting: boolean
   /** 列表/打开过程中的非致命问题(第三原则:可见) */
   threadWarnings: string[]
 
@@ -65,6 +70,8 @@ interface ProjectState {
   setThreadModel: (model: string | null) => Promise<void>
   /** 从某一轮之后分叉出新会话,并切换过去 */
   forkThreadAtTurn: (turnId: string) => Promise<void>
+  /** 压缩当前会话的上下文(codex 原生;会重写历史) */
+  compactCurrentThread: () => Promise<void>
   /** 打开命中的会话并滚动定位到具体那一条(搜索结果跳转用) */
   revealSearchHit: (threadId: string, query: string) => Promise<void>
   /** 导出某个会话(自行拉全量历史后渲染) */
@@ -137,6 +144,7 @@ export const useProjectStore = create<ProjectState>((set, get) => ({
   archivedThreads: [],
   currentThreadId: null,
   currentThreadModel: null,
+  compacting: false,
   legacySessions: [],
   threadWarnings: [],
 
@@ -423,6 +431,44 @@ export const useProjectStore = create<ProjectState>((set, get) => ({
           : `「${query}」在更早的历史里,已往前翻 ${MAX_REVEAL_PAGES} 页仍未到 —— 可在会话里继续往上翻。`,
       ],
     })
+  },
+
+  /**
+   * 压缩当前会话的上下文(codex `thread/compact/start`)
+   *
+   * 两点必须知道:
+   * 1. **压缩会重写历史** —— 旧轮次全部消失,只剩一条摘要消息(这是 codex 的语义)
+   * 2. **没有完成通知** —— `thread/compacted` 对 v2 客户端不发(源码标注 deprecated),
+   *    只能轮询「历史是否已被重写成摘要」来判断结束。压缩是一次完整模型调用,
+   *    耗时以分钟计,所以轮询窗口给得比较宽。
+   */
+  compactCurrentThread: async () => {
+    const id = get().currentThreadId
+    if (!id) return
+    set({ compacting: true })
+    try {
+      await threadService.compact(id)
+      let finished = false
+      for (let i = 0; i < COMPACT_MAX_POLLS; i++) {
+        await new Promise((r) => setTimeout(r, COMPACT_POLL_MS))
+        const [turns] = await threadService.loadTurns(id)
+        if (isCompactedTurns(turns as ThreadTurn[])) {
+          finished = true
+          break
+        }
+      }
+      if (!finished) {
+        // 超时不等于失败:压缩在服务端继续跑。但要明说,否则用户会以为没生效
+        set({
+          threadWarnings: ['压缩比预期慢,仍在后台继续。过一会儿重开会话即可看到摘要(不必重试)。'],
+        })
+      }
+      await get().setCurrentThread(id)
+    } catch (e) {
+      set({ threadWarnings: [`压缩失败: ${String(e)}`] })
+    } finally {
+      set({ compacting: false })
+    }
   },
 
   /**

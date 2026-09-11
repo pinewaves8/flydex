@@ -1,8 +1,11 @@
 import { describe, expect, it } from 'vitest'
 
 import {
+  COMPACTION_SUMMARY_PREFIX,
   formatToolContent,
   hasInjectedContext,
+  isCompactedTurns,
+  isCompactionSummary,
   mapItemToMessage,
   summarizeToolResult,
   turnsToMessages,
@@ -349,5 +352,59 @@ describe('turnsToMessages', () => {
     const { messages, turns } = turnsToMessages([turn('t1', [])])
     expect(messages).toHaveLength(0)
     expect(turns).toHaveLength(1)
+  })
+})
+
+describe('压缩摘要的识别', () => {
+  // 回归:codex 压缩后会把**整个历史重写成一条** userMessage,文本以固定前缀开头。
+  // 不识别它,这条英文摘要就会以"用户提问"的身份糊满一屏。
+  const summary = `${COMPACTION_SUMMARY_PREFIX}
+摘要正文……`
+
+  it('识别压缩摘要', () => {
+    expect(isCompactionSummary(summary)).toBe(true)
+  })
+
+  it('普通提问不算', () => {
+    expect(isCompactionSummary('帮我改一下这个文件')).toBe(false)
+  })
+
+  it('前缀出现在中间不算(必须是开头)', () => {
+    expect(
+      isCompactionSummary(`你好
+${COMPACTION_SUMMARY_PREFIX}`),
+    ).toBe(false)
+  })
+
+  it('isCompactedTurns 认「首条 item 是摘要 userMessage」的历史', () => {
+    const turn = (items: ThreadItem[]): ThreadTurn => ({
+      id: 't1',
+      status: 'completed',
+      startedAt: 0,
+      completedAt: 0,
+      durationMs: 0,
+      error: null,
+      items,
+    })
+    const summaryTurn = turn([
+      item({ id: 'u1', type: 'user_message', content: [{ type: 'text', text: summary }] }),
+    ])
+    expect(isCompactedTurns([summaryTurn])).toBe(true)
+
+    const normalTurn = turn([
+      item({ id: 'u2', type: 'user_message', content: [{ type: 'text', text: '你好' }] }),
+    ])
+    expect(isCompactedTurns([normalTurn])).toBe(false)
+    // 空历史不能误判成"已压缩"(否则压缩轮询会立刻以为完成)
+    expect(isCompactedTurns([])).toBe(false)
+  })
+
+  it('压缩摘要经映射后仍是一条 user 消息(由卡片决定怎么展示)', () => {
+    const m = mapItemToMessage(
+      item({ id: 'u1', type: 'user_message', content: [{ type: 'text', text: summary }] }),
+      TS,
+    )
+    expect(m?.kind).toBe('user')
+    expect(isCompactionSummary(m!.content)).toBe(true)
   })
 })

@@ -14,6 +14,34 @@ import type { CodexFileChange, CodexMessage, CodexUsage, TurnStats } from '@/typ
 import type { ThreadItem, ThreadTurn } from '@/types/thread'
 
 /**
+ * codex 压缩上下文后,**整个会话历史会被重写成一条** userMessage,
+ * 其文本以这个固定前缀开头(来自 codex 的 `prompts/templates/compact/summary_prefix.md`)。
+ *
+ * 不识别它的话,这条摘要会以"你的提问"的身份糊一屏英文上去 —— 与当初注入的
+ * AGENTS.md 是同一类问题,所以沿用同一套处理:折叠成一行,按需展开。
+ */
+export const COMPACTION_SUMMARY_PREFIX =
+  'Another language model started to solve this problem and produced a summary of its thinking process.'
+
+/** 该文本是不是 codex 的压缩摘要 */
+export function isCompactionSummary(text: string): boolean {
+  return text.trimStart().startsWith(COMPACTION_SUMMARY_PREFIX)
+}
+
+/**
+ * 压缩后的历史长这样吗
+ *
+ * 判据是「第一条 item 是以摘要前缀开头的 userMessage」。压缩是**异步且没有完成
+ * 通知**的(`thread/compacted` 对 v2 客户端不发,见 Rust 侧 ThreadClient::compact),
+ * 所以只能靠它来判断压缩什么时候结束。
+ */
+export function isCompactedTurns(turns: ThreadTurn[]): boolean {
+  const first = turns[0]?.items?.[0]
+  if (!first || first.type !== 'user_message') return false
+  return isCompactionSummary(userMessageText(first))
+}
+
+/**
  * 早期 Flydex 会把项目规范(AGENTS.md 等)拼进用户输入 —— 已修复(现交给 codex 原生
  * 加载),但**历史 turn 里还留着**这段前缀。
  *
@@ -87,6 +115,11 @@ function userTextFrom(content: unknown): { text: string; attachments: number } {
     }
   }
   return { text: texts.join(''), attachments }
+}
+
+/** userMessage 的正文(供上方 isCompactedTurns 使用) */
+function userMessageText(item: ThreadItem): string {
+  return userTextFrom(item.content).text
 }
 
 /**

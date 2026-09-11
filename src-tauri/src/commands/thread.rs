@@ -204,3 +204,11 @@ pub fn load_all_turns(app: AppHandle, thread_id: String) -> Result<Vec<serde_jso
     ThreadClient::all_turns(&app, &thread_id, 50)
 }
 
+/// 触发上下文压缩(codex `thread/compact/start`)
+///
+/// **会把会话历史重写成一条摘要消息、旧轮次消失**(codex 的压缩语义)。
+/// 调用方必须先把这件事告诉用户。响应只表示已受理,完成需要轮询。
+#[tauri::command]
+pub fn compact_thread(app: AppHandle, thread_id: String) -> Result<(), String> {
+    ThreadClient::compact(&app, &thread_id)
+}

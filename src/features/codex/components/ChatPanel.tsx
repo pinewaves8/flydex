@@ -36,7 +36,7 @@ import { TurnPlanPanel } from './TurnPlanPanel'
 import { TurnSummaryCard } from './TurnSummaryCard'
 
 import { Markdown } from '@/components/ui/Markdown'
-import { hasInjectedContext } from '@/features/codex/threadItems'
+import { hasInjectedContext, isCompactionSummary } from '@/features/codex/threadItems'
 import { SkillPalette } from '@/features/skills/SkillPalette'
 import { SubagentPanel } from '@/features/subagent/SubagentPanel'
 import { TaskPanel } from '@/features/tasks/TaskPanel'
@@ -46,7 +46,6 @@ import {
   type InitStateData,
   getInitStepLabel,
 } from '@/services/initService'
-import { memoryService } from '@/services/memoryService'
 import { useCodexStore, type ThreadTurnMeta } from '@/stores/useCodexStore'
 import { useModelStore } from '@/stores/useModelStore'
 import { useProjectStore } from '@/stores/useProjectStore'
@@ -309,13 +308,16 @@ function TurnBlockView({
  */
 function UserMessageCard({ message }: { message: CodexMessage }) {
   const injected = hasInjectedContext(message.content)
+  const compacted = isCompactionSummary(message.content)
   const [expanded, setExpanded] = useState(false)
   const timeStr = new Date(message.timestamp).toLocaleTimeString('zh-CN', {
     hour: '2-digit',
     minute: '2-digit',
   })
 
-  if (injected && !expanded) {
+  // 压缩摘要不是"用户说的话",而是 codex 重写历史后的产物 —— 给一个明确的标记,
+  // 而不是让它冒充用户提问(而且它是一大段英文,展开才该看到)
+  if ((injected || compacted) && !expanded) {
     return (
       <div className="flex justify-end">
         <button
@@ -324,7 +326,9 @@ function UserMessageCard({ message }: { message: CodexMessage }) {
           title="这段提问里含有早期 Flydex 自动注入的项目规范,已折叠"
         >
           <ChevronRight className="h-3 w-3 shrink-0" />
-          <span className="font-medium">含项目规范注入</span>
+          <span className="font-medium">
+            {compacted ? '上下文已压缩(历史被替换为摘要)' : '含项目规范注入'}
+          </span>
           <span className="opacity-70">· {message.content.length} 字符 · 点击展开</span>
           <span className="opacity-50">{timeStr}</span>
         </button>
@@ -339,13 +343,13 @@ function UserMessageCard({ message }: { message: CodexMessage }) {
           <User className="h-2.5 w-2.5" />
           <span>你</span>
           <span className="opacity-60">{timeStr}</span>
-          {injected && (
+          {(injected || compacted) && (
             <button
               onClick={() => setExpanded(false)}
               className="ml-1 rounded px-1 hover:bg-accent"
-              title="折叠注入的项目规范"
+              title={compacted ? '折叠压缩摘要' : '折叠注入的项目规范'}
             >
-              折叠注入
+              折叠
             </button>
           )}
         </div>
@@ -744,6 +748,8 @@ export function ChatPanel() {
   const turnsCursor = useCodexStore((s) => s.turnsCursor)
   const turnMetas = useCodexStore((s) => s.turns)
   const loadEarlierTurns = useProjectStore((s) => s.loadEarlierTurns)
+  // 压缩进行中:分钟级操作,要有明确反馈,也让输入框/压缩按钮停用
+  const compacting = useProjectStore((s) => s.compacting)
   const turnMetaById = useMemo(() => new Map(turnMetas.map((t) => [t.id, t])), [turnMetas])
 
   // AI 活动状态 banner(对齐 Claude Code:实时显示"思考中/正在响应/运行命令"+ 计时)
@@ -869,35 +875,31 @@ export function ChatPanel() {
     }
   }, [messages, aiLive?.text])
 
-  /** 压缩上下文（6.1 P2）：长会话时把模型摘要为上下文快照 —— 重置为新会话
+  /**
+   * 压缩上下文
    *
-   * 通过 loadSession 替换 messages 为快照 + threadId 置空，下次 run/exec 开启新 thread；
-   * 从快照 + 记忆注入继续工作。
+   * 走 codex 原生的 `thread/compact/start`。与旧实现的关键差别:旧的是"生成一段摘要
+   * 当作新消息插进来",原消息仍在 thread 里 —— 模型上下文一点没减少;现在是真的压缩。
+   *
+   * 代价要说清楚:**压缩会把历史替换成摘要,旧轮次从界面上消失**。这是 codex 的
+   * 压缩语义,不是 Flydex 加的,所以照着做;但必须让用户先知道。
    */
   const handleCompact = async () => {
-    if (status === 'running') return
-    const msgs = useCodexStore.getState().messages
-    if (msgs.length === 0) return
-    const text = msgs
-      .map((m) => (typeof m.content === 'string' ? m.content : JSON.stringify(m.content)))
-      .join('\n')
-    try {
-      const summary = await memoryService.compactSummary(text.slice(0, 30000))
-      const snapshot = `[上下文快照]\n${summary}\n\n（原会话已压缩为快照，可在此上下文基础上继续工作）`
-      useCodexStore.getState().loadSession({
-        messages: [
-          {
-            id: `msg_compact_${Date.now()}`,
-            kind: 'system',
-            content: snapshot,
-            timestamp: Date.now(),
-          },
-        ],
-        threadId: null,
-      })
-    } catch (e) {
-      console.error('[compact]', e)
-    }
+    if (status === 'running' || compacting) return
+    if (!useProjectStore.getState().currentThreadId) return
+    const ok = window.confirm(
+      [
+        '压缩上下文?',
+        '',
+        'codex 会把当前会话的历史替换成一段摘要 —— 旧轮次会从界面上消失。',
+        '压缩需要一次完整的模型调用,可能要几分钟。',
+      ].join('\n'),
+    )
+    if (!ok) return
+    useCodexStore
+      .getState()
+      .appendOutput({ text: '▸ 正在压缩上下文(可能需要几分钟)…', kind: 'system' })
+    await useProjectStore.getState().compactCurrentThread()
   }
 
   const handleSuggestionAction = async (action: SuggestionAction) => {
@@ -1504,6 +1506,17 @@ ${scenarioGuide[report.scenario]}
       </div>
 
       {/* AI 活动状态 banner(对齐 Claude Code 实时状态显示) */}
+      {/* 压缩是分钟级操作,而且期间什么都看不到 —— 必须给个明确的进行中状态,
+          否则用户会以为卡死了 */}
+      {compacting && (
+        <div className="flex items-center gap-2 border-t border-purple-500/30 bg-purple-500/5 px-3 py-1.5 text-xs text-purple-300">
+          <span className="inline-block h-2 w-2 animate-pulse rounded-full bg-purple-400" />
+          <span className="font-medium">正在压缩上下文</span>
+          <span className="min-w-0 flex-1 truncate text-purple-300/70">
+            · 这是一次完整模型调用,可能要几分钟;完成后旧轮次会被摘要替换
+          </span>
+        </div>
+      )}
       {aiStatus === 'running' && (
         <div className="flex items-center gap-2 border-t border-blue-500/30 bg-blue-500/5 px-3 py-1.5 text-xs text-blue-300">
           {aiLive ? (

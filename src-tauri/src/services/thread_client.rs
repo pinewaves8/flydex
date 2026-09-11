@@ -285,6 +285,20 @@ impl ThreadClient {
             .ok_or_else(|| format!("thread/fork 无 thread.id: {resp}"))
     }
 
+    /// 触发上下文压缩(codex `thread/compact/start`)
+    ///
+    /// 三件事要知道(都是实测/读源码得来的,不是猜的):
+    /// 1. 响应只表示**已受理** —— 压缩本身是一次完整模型调用,耗时以分钟计
+    /// 2. `thread/compacted` 通知**对 v2 客户端不发**(源码里标为 deprecated,
+    ///    「v2 clients receive the canonical ContextCompaction item instead」),
+    ///    所以**没有完成信号**,只能靠轮询历史是否已被重写来判断
+    /// 3. 压缩会把**整个会话历史重写成一条摘要消息**,旧轮次全部消失
+    pub fn compact(app: &AppHandle, thread_id: &str) -> Result<(), String> {
+        Self::client(app)?
+            .request("thread/compact/start", Some(json!({ "threadId": thread_id })))
+            .map(|_| ())
+    }
+
     /// 把线程归入某个 codex project;传 `None` 表示清除归属
     pub fn set_project(
         app: &AppHandle,

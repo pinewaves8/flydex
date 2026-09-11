@@ -123,6 +123,17 @@ export const threadService = {
     })
   },
 
+  /**
+   * 触发上下文压缩
+   *
+   * **会把会话历史重写成一条摘要消息、旧轮次全部消失**(codex 的压缩语义)。
+   * 响应只表示已受理 —— 压缩是一次完整模型调用,耗时以分钟计,且**没有完成
+   * 通知**,要由调用方轮询 `loadTurns` 判断是否结束。
+   */
+  compact(threadId: string): Promise<void> {
+    return invoke<void>('compact_thread', { threadId })
+  },
+
   /** 会话级 UI 偏好(codex 的 Thread 里没有这些字段,属 Flydex 侧数据) */
   getSettings(threadId: string): Promise<ThreadSettings> {
     return invoke<ThreadSettings>('get_thread_settings', { threadId })

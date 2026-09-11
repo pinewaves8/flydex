@@ -11,16 +11,6 @@ const EXTRACT_SYSTEM: &str = r#"你是 Flydex 的记忆提炼助手。从用户�
 {"section":"活跃约定|决策记录|踩坑与规避|常用命令","title":"简短标题","content":"一句话要点","confidence":0到1的小数}
 如果没有可提取内容，输出 []。"#;
 
-/// 上下文压缩系统提示词：把长会话压成上下文快照
-const COMPACT_SYSTEM: &str = r#"你是 Flydex 的上下文压缩助手。把用户提供的长会话记录压缩成一段"上下文快照"，
-保留对继续工作至关重要的信息：
-- 当前任务目标与已完成的步骤
-- 关键技术决策与结论
-- 尚未解决的问题与下一步计划
-- 关键文件路径与已做的改动
-忽略寒暄、重复内容与无关细节。直接输出 300-500 字的中文摘要文本，
-不要代码块标记、不要列表符号、不要解释。"#;
-
 /// 加载记忆（用户级 + 项目级），供前端展示与注入预览
 #[tauri::command]
 pub fn load_memory(workdir: Option<String>) -> serde_json::Value {
@@ -135,70 +125,6 @@ pub fn extract_memory(session_text: String) -> Result<serde_json::Value, String>
                 match serde_json::from_str::<serde_json::Value>(&cleaned) {
                     Ok(v) => Ok(v),
                     Err(_) => Ok(serde_json::json!({ "raw": content })),
-                }
-            } else {
-                Err(format!("HTTP {status}：{}", truncate(&text, 200)))
-            }
-        }
-        Err(ureq::Error::Status(code, resp)) => {
-            let body = resp.into_string().unwrap_or_default();
-            Err(format!("HTTP {code}：{}", truncate(&body, 200)))
-        }
-        Err(ureq::Error::Transport(t)) => Err(format!("无法连接：{}", t)),
-    }
-}
-
-/// 把会话文本压缩成上下文快照摘要（调用当前配置的模型）
-///
-/// 供长会话 compact 使用：历史消息 → 摘要文本 → 作为新会话首条上下文快照。
-#[tauri::command]
-pub fn compact_summary(session_text: String) -> Result<String, String> {
-    use crate::services::model::ModelService;
-    let cfg = ModelService::load();
-    let model_id = cfg.current_model.clone();
-    let model = cfg
-        .find_model(&model_id)
-        .ok_or_else(|| format!("当前模型不存在: {model_id}"))?;
-    let provider = cfg
-        .find_provider(&model.provider)
-        .ok_or_else(|| format!("供应商不存在: {}", model.provider))?;
-    if provider.base_url.trim().is_empty() {
-        return Err("该供应商未配置 base_url".into());
-    }
-    let url = format!(
-        "{}/chat/completions",
-        provider.base_url.trim_end_matches('/')
-    );
-    let body = serde_json::json!({
-        "model": model.id,
-        "messages": [
-            {"role": "system", "content": COMPACT_SYSTEM},
-            {"role": "user", "content": session_text}
-        ],
-        "max_tokens": 1024,
-        "temperature": 0.3,
-    });
-    let mut req = ureq::post(&url)
-        .timeout(std::time::Duration::from_secs(90))
-        .set("Content-Type", "application/json");
-    if !provider.api_key.trim().is_empty() {
-        req = req.set("Authorization", &format!("Bearer {}", provider.api_key.trim()));
-    }
-    match req.send_json(body) {
-        Ok(resp) => {
-            let status = resp.status();
-            let text = resp.into_string().unwrap_or_default();
-            if status == 200 {
-                let parsed: serde_json::Value = serde_json::from_str(&text).unwrap_or_default();
-                let content = parsed["choices"][0]["message"]["content"]
-                    .as_str()
-                    .unwrap_or("")
-                    .trim()
-                    .to_string();
-                if content.is_empty() {
-                    Err("模型未返回摘要内容".into())
-                } else {
-                    Ok(content)
                 }
             } else {
                 Err(format!("HTTP {status}：{}", truncate(&text, 200)))
