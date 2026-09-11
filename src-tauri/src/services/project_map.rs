@@ -102,8 +102,12 @@ impl ProjectMapFile {
 /// 路径规范化 —— 与前端 `useProjectStore` 的 `norm()` 保持同一口径:
 /// 小写、`\` → `/`、去尾斜杠。两边不一致会导致同一目录被认成两个项目。
 pub fn norm_path(p: &str) -> String {
-    p.trim()
-        .to_lowercase()
+    // 先剥 Windows verbatim 前缀:项目 path 由用户提供、线程 cwd 由 codex 记录,
+    // 两边形态不保证一致(实测 codex 侧基本都带 `\\?\`)。不剥就永远匹配不上,
+    // 而且是**静默**的 —— 表现为「同一个目录被认成两个地方」。
+    // (被测试逼出来的:`is_inside` 的用例发现带前缀的 cwd 匹配不上。)
+    let p = crate::models::thread::strip_verbatim_prefix(p.trim());
+    p.to_lowercase()
         .replace('\\', "/")
         .trim_end_matches('/')
         .to_string()
@@ -117,8 +121,10 @@ pub struct ProjectSyncOutcome {
     pub mappings: HashMap<String, String>,
     /// 本次新建的 codex project 数
     pub created: usize,
-    /// 归属回填成功的线程数
+    /// 归属回填成功的线程数(来自旧会话文件里记录的对应关系)
     pub backfilled: usize,
+    /// 按 cwd 归属成功的线程数
+    pub attributed_by_cwd: usize,
     /// 非致命问题(第三原则:不静默吞,回传让 UI 可见)
     pub warnings: Vec<String>,
 }
@@ -129,6 +135,55 @@ fn now_ms() -> i64 {
         .duration_since(UNIX_EPOCH)
         .map(|d| d.as_millis() as i64)
         .unwrap_or(0)
+}
+
+/// `child` 是否位于 `root` 目录树内(含 root 自身)
+///
+/// 用分隔符做边界,避免 `C:/llm/flydex-other` 被 `C:/llm/flydex` 误判为子树。
+/// 与前端 `types/thread.ts` 的 `isInsidePath` 同口径。
+pub fn is_inside(child: &str, root: &str) -> bool {
+    let c = norm_path(child);
+    let r = norm_path(root);
+    if c.is_empty() || r.is_empty() {
+        return false;
+    }
+    c == r || c.starts_with(&format!("{r}/"))
+}
+
+/// 一个待归属的线程
+pub struct PendingThread {
+    pub id: String,
+    pub cwd: String,
+}
+
+/// 算出「哪个线程该归给哪个 codex project」
+///
+/// `roots` 是 `(codexProjectId, 项目根目录)`。**取最长匹配的根** ——
+/// 否则同时存在 `C:\llm` 与 `C:\llm\flydex` 两个项目时,前者会把后者的线程全吞掉。
+///
+/// 返回 `(threadId, codexProjectId)`。写成纯函数是因为它决定了**写进 codex 的
+/// 归属结果**(不可逆),判断逻辑必须先被测试钉死。
+pub fn plan_cwd_attribution(
+    threads: &[PendingThread],
+    roots: &[(String, String)],
+) -> Vec<(String, String)> {
+    let mut out = Vec::new();
+    for t in threads {
+        let mut best: Option<(&str, usize)> = None;
+        for (pid, root) in roots {
+            if !is_inside(&t.cwd, root) {
+                continue;
+            }
+            let len = norm_path(root).len();
+            if best.map(|(_, l)| len > l).unwrap_or(true) {
+                best = Some((pid.as_str(), len));
+            }
+        }
+        if let Some((pid, _)) = best {
+            out.push((t.id.clone(), pid.to_string()));
+        }
+    }
+    out
 }
 
 pub struct ProjectMap;
@@ -172,6 +227,7 @@ impl ProjectMap {
             mappings: HashMap::new(),
             created: 0,
             backfilled: 0,
+            attributed_by_cwd: 0,
             warnings: Vec::new(),
         };
 
@@ -216,8 +272,11 @@ impl ProjectMap {
         file.updated_at = now_ms();
         file.save()?;
 
-        // 已有线程的归属回填(只需一次;用 thread_project_backfill 记录幂等)
-        outcome.backfilled = Self::backfill_threads(app, &mut file, &outcome.mappings, &mut outcome.warnings);
+        // 已有线程的归属回填:先按旧会话文件里记录的对应关系,再按 cwd 兜底。
+        // 两者都用 thread_project_backfill / 只处理未归属的线程来保证幂等。
+        outcome.backfilled =
+            Self::backfill_threads(app, &mut file, &outcome.mappings, &mut outcome.warnings);
+        outcome.attributed_by_cwd = Self::attribute_by_cwd(app, &file, &mut outcome.warnings);
         Ok(outcome)
     }
 
@@ -246,6 +305,53 @@ impl ProjectMap {
         let key = format!("flydex-{}-{}", proj.id, now_ms());
         let created = ThreadClient::project_create(app, &proj.name, &proj.path, &proj.id, &key)?;
         Ok((created.id, true))
+    }
+
+    /// 按 cwd 把「落在项目目录树内、但还没归属」的线程归入该项目
+    ///
+    /// 只处理**没有归属**的线程;已有归属的一律不动(那是用户的显式选择或上次的结果),
+    /// 所以这个操作是幂等的 —— 第二次跑时已经没有可归属的了。
+    fn attribute_by_cwd(
+        app: &AppHandle,
+        file: &ProjectMapFile,
+        warnings: &mut Vec<String>,
+    ) -> usize {
+        // 映射表里存了各项目的路径,直接拿来做根匹配
+        let roots: Vec<(String, String)> = file
+            .projects
+            .values()
+            .map(|e| (e.codex_project_id.clone(), e.path.clone()))
+            .collect();
+        if roots.is_empty() {
+            return 0;
+        }
+
+        let rows = match ThreadClient::list_all_unfiltered(app, false) {
+            Ok(r) => r,
+            Err(e) => {
+                warnings.push(format!("按 cwd 归属失败(读不到会话列表): {e}"));
+                return 0;
+            }
+        };
+        let pending: Vec<PendingThread> = rows
+            .into_iter()
+            .filter(|t| t.project_id.is_none())
+            .map(|t| PendingThread { id: t.id, cwd: t.cwd })
+            .collect();
+        if pending.is_empty() {
+            return 0;
+        }
+
+        let plan = plan_cwd_attribution(&pending, &roots);
+        let mut done = 0;
+        for (thread_id, codex_project_id) in plan {
+            match ThreadClient::set_project(app, &thread_id, Some(&codex_project_id)) {
+                Ok(()) => done += 1,
+                // 不记入 backfill → 下次还会重试;但要可见
+                Err(e) => warnings.push(format!("线程 {thread_id} 按 cwd 归属失败: {e}")),
+            }
+        }
+        done
     }
 
     /// 把已有 thread 归到对应 project
@@ -384,4 +490,69 @@ mod tests {
         assert!(f.projects.is_empty());
         assert_eq!(f.version, 1);
     }
+
+    #[test]
+    fn is_inside_respects_separator_boundary() {
+        // 同前缀的兄弟目录不算子树 —— 少了边界判断 flydex-other 会被误判
+        assert!(is_inside(r"C:\llm\flydex", r"C:\llm\flydex"));
+        assert!(is_inside(r"C:\llm\flydex\src-tauri", r"C:\llm\flydex"));
+        assert!(!is_inside(r"C:\llm\flydex-other", r"C:\llm\flydex"));
+        assert!(!is_inside(r"C:\llm", r"C:\llm\flydex"));
+        // 空串不能匹配一切
+        assert!(!is_inside("", r"C:\llm\flydex"));
+        assert!(!is_inside(r"C:\llm\flydex", ""));
+    }
+
+    #[test]
+    fn is_inside_normalizes_verbatim_and_case() {
+        // codex 记的 cwd 带 verbatim 前缀,项目 path 是人写的
+        assert!(is_inside(r"\\?\C:\llm\FLYDEX\src", r"C:\llm\flydex"));
+        assert!(is_inside("C:/llm/flydex/", r"C:\llm\flydex"));
+    }
+
+    fn th(id: &str, cwd: &str) -> PendingThread {
+        PendingThread { id: id.into(), cwd: cwd.into() }
+    }
+    fn root(pid: &str, path: &str) -> (String, String) {
+        (pid.into(), path.into())
+    }
+
+    #[test]
+    fn attributes_threads_by_cwd() {
+        let plan = plan_cwd_attribution(
+            &[th("t1", r"\\?\C:\llm\flydex\src"), th("t2", r"C:\llm\flydex")],
+            &[root("p1", r"C:\llm\flydex")],
+        );
+        assert_eq!(plan.len(), 2);
+        assert!(plan.iter().all(|(_, pid)| pid == "p1"));
+    }
+
+    #[test]
+    fn longest_root_wins() {
+        // 同时有 C:\llm 和 C:\llm\flydex 时,后者更具体,必须赢 ——
+        // 否则 C:\llm 这个大项目会把子项目的历史会话全吞走
+        let plan = plan_cwd_attribution(
+            &[th("inner", r"C:\llm\flydex\src-tauri"), th("outer", r"C:\llm\hunyuan")],
+            &[root("big", r"C:\llm"), root("small", r"C:\llm\flydex")],
+        );
+        let get = |id: &str| plan.iter().find(|(t, _)| t == id).map(|(_, p)| p.clone());
+        assert_eq!(get("inner").as_deref(), Some("small"));
+        assert_eq!(get("outer").as_deref(), Some("big"));
+    }
+
+    #[test]
+    fn threads_outside_all_roots_are_left_alone() {
+        let plan = plan_cwd_attribution(
+            &[th("a", r"C:\tao\Quill"), th("b", r"C:\llm\flydex-other")],
+            &[root("p1", r"C:\llm\flydex")],
+        );
+        assert!(plan.is_empty(), "不该归属到无关的根: {plan:?}");
+    }
+
+    #[test]
+    fn no_roots_means_nothing_attributed() {
+        // 项目还没同步时不能乱归属
+        assert!(plan_cwd_attribution(&[th("a", r"C:\llm\flydex")], &[]).is_empty());
+    }
+
 }

@@ -61,7 +61,10 @@ export interface ProjectSyncOutcome {
   /** flydex project id → codex project id */
   mappings: Record<string, string>
   created: number
+  /** 旧会话文件回填成功的线程数 */
   backfilled: number
+  /** 按工作目录归属成功的新增线程数(一次性;之后都是 0) */
+  attributedByCwd: number
   /** 非致命问题(第三原则:不静默吞,由 UI 展示) */
   warnings: string[]
 }

@@ -151,9 +151,17 @@ export const useProjectStore = create<ProjectState>((set, get) => ({
       // 所以收集进 projectSyncWarnings 由 UI 展示,而不是 console 里静默。
       try {
         const outcome = await threadService.syncProjects()
+        // 归属是**写 codex 数据**的操作(只对未归属的线程做一次),所以要让它可见,
+        // 而不是悄悄改完。之后每次启动都是 0,不会再打扰。
+        const notices = [...outcome.warnings]
+        if (outcome.attributedByCwd > 0) {
+          notices.unshift(
+            `已把 ${outcome.attributedByCwd} 条历史会话按工作目录归入对应项目(仅此一次)。`,
+          )
+        }
         set({
           projectMappings: outcome.mappings,
-          projectSyncWarnings: outcome.warnings,
+          projectSyncWarnings: notices,
         })
       } catch (e) {
         set({ projectSyncWarnings: [`项目归属同步失败: ${String(e)}`] })
