@@ -47,6 +47,14 @@ interface ProjectState {
   currentThreadModel: string | null
   /** 正在压缩上下文(压缩是完整模型调用,以分钟计) */
   compacting: boolean
+  /**
+   * 是否处于「草稿会话」:点了 + 新建、但还没发出第一条消息
+   *
+   * 必须显式区分于「没有打开任何会话」—— 两者都是 `currentThreadId === null`,
+   * 而"列表加载后自动打开一个会话"的逻辑只该对**后者**生效。不区分的话,任何一次
+   * 列表刷新(刷新按钮、turn 结束后的刷新)都会把刚新建的草稿顶掉、切回旧会话。
+   */
+  draftActive: boolean
   /** 列表/打开过程中的非致命问题(第三原则:可见) */
   threadWarnings: string[]
 
@@ -147,6 +155,7 @@ export const useProjectStore = create<ProjectState>((set, get) => ({
   currentThreadId: null,
   currentThreadModel: null,
   compacting: false,
+  draftActive: false,
   legacySessions: [],
   threadWarnings: [],
 
@@ -276,7 +285,8 @@ export const useProjectStore = create<ProjectState>((set, get) => ({
   },
 
   setCurrentProject: async (id) => {
-    set({ currentProjectId: id })
+    // 换项目后原草稿没有意义
+    set({ currentProjectId: id, draftActive: false })
     persistProjectId(id)
 
     if (id) {
@@ -305,6 +315,11 @@ export const useProjectStore = create<ProjectState>((set, get) => ({
   },
 
   loadThreads: async () => {
+    // TEMP(DIAG)
+    useCodexStore.getState().appendOutput({
+      text: `[DIAG] loadThreads() 开始 current=${get().currentThreadId ?? 'null'}`,
+      kind: 'stderr',
+    })
     const codexProjectId = get().codexProjectId()
     const projectPath = get().projects.find((p) => p.id === get().currentProjectId)?.path
     try {
@@ -330,6 +345,18 @@ export const useProjectStore = create<ProjectState>((set, get) => ({
     const persisted = loadPersistedThreadId()
     const pick =
       persisted && threads.some((t) => t.id === persisted) ? persisted : (threads[0]?.id ?? null)
+    // 草稿期间不自动打开任何会话 —— 否则刚点 + 建的新会话会被顶掉
+    if (get().draftActive) {
+      useCodexStore.getState().appendOutput({
+        text: '[DIAG] loadThreads 检测到草稿,不自动打开',
+        kind: 'stderr',
+      })
+      return
+    }
+    useCodexStore.getState().appendOutput({
+      text: `[DIAG] loadThreads 自动打开 pick=${pick ?? 'null'}(原 current=${current ?? 'null'})`,
+      kind: 'stderr',
+    })
     if (pick) await get().setCurrentThread(pick)
     else if (current) await get().setCurrentThread(null)
   },
@@ -342,7 +369,16 @@ export const useProjectStore = create<ProjectState>((set, get) => ({
    * 自然建出来,那时才有 preview。
    */
   newThread: () => {
-    set({ currentThreadId: null, currentThreadModel: null })
+    // TEMP(DIAG)
+    useCodexStore.getState().appendOutput({ text: '[DIAG] newThread() 被调用', kind: 'stderr' })
+    // 连 currentSessionId 一起清:否则若之前开过只读旧会话,
+    // ChatPanel 的 readOnlyLegacy 会判为真,把输入框换成"只读归档"提示
+    set({
+      currentThreadId: null,
+      currentThreadModel: null,
+      currentSessionId: null,
+      draftActive: true,
+    })
     persistThreadId(null)
     const codex = useCodexStore.getState()
     codex.reset()
@@ -356,7 +392,7 @@ export const useProjectStore = create<ProjectState>((set, get) => ({
    * 那时写 `thread/metadata/update` 会被随后开始的 turn 覆盖(已实测)。
    */
   adoptThread: async (id) => {
-    set({ currentThreadId: id })
+    set({ currentThreadId: id, draftActive: false })
     persistThreadId(id)
     const codexProjectId = get().codexProjectId()
     if (!codexProjectId) return
@@ -568,7 +604,8 @@ export const useProjectStore = create<ProjectState>((set, get) => ({
    * 而是每次从 codex 拉取,所以重启/换机器后内容一致。
    */
   setCurrentThread: async (id) => {
-    set({ currentThreadId: id })
+    // 打开任何具体会话都意味着草稿阶段结束(含置空:那是"没开会话",不是草稿)
+    set({ currentThreadId: id, draftActive: false })
     persistThreadId(id)
     const codex = useCodexStore.getState()
     if (!id) {
