@@ -101,6 +101,35 @@ impl Probe {
         }
     }
 
+    /// 读 stdout 直到出现指定 method 的通知(或超时),返回它的 params
+    ///
+    /// 压缩这类操作的结果是**通知**而不是响应(响应只表示"已开始"),
+    /// 所以必须能主动等通知,不能只看 request 的返回。
+    fn wait_notification(&mut self, method: &str, timeout_secs: u64) -> Option<Value> {
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(timeout_secs);
+        let mut line = String::new();
+        while std::time::Instant::now() < deadline {
+            line.clear();
+            match self.stdout.read_line(&mut line) {
+                Ok(0) => return None,
+                Ok(_) => {}
+                Err(_) => return None,
+            }
+            let Ok(v) = serde_json::from_str::<Value>(line.trim()) else {
+                continue;
+            };
+            if v.get("method").and_then(|m| m.as_str()) == Some(method) {
+                return Some(v.get("params").cloned().unwrap_or(Value::Null));
+            }
+            // 服务端发来的请求要回一个空结果,否则 daemon 会卡住
+            if v.get("method").is_some() && v.get("id").is_some() {
+                let sid = v.get("id").cloned().unwrap_or(Value::Null);
+                let _ = self.send(&json!({ "jsonrpc": "2.0", "id": sid, "result": {} }));
+            }
+        }
+        None
+    }
+
     fn initialize(&mut self) -> Result<Value, String> {
         let r = self.request(
             "initialize",
@@ -760,6 +789,111 @@ fn main() {
             }
         }
     }
+
+    // ── 10. --compact-probe:验证 thread/compact/start(真压缩) ──
+    //
+    // 自建线程跑一轮再压缩,**不碰任何已有会话** —— 压缩会重写上下文,不可逆。
+    if args.iter().any(|a| a == "--compact-probe") {
+        println!("\n== 10. thread/compact/start(上下文压缩) ==");
+        let d = std::env::temp_dir().join(format!("flydex-compact-probe-{}", std::process::id()));
+        std::fs::create_dir_all(&d).ok();
+
+        let parent = p
+            .request(
+                "thread/start",
+                Some(json!({ "cwd": d.to_string_lossy(), "ephemeral": false })),
+            )
+            .and_then(|v| {
+                v.get("thread")
+                    .and_then(|t| t.get("id"))
+                    .and_then(|i| i.as_str())
+                    .map(str::to_string)
+                    .ok_or_else(|| "thread/start 无 thread.id".to_string())
+            });
+
+        match parent {
+            Err(e) => failures.push(format!("无法建探针线程: {e}")),
+            Ok(tid) => {
+                println!("    自建线程 {}", &tid[..8.min(tid.len())]);
+                let _ = p.request(
+                    "turn/start",
+                    Some(json!({
+                        "threadId": tid,
+                        "input": [{ "type": "text", "text": "用一句话说明什么是上下文压缩" }],
+                    })),
+                );
+                // 等本轮结束(进行中的轮不能被压缩)。直接等 turn/completed 通知,
+                // 比轮询 turns/list 干净。
+                let done = p.wait_notification("turn/completed", 120).is_some();
+                if !done {
+                    println!("    ⚠ 本轮未在超时内完成,跳过压缩测试");
+                } else {
+                    match p.request("thread/compact/start", Some(json!({ "threadId": tid }))) {
+                        Err(e) => {
+                            println!("    压缩请求失败: {e}");
+                            failures.push(format!("thread/compact/start 失败: {e}"));
+                        }
+                        Ok(v) => println!("    压缩已受理: {v}"),
+                    }
+                    // 注意:`thread/compacted` **通知对 v2 客户端不发**(源码里标注为
+                    // deprecated,「v2 clients receive the canonical ContextCompaction
+                    // item instead」)。所以真实信号是 items 里多出一条 contextCompaction。
+                    // 压缩要模型跑一遍,可能几分钟,给足时间轮询。
+                    let mut saw = false;
+                    let mut last_err = String::new();
+                    let deadline =
+                        std::time::Instant::now() + std::time::Duration::from_secs(300);
+                    let mut kinds: Vec<String> = Vec::new();
+                    while std::time::Instant::now() < deadline {
+                        match p.request(
+                            "thread/turns/list",
+                            Some(json!({ "threadId": tid, "limit": 20, "itemsView": "full" })),
+                        ) {
+                            Ok(v) => {
+                                kinds.clear();
+                                if let Some(arr) = v.get("data").and_then(|d| d.as_array()) {
+                                    for t in arr {
+                                        if let Some(items) =
+                                            t.get("items").and_then(|i| i.as_array())
+                                        {
+                                            for it in items {
+                                                if let Some(ty) =
+                                                    it.get("type").and_then(|x| x.as_str())
+                                                {
+                                                    kinds.push(ty.to_string());
+                                                }
+                                            }
+                                        }
+                                    }
+                                }
+                                if kinds.iter().any(|k| k == "contextCompaction") {
+                                    saw = true;
+                                    break;
+                                }
+                            }
+                            Err(e) => last_err = e,
+                        }
+                        std::thread::sleep(std::time::Duration::from_secs(3));
+                    }
+                    if saw {
+                        println!("    压缩完成:items 里出现 contextCompaction ✔");
+                    } else {
+                        println!("    ⚠ 300 秒内未观察到 contextCompaction item");
+                        if !last_err.is_empty() {
+                            println!("      期间 turns/list 报错: {last_err}");
+                        }
+                    }
+                    println!("    压缩后该会话的 item 类型: {kinds:?}");
+                }
+                // 清理:删掉自建线程
+                match p.request("thread/delete", Some(json!({ "threadId": tid }))) {
+                    Ok(_) => println!("    已清理自建线程"),
+                    Err(e) => println!("    ⚠ 清理失败(需手动删 {tid}): {e}"),
+                }
+            }
+        }
+    }
+
 
     println!("\n================ 结论 ================");
     if failures.is_empty() {
