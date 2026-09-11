@@ -1226,6 +1226,32 @@ fn main() {
             Err(e) => println!("    hooks/list 失败: {e}"),
         }
 
+        // 逐条列出 skills(含 scope)。
+        //
+        // 结论(2026-09-11):**不能替代 Flydex 的 skill_list**。
+        // codex 让 Flydex "多看到" 7 个技能(1 个 user + 6 个 system,实测共 10 条),
+        // 但只给 {name, description, path, scope, enabled},**不给内容**;
+        // 而 Flydex 的 execute() 是 `skill.prompt + 用户输入` —— prompt 来自 SKILL.md 正文。
+        // 换过去会让 /plan 静默地只发用户那句话(技能注入失效)。
+        // 真要接,得自己按 path 再读一次内容并适配 system 技能的格式 —— 那是重写,不是替换。
+        if let Ok(v) = p.request("skills/list", Some(json!({ "cwds": [root.clone()] }))) {
+            if let Some(arr) = v.get("data").and_then(|d| d.as_array()) {
+                for entry in arr {
+                    let skills = entry.get("skills").and_then(|s| s.as_array()).cloned().unwrap_or_default();
+                    println!("    skills/list 共 {} 条:", skills.len());
+                    for sk in &skills {
+                        println!("      - {:24} scope={:?} enabled={:?}",
+                            sk.get("name").and_then(|x| x.as_str()).unwrap_or("?"),
+                            sk.get("scope").and_then(|x| x.as_str()),
+                            sk.get("enabled").and_then(|x| x.as_bool()));
+                    }
+                    if let Some(errs) = entry.get("errors").and_then(|e| e.as_array()) {
+                        if !errs.is_empty() { println!("      errors: {errs:?}"); }
+                    }
+                }
+            }
+        }
+
         // (3) skills/list —— Flydex 自维护 skills
         match p.request("skills/list", Some(json!({ "cwds": [root] }))) {
             Ok(v) => println!("    skills/list → {}", serde_json::to_string(&v)
