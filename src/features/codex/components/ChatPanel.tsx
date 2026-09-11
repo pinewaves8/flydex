@@ -906,7 +906,7 @@ export function ChatPanel() {
    * 代价要说清楚:**压缩会把历史替换成摘要,旧轮次从界面上消失**。这是 codex 的
    * 压缩语义,不是 Flydex 加的,所以照着做;但必须让用户先知道。
    */
-  const handleCompact = async () => {
+  const handleCompact = useCallback(async () => {
     if (status === 'running' || compacting) return
     if (!useProjectStore.getState().currentThreadId) return
     const ok = window.confirm(
@@ -922,7 +922,7 @@ export function ChatPanel() {
       .getState()
       .appendOutput({ text: '▸ 正在压缩上下文(可能需要几分钟)…', kind: 'system' })
     await useProjectStore.getState().compactCurrentThread()
-  }
+  }, [status, compacting])
 
   const handleSuggestionAction = async (action: SuggestionAction) => {
     switch (action.type) {
@@ -1044,6 +1044,14 @@ export function ChatPanel() {
           // 插话失败要可见 —— 否则用户会以为模型收到了这句话
           giveBack(`插话失败(${String(e)})—— 内容已放回输入框`)
         }
+        return
+      }
+
+      // `/compact` 是本地的会话操作,不是发给模型的话。
+      // 不加这一支的话,它会掉进下面的"找不到同名技能就原样发送"分支,
+      // 把 "/compact" 这几个字当消息发出去 —— 命令面板里却明晃晃列着它。
+      if (cmd.trim() === '/compact') {
+        await handleCompact()
         return
       }
 
@@ -1280,7 +1288,7 @@ ${scenarioGuide[report.scenario]}
       const imagePaths = _attachments.map((a) => a.path).filter(Boolean)
       run(finalCmd, workdir, threadModel, planModeActive ? 'plan' : undefined, imagePaths)
     },
-    [status, currentThreadWorkdir, threadModel, workspaceCwd, run],
+    [status, handleCompact, currentThreadWorkdir, threadModel, workspaceCwd, run],
   )
 
   // 切模型:只记偏好,不新建 thread —— 每轮 resume 都会把新 config 下发给 codex,

@@ -79,7 +79,7 @@ export function MemoryIndicator({
         <button
           onClick={onCompact}
           className="flex items-center gap-0.5 rounded bg-yellow-500/15 px-1.5 py-0.5 text-[10px] text-yellow-500 hover:bg-yellow-500/25"
-          title="会话上下文接近预算，压缩为快照后继续（新会话）"
+          title="会话上下文接近预算:由 codex 压缩上下文(历史会被替换成一段摘要,旧轮次从界面上消失;工作区文件改动不受影响)"
         >
           <Minimize2 className="h-3 w-3" />
           压缩
