@@ -131,18 +131,36 @@ pub fn list_servers() -> Result<Vec<McpServer>, String> {
         return Ok(Vec::new());
     }
     let content = fs::read_to_string(&path).map_err(|e| e.to_string())?;
+    Ok(parse_servers(&content))
+}
+
+/// 从 `config.toml` 的文本里解析出 `[mcp_servers.*]` 段
+///
+/// 抽成纯函数是为了能**真正地测**:原先解析内联在读文件那一支里,结果唯一的
+/// 「测试」变成读开发者本机的真实配置、再断言里面有个叫 web-search 的服务器 ——
+/// 换台机器或上 CI 必挂,而且它测的不是这段代码。
+///
+/// 注意嵌套段(`[mcp_servers.foo.env]`):只有**恰好一层**的段名才算一个 server,
+/// 更深的属于上一个 server 的配置。否则会凭空多出一个叫 `foo.env` 的服务器。
+fn parse_servers(content: &str) -> Vec<McpServer> {
     let mut servers = Vec::new();
     let mut cur: Option<(String, Vec<String>)> = None;
     for line in content.lines() {
         let t = line.trim();
         if t.starts_with('[') && t.ends_with(']') {
-            if let Some((name, lines)) = cur.take() {
-                servers.push(parse_block(name, &lines));
-            }
             if let Some(rest) = t.strip_prefix("[mcp_servers.") {
-                if let Some(name) = rest.strip_suffix(']') {
-                    cur = Some((name.trim().to_string(), Vec::new()));
+                let name = rest.strip_suffix(']').unwrap_or(rest).trim();
+                if name.contains('.') {
+                    // 嵌套段:不新开 server,也不结束当前这个(它的行归上一个块)
+                    continue;
                 }
+                if let Some((n, lines)) = cur.take() {
+                    servers.push(parse_block(n, &lines));
+                }
+                cur = Some((name.to_string(), Vec::new()));
+            } else if let Some((n, lines)) = cur.take() {
+                // 其它顶层段:当前 server 到此为止
+                servers.push(parse_block(n, &lines));
             }
         } else if let Some((_, lines)) = cur.as_mut() {
             if !t.is_empty() && !t.starts_with('#') {
@@ -153,7 +171,7 @@ pub fn list_servers() -> Result<Vec<McpServer>, String> {
     if let Some((name, lines)) = cur.take() {
         servers.push(parse_block(name, &lines));
     }
-    Ok(servers)
+    servers
 }
 
 /// 找到 [mcp_servers.xxx] 段的结束行索引（下一个 `[` 开头行或 EOF）
@@ -335,16 +353,84 @@ mod tests {
         assert_eq!(s.approval_mode.as_deref(), Some("never"));
     }
 
+    /// 原 `list_real_config` 读的是开发者本机的 `~/.codex/config.toml`,再断言里面
+    /// 有个叫 web-search 的服务器 —— 换个环境(或 CI)必挂,而且它测的不是这段代码。
+    /// 改成对纯函数喂固定文本:同样覆盖解析逻辑,却与机器状态无关。
     #[test]
-    fn list_real_config() {
-        let servers = list_servers().unwrap();
-        for sv in &servers {
-            eprintln!(
-                "mcp[{}] transport={} command={:?} args={:?} url={:?}",
-                sv.name, sv.transport, sv.command, sv.args, sv.url
-            );
-        }
-        let ws = servers.iter().find(|x| x.name == "web-search");
-        assert!(ws.is_some(), "web-search not found");
+    fn parses_multiple_servers() {
+        let servers = parse_servers(
+            r#"
+# 顶层注释
+[mcp_servers.web-search]
+command = "node"
+args = ["server.js", "--port", "3000"]
+default_tools_approval_mode = "never"
+
+[mcp_servers.remote]
+url = "https://example.com/mcp"
+"#,
+        );
+        assert_eq!(servers.len(), 2);
+        let ws = servers.iter().find(|s| s.name == "web-search").unwrap();
+        assert_eq!(ws.command.as_deref(), Some("node"));
+        assert_eq!(ws.transport, "stdio");
+        assert_eq!(ws.args, vec!["server.js", "--port", "3000"]);
+        assert_eq!(ws.approval_mode.as_deref(), Some("never"));
+
+        let remote = servers.iter().find(|s| s.name == "remote").unwrap();
+        assert_eq!(remote.url.as_deref(), Some("https://example.com/mcp"));
+        assert!(!remote.transport.is_empty(), "transport 不该为空");
+    }
+
+    #[test]
+    fn ignores_comments_blank_lines_and_unrelated_sections() {
+        let servers = parse_servers(
+            r#"
+[other_section]
+foo = "bar"
+
+[mcp_servers.a]
+command = "x"
+# 注释
+
+[mcp_servers.b]
+command = "y"
+"#,
+        );
+        assert_eq!(servers.len(), 2);
+        assert_eq!(servers[0].name, "a");
+        assert_eq!(servers[1].name, "b");
+    }
+
+    #[test]
+    fn nested_section_does_not_create_a_phantom_server() {
+        // `[mcp_servers.foo.env]` 是 foo 的嵌套配置,不是另一个叫 "foo.env" 的服务器
+        let servers = parse_servers(
+            r#"
+[mcp_servers.foo]
+command = "x"
+
+[mcp_servers.foo.env]
+TOKEN = "abc"
+"#,
+        );
+        assert_eq!(servers.len(), 1, "不该多出幽灵服务器: {servers:?}");
+        assert_eq!(servers[0].name, "foo");
+    }
+
+    #[test]
+    fn empty_or_missing_section_yields_nothing() {
+        assert!(parse_servers("").is_empty());
+        assert!(parse_servers("# 只有注释\n").is_empty());
+        assert!(parse_servers("[other]\nk = 1\n").is_empty());
+    }
+
+    #[test]
+    fn block_without_recognized_keys_still_listed() {
+        // 段存在但内容我们都不认识:仍应作为一个 server 出现,而不是被丢掉
+        let servers = parse_servers("[mcp_servers.odd]\nunknown = 1\n");
+        assert_eq!(servers.len(), 1);
+        assert_eq!(servers[0].name, "odd");
+        assert!(servers[0].command.is_none());
     }
 }
