@@ -90,6 +90,7 @@ export function Sidebar() {
   const threads = useProjectStore((s) => s.threads)
   const archivedThreads = useProjectStore((s) => s.archivedThreads)
   const currentThreadId = useProjectStore((s) => s.currentThreadId)
+  const draftActive = useProjectStore((s) => s.draftActive)
   const setCurrentThread = useProjectStore((s) => s.setCurrentThread)
   const newThread = useProjectStore((s) => s.newThread)
   const loadThreads = useProjectStore((s) => s.loadThreads)
@@ -185,6 +186,21 @@ export function Sidebar() {
       window.alert(`导出失败: ${String(err)}`)
     }
   }
+
+  /** 渲染草稿会话占位项:点了 + 但还没发出第一条消息,codex 里尚无 thread */
+  const renderDraftItem = () => (
+    <div
+      onClick={() => setCurrentView('codex')}
+      style={{ paddingLeft: 8 }}
+      className="group mb-1 flex cursor-pointer items-center gap-2 rounded-md bg-accent py-1.5 pr-2 text-accent-foreground transition-colors"
+    >
+      <MessageSquare className="h-3.5 w-3.5 shrink-0" />
+      <div className="min-w-0 flex-1">
+        <div className="truncate text-sm">新会话</div>
+        <div className="truncate text-[10px] opacity-70">草稿 · 发出第一条消息后保存</div>
+      </div>
+    </div>
+  )
 
   // 渲染单个会话项（支持 fork 树缩进与分支徽标）
   const renderThreadItem = (thread: DisplayThread) => {
@@ -342,7 +358,8 @@ export function Sidebar() {
       )}
 
       <div className="flex-1 overflow-y-auto px-2 pb-2">
-        {threads.length === 0 ? (
+        {draftActive && renderDraftItem()}
+        {threads.length === 0 && !draftActive ? (
           <div className="px-2 py-4 text-center text-xs text-muted-foreground">
             暂无会话
             <br />

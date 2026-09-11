@@ -315,11 +315,6 @@ export const useProjectStore = create<ProjectState>((set, get) => ({
   },
 
   loadThreads: async () => {
-    // TEMP(DIAG)
-    useCodexStore.getState().appendOutput({
-      text: `[DIAG] loadThreads() 开始 current=${get().currentThreadId ?? 'null'}`,
-      kind: 'stderr',
-    })
     const codexProjectId = get().codexProjectId()
     const projectPath = get().projects.find((p) => p.id === get().currentProjectId)?.path
     try {
@@ -346,28 +341,12 @@ export const useProjectStore = create<ProjectState>((set, get) => ({
     const pick =
       persisted && threads.some((t) => t.id === persisted) ? persisted : (threads[0]?.id ?? null)
     // 草稿期间不自动打开任何会话 —— 否则刚点 + 建的新会话会被顶掉
-    if (get().draftActive) {
-      useCodexStore.getState().appendOutput({
-        text: '[DIAG] loadThreads 检测到草稿,不自动打开',
-        kind: 'stderr',
-      })
-      return
-    }
+    if (get().draftActive) return
     // **已经打开着会话时也一律不自动切换**。
     // 列表可能暂时不包含它(刚建出的 thread 还没落到 state db / 还没有 preview),
     // 那种情况下"切到列表第一个"会把用户正在聊的会话顶掉 —— 这比"列表少一条"糟得多。
     // 真正的失效场景(会话被删/被归档)由 deleteThread / archiveThread 显式置空,不靠这里兜。
-    if (current) {
-      useCodexStore.getState().appendOutput({
-        text: `[DIAG] loadThreads 已有当前会话(${current.slice(0, 8)}),保持不动`,
-        kind: 'stderr',
-      })
-      return
-    }
-    useCodexStore.getState().appendOutput({
-      text: `[DIAG] loadThreads 自动打开 pick=${pick ?? 'null'}(原 current=null)`,
-      kind: 'stderr',
-    })
+    if (current) return
     if (pick) await get().setCurrentThread(pick)
     else if (current) await get().setCurrentThread(null)
   },
@@ -380,8 +359,6 @@ export const useProjectStore = create<ProjectState>((set, get) => ({
    * 自然建出来,那时才有 preview。
    */
   newThread: () => {
-    // TEMP(DIAG)
-    useCodexStore.getState().appendOutput({ text: '[DIAG] newThread() 被调用', kind: 'stderr' })
     // 连 currentSessionId 一起清:否则若之前开过只读旧会话,
     // ChatPanel 的 readOnlyLegacy 会判为真,把输入框换成"只读归档"提示
     set({
