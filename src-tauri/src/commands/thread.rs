@@ -226,3 +226,17 @@ pub fn revert_thread(
     ThreadClient::revert(&app, &thread_id, &before_turn_id)
 }
 
+/// 向正在跑的那一轮插话(codex `turn/steer`)
+///
+/// `expected_turn_id` 必须传当前活跃轮的 id(乐观并发保护);没有活跃轮时会失败。
+/// 返回被插话的轮 id。
+#[tauri::command]
+pub fn steer_turn(
+    app: AppHandle,
+    thread_id: String,
+    expected_turn_id: String,
+    text: String,
+) -> Result<String, String> {
+    ThreadClient::steer(&app, &thread_id, &expected_turn_id, &text)
+}
+

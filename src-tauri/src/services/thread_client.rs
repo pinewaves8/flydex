@@ -316,6 +316,33 @@ impl ThreadClient {
             .map(|_| ())
     }
 
+    /// 向**正在跑的那一轮**插话(codex `turn/steer`)
+    ///
+    /// `expected_turn_id` 必填,而且必须与当前活跃轮一致 —— 那是乐观并发保护,
+    /// 传错会拿到 `expected active turn id ... but found ...`(实测)。
+    /// 没有活跃轮时报 `no active turn to steer`;审查轮/压缩轮不可插话。
+    ///
+    /// 返回被插话的那一轮 id。
+    pub fn steer(
+        app: &AppHandle,
+        thread_id: &str,
+        expected_turn_id: &str,
+        text: &str,
+    ) -> Result<String, String> {
+        let resp = Self::client(app)?.request(
+            "turn/steer",
+            Some(json!({
+                "threadId": thread_id,
+                "expectedTurnId": expected_turn_id,
+                "input": [{ "type": "text", "text": text }],
+            })),
+        )?;
+        resp.get("turnId")
+            .and_then(|v| v.as_str())
+            .map(str::to_string)
+            .ok_or_else(|| format!("turn/steer 无 turnId: {resp}"))
+    }
+
     /// 把线程归入某个 codex project;传 `None` 表示清除归属
     pub fn set_project(
         app: &AppHandle,

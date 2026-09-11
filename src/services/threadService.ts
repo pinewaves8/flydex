@@ -147,6 +147,19 @@ export const threadService = {
     return invoke<void>('revert_thread', { threadId, beforeTurnId })
   },
 
+  /**
+   * 向**正在跑的那一轮**插话(codex `turn/steer`)
+   *
+   * `expectedTurnId` 必须是当前活跃轮的 id —— 这是乐观并发保护,传错会被拒
+   * (实测报 `expected active turn id ... but found ...`)。没有活跃轮时报
+   * `no active turn to steer`;审查轮/压缩轮不可插话。
+   *
+   * 返回被插话的轮 id。
+   */
+  steer(threadId: string, expectedTurnId: string, text: string): Promise<string> {
+    return invoke<string>('steer_turn', { threadId, expectedTurnId, text })
+  },
+
   /** 会话级 UI 偏好(codex 的 Thread 里没有这些字段,属 Flydex 侧数据) */
   getSettings(threadId: string): Promise<ThreadSettings> {
     return invoke<ThreadSettings>('get_thread_settings', { threadId })

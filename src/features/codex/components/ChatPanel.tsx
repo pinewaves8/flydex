@@ -47,6 +47,7 @@ import {
   type InitStateData,
   getInitStepLabel,
 } from '@/services/initService'
+import { threadService } from '@/services/threadService'
 import { useCodexStore, type ThreadTurnMeta } from '@/stores/useCodexStore'
 import { useModelStore } from '@/stores/useModelStore'
 import { useProjectStore } from '@/stores/useProjectStore'
@@ -1014,7 +1015,37 @@ export function ChatPanel() {
   /** 发送回调（InputBox 通过 onSend 触发）—— 性能优化:用 useCallback 稳定引用,避免 InputBox 重渲染 */
   const handleSend = useCallback(
     async (cmd: string, _attachments: Attachment[]) => {
-      if (!cmd.trim() || status === 'running') return
+      if (!cmd.trim()) return
+
+      // 运行中:把这句话**插到正在跑的那一轮**,而不是拦下来或排到下一轮。
+      // 这就是 codex 的 turn/steer —— 它要求带上当前活跃轮的 id 做乐观并发保护,
+      // 所以拿不到轮 id 时必须明说,不能把用户输入静默丢掉。
+      if (status === 'running') {
+        const live = useCodexStore.getState()
+        const turnId = live.liveTurnId
+        const tid = live.threadId
+        // 把话还回输入框 —— InputBox 在 onSend **之前**就清空了输入框,
+        // 发送没成功就得还回去,否则这段话直接丢了。
+        const giveBack = (why: string) => {
+          live.appendOutput({ text: why, kind: 'stderr' })
+          live.setPendingCommand(cmd)
+        }
+        if (!tid || !turnId) {
+          giveBack('▸ 这一轮刚开始,还拿不到轮 id,暂时无法插话 —— 内容已放回输入框,稍候再发。')
+          return
+        }
+        try {
+          await threadService.steer(tid, turnId, cmd)
+          live.appendOutput({
+            text: `▸ 已插话到当前轮:${cmd.length > 60 ? cmd.slice(0, 60) + '…' : cmd}`,
+            kind: 'system',
+          })
+        } catch (e) {
+          // 插话失败要可见 —— 否则用户会以为模型收到了这句话
+          giveBack(`插话失败(${String(e)})—— 内容已放回输入框`)
+        }
+        return
+      }
 
       // /init 命令:对齐 Claude Code 风格 —— 不弹窗,直接让 AI 自主决策
       // 1. 扫描项目 → InitReport

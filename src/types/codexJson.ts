@@ -2,7 +2,8 @@
 
 export type CodexJsonEvent =
   | { type: 'thread.started'; thread_id: string }
-  | { type: 'turn.started' }
+  /** `turn_id` 用于插话(`turn/steer` 的 expectedTurnId) */
+  | { type: 'turn.started'; turn_id?: string | null }
   | { type: 'item.started'; item: CodexItem }
   /** `turn_id` 来自 codex 通知,用于把消息归到正确的轮 */
   | { type: 'item.completed'; item: CodexItem; turn_id?: string | null }

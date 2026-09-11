@@ -102,6 +102,13 @@ interface CodexState {
   usage: CodexUsage | null
   /** 当前运行 id（用于计次、停止）*/
   pendingRunId: string | null
+  /**
+   * 正在跑的那一轮 id(codex turnId)
+   *
+   * 插话(`turn/steer`)必须把当前活跃轮的 id 当 `expectedTurnId` 传回去 ——
+   * 那是乐观并发保护,传错会被直接拒(实测)。
+   */
+  liveTurnId: string | null
   /** 正在执行的命令（实时面板）*/
   runningCommands: CodexRunningCommand[]
   /** 待审批项 */
@@ -161,6 +168,7 @@ interface CodexState {
   setThreadId: (id: string | null) => void
   setUsage: (usage: CodexUsage | null) => void
   setPendingRunId: (id: string | null) => void
+  setLiveTurnId: (id: string | null) => void
   setRunStartedAt: (ts: number | null) => void
   setRunWorkdir: (w: string | null) => void
   markFileChangesSeen: (keys: string[]) => void
@@ -241,6 +249,7 @@ const useCodexStore = create<CodexState>((set, get) => ({
   threadId: null,
   usage: null,
   pendingRunId: null,
+  liveTurnId: null,
   runningCommands: [],
   approval: null,
   live: null,
@@ -306,6 +315,7 @@ const useCodexStore = create<CodexState>((set, get) => ({
   setThreadId: (id) => set({ threadId: id }),
   setUsage: (usage) => set({ usage }),
   setPendingRunId: (id) => set({ pendingRunId: id }),
+  setLiveTurnId: (id) => set({ liveTurnId: id }),
   setRunStartedAt: (ts) => set({ runStartedAt: ts }),
   setRunWorkdir: (w) => set({ runWorkdir: w }),
   markFileChangesSeen: (keys) =>

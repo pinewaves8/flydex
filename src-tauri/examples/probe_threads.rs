@@ -1034,6 +1034,114 @@ fn main() {
     }
 
 
+    // ── 12. --steer-probe:验证 turn/steer ──
+    //
+    // 自建线程,**不碰任何已有会话**。
+    if args.iter().any(|a| a == "--steer-probe") {
+        println!("\n== 12. turn/steer(向正在跑的轮插话) ==");
+        let d = std::env::temp_dir().join(format!("flydex-steer-probe-{}", std::process::id()));
+        std::fs::create_dir_all(&d).ok();
+
+        let tid = p
+            .request(
+                "thread/start",
+                Some(json!({ "cwd": d.to_string_lossy(), "ephemeral": false })),
+            )
+            .and_then(|v| {
+                v.get("thread")
+                    .and_then(|t| t.get("id"))
+                    .and_then(|i| i.as_str())
+                    .map(str::to_string)
+                    .ok_or_else(|| "thread/start 无 thread.id".to_string())
+            });
+
+        match tid {
+            Err(e) => failures.push(format!("无法建探针线程: {e}")),
+            Ok(tid) => {
+                println!("    自建线程 {}", &tid[..8.min(tid.len())]);
+
+                // (1) 空闲时插话 → 预期 "no active turn to steer"
+                match p.request(
+                    "turn/steer",
+                    Some(json!({
+                        "threadId": tid,
+                        "expectedTurnId": "not-a-real-turn",
+                        "input": [{ "type": "text", "text": "插一句话" }],
+                    })),
+                ) {
+                    Ok(v) => println!("    [1] 空闲时插话 → 竟然成功: {v}"),
+                    Err(e) => {
+                        let m: String = e.to_string().chars().take(160).collect();
+                        println!("    [1] 空闲时插话 → 被拒绝 ✔");
+                        println!("        {m}");
+                    }
+                }
+
+                // (2) expectedTurnId 为空 → 预期参数错误
+                match p.request(
+                    "turn/steer",
+                    Some(json!({
+                        "threadId": tid,
+                        "expectedTurnId": "",
+                        "input": [{ "type": "text", "text": "插一句话" }],
+                    })),
+                ) {
+                    Ok(v) => println!("    [2] expectedTurnId 为空 → 竟然成功: {v}"),
+                    Err(e) => {
+                        let m: String = e.to_string().chars().take(160).collect();
+                        println!("    [2] expectedTurnId 为空 → 被拒绝 ✔");
+                        println!("        {m}");
+                    }
+                }
+
+                // (3) 成功路径:起一轮后立刻插话(有竞态 —— 轮可能已经结束)
+                if let Ok(v) = p.request(
+                    "turn/start",
+                    Some(json!({
+                        "threadId": tid,
+                        "input": [{ "type": "text", "text": "请从 1 数到 20,每个数字单独一行" }],
+                    })),
+                ) {
+                    let turn_id = v
+                        .get("turn")
+                        .and_then(|t| t.get("id"))
+                        .and_then(|x| x.as_str())
+                        .map(str::to_string);
+                    match turn_id {
+                        None => println!("    [3] turn/start 响应里没有 turn.id,无法插话"),
+                        Some(turn_id) => {
+                            println!("    本轮 id = {}", &turn_id[..8.min(turn_id.len())]);
+                            match p.request(
+                                "turn/steer",
+                                Some(json!({
+                                    "threadId": tid,
+                                    "expectedTurnId": turn_id,
+                                    "input": [{ "type": "text", "text": "改成只数到 3" }],
+                                })),
+                            ) {
+                                Ok(v) => {
+                                    println!("    [3] 立即插话 → 成功 ✔ 响应: {v}");
+                                    println!("        ⇒ 插话后该轮的输出应体现\"只数到 3\"");
+                                }
+                                Err(e) => {
+                                    let m: String = e.to_string().chars().take(160).collect();
+                                    println!("    [3] 立即插话 → 失败(很可能轮已结束,属竞态): {m}");
+                                }
+                            }
+                        }
+                    }
+                    let _ = p.wait_notification("turn/completed", 120);
+                }
+
+                match p.request("thread/delete", Some(json!({ "threadId": tid }))) {
+                    Ok(_) => println!("    已清理自建线程"),
+                    Err(e) => println!("    ⚠ 清理失败(需手动删 {tid}): {e}"),
+                }
+            }
+        }
+    }
+
+
     println!("\n================ 结论 ================");
     if failures.is_empty() {
         println!("全部假设验证通过");

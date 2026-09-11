@@ -45,7 +45,7 @@ use commands::thread::{
     archive_thread, compact_thread, delete_thread, fork_thread, get_thread_settings, list_threads,
     load_all_turns, load_earlier_turns, load_thread_turns, project_map_entries, read_thread,
     rename_thread, revert_thread, search_thread_occurrences, search_threads, set_thread_model,
-    set_thread_project, sync_projects, unarchive_thread,
+    set_thread_project, steer_turn, sync_projects, unarchive_thread,
 };
 use commands::workspace::{list_directory, list_files};
 
@@ -104,6 +104,7 @@ pub fn run() {
             unarchive_thread,
             compact_thread,
             revert_thread,
+            steer_turn,
             delete_thread,
             fork_thread,
             get_thread_settings,

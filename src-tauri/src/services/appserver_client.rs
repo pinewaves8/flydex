@@ -829,9 +829,13 @@ impl AppServerClient {
             }
             "turn/started" => {
                 HooksService::fire("TurnStarted", params);
+                // 带上 turnId:前端插话(`turn/steer`)要把它当 expectedTurnId 传回来 ——
+                // 那是乐观并发保护,传错会直接被拒(实测)。
                 Some(serde_json::json!({
                     "type": "turn.started",
                     "thread_id": thread_id,
+                    "turn_id": params.get("turn").and_then(|t| t.get("id")).cloned()
+                        .unwrap_or(serde_json::Value::Null),
                 }))
             }
             "item/started" => params

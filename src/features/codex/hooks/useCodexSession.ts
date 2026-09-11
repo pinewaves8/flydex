@@ -191,6 +191,8 @@ export function useCodexSession() {
         // 避免 codex 卡在重连时前端一直 running 却无任何反馈。
         store.appendOutput({ text: `⚠️ ${event.message}`, kind: 'stderr' })
       } else if (event.type === 'turn.started') {
+        // 记住活跃轮:插话要用它做 expectedTurnId
+        if (event.turn_id) store.setLiveTurnId(event.turn_id)
         // 新的一轮：重置计划/审查消息追踪（每轮独立）
         lastPlanMsgId = null
         lastReviewMsgId = null
@@ -330,6 +332,8 @@ export function useCodexSession() {
       } else if (event.type === 'turn.completed') {
         // 本轮结束，强制完成打字机（避免残留流式状态）
         clearLive()
+        // 本轮已结束,不能再插话了
+        store.setLiveTurnId(null)
 
         // /init 自动推进:直接查 git 工作区变更,根据写入的关键文档推进 init state
         void advanceInitState()

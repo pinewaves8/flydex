@@ -217,7 +217,9 @@ const InputBoxInner = function InputBox({
 
   /** 发送按钮 / Enter */
   const handleRun = useCallback(async () => {
-    if ((!command.trim() && attachments.length === 0) || status === 'running') return
+    // 注意:运行中**不再拦截** —— 这句话会作为插话注入当前轮(turn/steer)。
+    // 只有内容为空时才不发。
+    if (!command.trim() && attachments.length === 0) return
     let cmd = command.trim()
     // 纯图片发送:注入默认指令(后端也有兜底,这里前端友好提示文案)
     if (!cmd && attachments.length > 0) {
@@ -240,7 +242,7 @@ const InputBoxInner = function InputBox({
       setAttachments([])
     }
     onAfterSend?.()
-  }, [command, attachments, status, onSend, onAfterSend])
+  }, [command, attachments, onSend, onAfterSend])
 
   const handleKeyDown = useCallback(
     (e: React.KeyboardEvent) => {
@@ -460,7 +462,7 @@ const InputBoxInner = function InputBox({
           onDrop={handleDrop}
           placeholder={
             status === 'running'
-              ? 'Waiting for response... (type your next message)'
+              ? '正在执行 —— 输入会**插话**到当前轮(Enter 插话)'
               : threadId
                 ? 'Continue conversation... (Enter to send, Shift+Enter for newline)'
                 : 'Enter your message... (Enter to send, Shift+Enter for newline, paste/drop image)'
@@ -472,7 +474,7 @@ const InputBoxInner = function InputBox({
         />
         <button
           onClick={() => void handleRun()}
-          disabled={status === 'running' || (!command.trim() && attachments.length === 0)}
+          disabled={!command.trim() && attachments.length === 0}
           className="flex items-center gap-1.5 rounded bg-primary px-4 py-2 text-sm font-medium text-primary-foreground hover:bg-primary/90 disabled:cursor-not-allowed disabled:opacity-50"
         >
           <Play className="h-4 w-4" />
