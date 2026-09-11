@@ -227,12 +227,14 @@ impl CodexManager {
             "approvalPolicy": "on-request",
             "approvalsReviewer": "user",
             "sandbox": sandbox,
-            // **不要设 historyMode: "paginated"**(实测踩过,已撤):
-            // 那个模式确实能启用 `thread/revert`,但 `thread/list` **不返回**
-            // paginated 的线程 —— 于是新建的会话在侧边栏里根本看不见
-            // (实测 3 个样本一致,含一条 09-03 由别的工具建的)。
-            // 权衡下来:看不见会话远比对不能回退严重,所以回到默认的 legacy。
-            // ⇒ 回退功能因此对新会话也不可用;UI 已对 legacy 会话明说这一点。
+            // 历史模式:`thread/revert`(回退到某一轮)**只支持 paginated**(实测),
+            // 而默认是 legacy —— 不显式指定的话回退对新会话就用不了。
+            //
+            // 曾一度撤销这里,因为"paginated 线程在侧边栏看不见"。**那个归因是错的**:
+            // 真正的原因是列表没传 `modelProviders: []`,codex 默认只返回 daemon 自己
+            // 那个 provider 的线程,而 Flydex 的 provider 是按会话下发的(见 thread_client)。
+            // 补上该参数后复测:paginated 线程**可以正常列出**(连 09-03 那条也一样)。
+            "historyMode": "paginated",
         });
         // per-thread config 层(优先级高于全局 ~/.codex/config.toml):
         // 1) 模型 + 供应商 —— 这样既不改用户的 Codex CLI 配置,也无需重启 daemon;
