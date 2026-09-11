@@ -80,6 +80,13 @@ impl ThreadClient {
             "limit": PAGE_LIMIT,
             "archived": archived,
             "sourceKinds": SOURCE_KINDS,
+            // **必须显式传空数组**:codex 的默认行为是「只返回当前配置的那个
+            // model provider 的线程」(服务端源码里 `None => Some(vec![config.model_provider_id])`)。
+            // 而 Flydex 的 provider 是**按会话下发**的(`flydex_<id>`),不等于 daemon 自己
+            // 配的那个 —— 不传这个参数,自家会话会被整个过滤掉。
+            // 协议注释:「When present but empty, includes all providers」。
+            // 实测:传空数组后返回条数 230 → 340。
+            "modelProviders": [],
             // 跳过 JSONL 扫描修复元数据,直接读 state db(列表足够用,快得多)
             "useStateDbOnly": true,
         });

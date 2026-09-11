@@ -1288,6 +1288,36 @@ fn main() {
                 "archived": false,
                 "sourceKinds": ["cli", "vscode", "exec", "appServer"],
             })),
+            ("**加 modelProviders: []**(不筛 provider)", json!({
+                "sortKey": "updated_at", "sortDirection": "desc", "limit": 100,
+                "archived": false, "useStateDbOnly": true,
+                "sourceKinds": ["cli", "vscode", "exec", "appServer"],
+                "modelProviders": [],
+            })),
+            ("**默认排序(不传 sortKey)**", json!({
+                "sortDirection": "desc", "limit": 100, "archived": false,
+                "useStateDbOnly": true,
+                "sourceKinds": ["cli", "vscode", "exec", "appServer"],
+                "modelProviders": [],
+            })),
+            ("按 created_at 排", json!({
+                "sortKey": "created_at", "sortDirection": "desc", "limit": 100,
+                "archived": false, "useStateDbOnly": true,
+                "sourceKinds": ["cli", "vscode", "exec", "appServer"],
+                "modelProviders": [],
+            })),
+            ("**按 recency_at 排**", json!({
+                "sortKey": "recency_at", "sortDirection": "desc", "limit": 100,
+                "archived": false, "useStateDbOnly": true,
+                "sourceKinds": ["cli", "vscode", "exec", "appServer"],
+                "modelProviders": [],
+            })),
+            ("**archived: true**(回收站)", json!({
+                "sortKey": "updated_at", "sortDirection": "desc", "limit": 100,
+                "archived": true, "useStateDbOnly": true,
+                "sourceKinds": ["cli", "vscode", "exec", "appServer"],
+                "modelProviders": [],
+            })),
             ("含全部 sourceKinds", json!({
                 "sortKey": "updated_at", "sortDirection": "desc", "limit": 100,
                 "archived": false,
@@ -1310,6 +1340,8 @@ fn main() {
                     "sortKey": "updated_at", "sortDirection": "desc", "limit": 100,
                     "archived": false, "useStateDbOnly": true,
                     "sourceKinds": ["cli", "vscode", "exec", "appServer"],
+                    // 不筛 provider —— 否则只能看到 daemon 自己那个 provider 的线程
+                    "modelProviders": [],
                 });
                 if let Some(c) = &cursor { params["cursor"] = json!(c); }
                 let Ok(v) = p.request("thread/list", Some(params)) else { break };
