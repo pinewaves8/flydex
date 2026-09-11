@@ -227,11 +227,12 @@ impl CodexManager {
             "approvalPolicy": "on-request",
             "approvalsReviewer": "user",
             "sandbox": sandbox,
-            // 历史模式:`thread/revert`(回退到某一轮)**只支持 paginated**,
-            // 而默认是 legacy(实测) —— 不显式指定的话,回退功能对新会话也用不了。
-            // 已实测 paginated 线程在 read/resume/list 上一切照常,所以可以放心用。
-            // 注意:**已存在的 legacy 会话不受影响,也无法回退**(历史模式不可改)。
-            "historyMode": "paginated",
+            // **不要设 historyMode: "paginated"**(实测踩过,已撤):
+            // 那个模式确实能启用 `thread/revert`,但 `thread/list` **不返回**
+            // paginated 的线程 —— 于是新建的会话在侧边栏里根本看不见
+            // (实测 3 个样本一致,含一条 09-03 由别的工具建的)。
+            // 权衡下来:看不见会话远比对不能回退严重,所以回到默认的 legacy。
+            // ⇒ 回退功能因此对新会话也不可用;UI 已对 legacy 会话明说这一点。
         });
         // per-thread config 层(优先级高于全局 ~/.codex/config.toml):
         // 1) 模型 + 供应商 —— 这样既不改用户的 Codex CLI 配置,也无需重启 daemon;

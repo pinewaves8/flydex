@@ -1301,7 +1301,15 @@ ${scenarioGuide[report.scenario]}
     [turnMetas],
   )
 
-  // 只有 paginated 历史模式的会话能回退(codex 约束;老会话是 legacy,不可改)
+  /**
+   * 该会话能不能回退
+   *
+   * `thread/revert` 只支持 paginated 历史模式的会话,而 Flydex 现在**不建**这种会话
+   * (见 codex_manager 里的说明:`thread/list` 不返回 paginated 线程,建了就在侧边栏
+   * 里看不见 —— 代价远大于回退能力)。所以这里恒为 false,按钮不会出现。
+   *
+   * 逻辑保留是有意的:哪天 codex 修好列表,paginated 会话能看见,这里一行不用改。
+   */
   const canRevert = currentThread?.historyMode === 'paginated'
 
   const handleRevertToTurn = useCallback((turnId: string, ordinal: number) => {
@@ -1506,14 +1514,6 @@ ${scenarioGuide[report.scenario]}
                 >
                   加载更早的对话
                 </button>
-              </div>
-            )}
-            {/* 老会话是 legacy 历史模式,codex 不支持回退(模式建会话时就定了,改不了)。
-                说一句,免得用户以为"回退按钮不见了"是 bug。 */}
-            {currentThread && !canRevert && messages.length > 0 && (
-              <div className="text-[10px] text-muted-foreground/60">
-                ▸ 此会话建立时不支持回退(legacy 历史模式),因此没有「回退到此前」按钮 ——
-                新建的会话可以回退。
               </div>
             )}
             {/* 结构化消息:按轮分组,组内把连续的工具调用合并为一段 */}

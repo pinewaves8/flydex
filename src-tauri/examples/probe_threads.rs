@@ -1272,6 +1272,90 @@ fn main() {
     }
 
 
+    // ── 15. --find-thread <id>:用应用同款参数确认某线程是否可列出 ──
+    if let Some(pos) = args.iter().position(|a| a == "--find-thread") {
+        let want = args.get(pos + 1).cloned().unwrap_or_default();
+        println!("\n== 15. 查线程 {want} 是否可列出 ==");
+        // 应用 ThreadClient::list_page 的同款参数(含 sourceKinds)
+        let variants: Vec<(&str, serde_json::Value)> = vec![
+            ("应用同款(含 sourceKinds)", json!({
+                "sortKey": "updated_at", "sortDirection": "desc", "limit": 100,
+                "archived": false, "useStateDbOnly": true,
+                "sourceKinds": ["cli", "vscode", "exec", "appServer"],
+            })),
+            ("不带 useStateDbOnly", json!({
+                "sortKey": "updated_at", "sortDirection": "desc", "limit": 100,
+                "archived": false,
+                "sourceKinds": ["cli", "vscode", "exec", "appServer"],
+            })),
+            ("含全部 sourceKinds", json!({
+                "sortKey": "updated_at", "sortDirection": "desc", "limit": 100,
+                "archived": false,
+                "sourceKinds": ["cli", "vscode", "exec", "appServer", "subAgent",
+                                "subAgentReview", "subAgentCompact",
+                                "subAgentThreadSpawn", "subAgentOther", "unknown"],
+            })),
+        ];
+        // 翻完所有页找:是"排序靠后"还是"压根不在集合里"?
+        {
+            let mut cursor: Option<String> = None;
+            let mut page = 0;
+            let mut total = 0usize;
+            let mut found_page: Option<usize> = None;
+            let mut paginated_in_list = 0usize;
+            loop {
+                page += 1;
+                if page > 15 { break }
+                let mut params = json!({
+                    "sortKey": "updated_at", "sortDirection": "desc", "limit": 100,
+                    "archived": false, "useStateDbOnly": true,
+                    "sourceKinds": ["cli", "vscode", "exec", "appServer"],
+                });
+                if let Some(c) = &cursor { params["cursor"] = json!(c); }
+                let Ok(v) = p.request("thread/list", Some(params)) else { break };
+                let arr = v.get("data").and_then(|d| d.as_array()).cloned().unwrap_or_default();
+                total += arr.len();
+                for t in &arr {
+                    if t.get("historyMode").and_then(|x| x.as_str()) == Some("paginated") {
+                        paginated_in_list += 1;
+                    }
+                }
+                if arr.iter().any(|t| t.get("id").and_then(|x| x.as_str()) == Some(want.as_str())) {
+                    found_page = Some(page);
+                    break;
+                }
+                match v.get("nextCursor").and_then(|c| c.as_str()) {
+                    Some(c) if !c.is_empty() => cursor = Some(c.to_string()),
+                    _ => break,
+                }
+            }
+            println!("    翻完 {page} 页共 {total} 条;其中 historyMode=paginated 的有 {paginated_in_list} 条");
+            match found_page {
+                Some(p) => println!("    ⇒ 目标在第 {p} 页(属排序问题)"),
+                None => println!("    ⇒ 翻完所有页都没有它(不在该列表的集合里)"),
+            }
+        }
+
+        for (name, params) in variants {
+            match p.request("thread/list", Some(params)) {
+                Ok(v) => {
+                    let arr = v.get("data").and_then(|d| d.as_array()).cloned().unwrap_or_default();
+                    let hit = arr.iter().find(|t| {
+                        t.get("id").and_then(|x| x.as_str()) == Some(want.as_str())
+                    });
+                    match hit {
+                        Some(t) => println!("    {name}: **在列表里** {:?}",
+                            t.get("preview").and_then(|x| x.as_str())),
+                        None => println!("    {name}: 不在({} 条,nextCursor={:?})",
+                            arr.len(), v.get("nextCursor")),
+                    }
+                }
+                Err(e) => println!("    {name}: 失败 {e}"),
+            }
+        }
+    }
+
+
     println!("\n================ 结论 ================");
     if failures.is_empty() {
         println!("全部假设验证通过");
