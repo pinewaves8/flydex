@@ -3,10 +3,11 @@ import { Play, ShieldAlert, ListChecks, FolderOpen, ImagePlus, Loader2, X } from
 import { memo, useCallback, useEffect, useRef, useState } from 'react'
 
 import { CommandPalette } from './CommandPalette'
-import { FileMention } from './FileMention'
+import { FileMention, type MentionItem } from './FileMention'
 import { MemorySettle } from './MemorySettle'
 
 import { listWorkdirFiles } from '@/services/initService'
+import { threadService } from '@/services/threadService'
 import { useCodexStore } from '@/stores/useCodexStore'
 import { useSecurityStore } from '@/stores/useSecurityStore'
 import { approvalLabel } from '@/types/security'
@@ -75,12 +76,46 @@ const InputBoxInner = function InputBox({
   const paletteQuery = command.startsWith('/') ? command.split(' ')[0] : '/'
   // `@`-mention 文件补全:工作目录的所有文件(workspaceCwd 变化时刷新)
   const [allFiles, setAllFiles] = useState<string[]>([])
+  // 有查询时走 codex 的模糊搜索(比客户端 includes 强:模糊匹配、带命中位置、
+  // 没有本地列表那个 2000 条上限)
+  const [mentionHits, setMentionHits] = useState<MentionItem[]>([])
+  const [mentionLoading, setMentionLoading] = useState(false)
   // 从 command 提取最后一个 @ 后的 query(在空格前)
   // 例如 "改一下 @App.tsx 那段代码" → "@App.tsx"
   const mentionMatch = /@([^@\s]*)$/.exec(command)
   const fileMentionOpen = mentionMatch !== null && !command.includes('/ ') // 排除 `/` 命令
   const fileMentionQuery = mentionMatch?.[1] ?? ''
   const [dragOver, setDragOver] = useState(false)
+
+  // 查询变化 → 去后端模糊搜索(防抖,避免每个按键都打一次 RPC)
+  useEffect(() => {
+    if (!fileMentionOpen || !fileMentionQuery || !workspaceCwd) {
+      setMentionHits([])
+      return
+    }
+    let cancelled = false
+    setMentionLoading(true)
+    const timer = setTimeout(() => {
+      threadService
+        .fuzzyFileSearch(fileMentionQuery, [workspaceCwd])
+        .then((hits) => {
+          if (!cancelled) {
+            setMentionHits(hits.map((h) => ({ path: h.path, indices: h.indices })))
+          }
+        })
+        .catch(() => {
+          // 搜索失败不能静默:退回本地列表,用户至少还能按名字挑
+          if (!cancelled) setMentionHits([])
+        })
+        .finally(() => {
+          if (!cancelled) setMentionLoading(false)
+        })
+    }, 120)
+    return () => {
+      cancelled = true
+      clearTimeout(timer)
+    }
+  }, [fileMentionOpen, fileMentionQuery, workspaceCwd])
   const fileInputRef = useRef<HTMLInputElement>(null)
   const inputRef = useRef<HTMLTextAreaElement>(null)
   // 落盘中的附件计数 + 已落盘路径(发送时等待 pending 归零后读取)
@@ -420,7 +455,12 @@ const InputBoxInner = function InputBox({
         {fileMentionOpen && (
           <FileMention
             query={fileMentionQuery}
-            files={allFiles}
+            items={
+              fileMentionQuery
+                ? mentionHits
+                : allFiles.map((f) => ({ path: f, indices: [] as number[] }))
+            }
+            loading={mentionLoading}
             onSelect={handleFileMentionSelect}
             onClose={handleFileMentionClose}
           />

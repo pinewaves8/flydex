@@ -149,6 +149,20 @@ pub struct ThreadSearchHit {
     pub archived: bool,
 }
 
+/// 文件名模糊搜索的一条命中(codex `fuzzyFileSearch`)
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct FuzzyFileHit {
+    /// 相对根目录的路径
+    pub path: String,
+    pub file_name: String,
+    /// 命中的字符位置(**下标落在 `path` 上**),可直接用来做高亮
+    #[serde(default)]
+    pub indices: Vec<usize>,
+    #[serde(default)]
+    pub score: i64,
+}
+
 /// 命中位置(二级:`thread/searchOccurrences`),用于跳转定位
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]

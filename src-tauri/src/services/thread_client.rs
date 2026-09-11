@@ -10,7 +10,9 @@
 use serde_json::{json, Value};
 use tauri::AppHandle;
 
-use crate::models::thread::{CodexProject, ThreadOccurrence, ThreadRow, ThreadSearchHit};
+use crate::models::thread::{
+    CodexProject, FuzzyFileHit, ThreadOccurrence, ThreadRow, ThreadSearchHit,
+};
 use crate::services::appserver_client::{map_item, AppServerClient};
 
 /// 写进 codex project metadata 的键 —— 用于把 Flydex 项目 id 与 codex project 关联
@@ -341,6 +343,30 @@ impl ThreadClient {
             .and_then(|v| v.as_str())
             .map(str::to_string)
             .ok_or_else(|| format!("turn/steer 无 turnId: {resp}"))
+    }
+
+    /// 文件名模糊搜索(codex `fuzzyFileSearch`)
+    ///
+    /// 比在客户端逐条 `includes` 强三点:模糊匹配、返回命中位置(可直接高亮)、
+    /// 遵守忽略规则。`roots` 必须是**绝对路径**(实测传相对路径会被拒)。
+    pub fn fuzzy_file_search(
+        app: &AppHandle,
+        query: &str,
+        roots: &[String],
+    ) -> Result<Vec<FuzzyFileHit>, String> {
+        let resp = Self::client(app)?.request(
+            "fuzzyFileSearch",
+            Some(json!({ "query": query, "roots": roots })),
+        )?;
+        Ok(resp
+            .get("files")
+            .and_then(|f| f.as_array())
+            .map(|arr| {
+                arr.iter()
+                    .filter_map(|v| serde_json::from_value::<FuzzyFileHit>(v.clone()).ok())
+                    .collect()
+            })
+            .unwrap_or_default())
     }
 
     /// 把线程归入某个 codex project;传 `None` 表示清除归属

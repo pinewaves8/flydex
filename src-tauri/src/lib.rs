@@ -42,8 +42,9 @@ use commands::skill::{
 use commands::task::{task_create, task_delete, task_list, task_update};
 use commands::terminal::resolve_dir;
 use commands::thread::{
-    archive_thread, compact_thread, delete_thread, fork_thread, get_thread_settings, list_threads,
-    load_all_turns, load_earlier_turns, load_thread_turns, project_map_entries, read_thread,
+    archive_thread, compact_thread, delete_thread, fork_thread, fuzzy_file_search,
+    get_thread_settings, list_threads, load_all_turns, load_earlier_turns, load_thread_turns,
+    project_map_entries, read_thread,
     rename_thread, revert_thread, search_thread_occurrences, search_threads, set_thread_model,
     set_thread_project, steer_turn, sync_projects, unarchive_thread,
 };
@@ -98,6 +99,7 @@ pub fn run() {
             read_thread,
             load_thread_turns,
             load_earlier_turns,
+            fuzzy_file_search,
             load_all_turns,
             rename_thread,
             archive_thread,

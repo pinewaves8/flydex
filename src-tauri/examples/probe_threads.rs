@@ -1198,6 +1198,27 @@ fn main() {
             Err(e) => println!("    fuzzyFileSearch 失败: {e}"),
         }
 
+        // 空查询:刚敲下 `@` 时就是这个状态 —— 返回全部还是空,直接决定补全面板
+        // 要不要自己兜底,不能想当然。
+        match p.request(
+            "fuzzyFileSearch",
+            Some(json!({ "query": "", "roots": [root.clone()] })),
+        ) {
+            Ok(v) => {
+                let n = v.get("files").and_then(|f| f.as_array()).map(|a| a.len()).unwrap_or(0);
+                println!("    fuzzyFileSearch(空查询) → {n} 条");
+                if n > 0 {
+                    let head = v.get("files").and_then(|f| f.as_array())
+                        .and_then(|a| a.first())
+                        .and_then(|x| x.get("path"))
+                        .and_then(|p| p.as_str())
+                        .unwrap_or("");
+                    println!("      首条: {head}");
+                }
+            }
+            Err(e) => println!("    fuzzyFileSearch(空查询) 失败: {e}"),
+        }
+
         // (2) hooks/list —— Flydex 自维护 hooks.json
         match p.request("hooks/list", Some(json!({ "cwds": [root] }))) {
             Ok(v) => println!("    hooks/list → {}", serde_json::to_string(&v)

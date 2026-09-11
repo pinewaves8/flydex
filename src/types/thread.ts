@@ -63,6 +63,16 @@ export interface ProjectEntry {
   mappedAt: number
 }
 
+/** 文件名模糊搜索的一条命中(codex `fuzzyFileSearch`) */
+export interface FuzzyFileHit {
+  /** 相对根目录的路径 */
+  path: string
+  fileName: string
+  /** 命中的字符位置(**下标落在 path 上**),可直接用来高亮 */
+  indices: number[]
+  score: number
+}
+
 /** `sync_projects` 的返回 */
 export interface ProjectSyncOutcome {
   /** flydex project id → codex project id */

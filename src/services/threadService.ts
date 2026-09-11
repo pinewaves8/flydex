@@ -2,6 +2,7 @@ import { invoke } from '@tauri-apps/api/core'
 
 import type {
   CascadeOutcome,
+  FuzzyFileHit,
   ForkOutcome,
   ProjectEntry,
   ThreadSettings,
@@ -158,6 +159,16 @@ export const threadService = {
    */
   steer(threadId: string, expectedTurnId: string, text: string): Promise<string> {
     return invoke<string>('steer_turn', { threadId, expectedTurnId, text })
+  },
+
+  /**
+   * 文件名模糊搜索(codex `fuzzyFileSearch`),用于 @-mention 补全
+   *
+   * 比在客户端逐条 includes 强:模糊匹配、返回命中位置(可高亮)、遵守忽略规则。
+   * `roots` 必须是**绝对路径**(实测相对路径会被服务端拒绝)。
+   */
+  fuzzyFileSearch(query: string, roots: string[]): Promise<FuzzyFileHit[]> {
+    return invoke<FuzzyFileHit[]>('fuzzy_file_search', { query, roots })
   },
 
   /** 会话级 UI 偏好(codex 的 Thread 里没有这些字段,属 Flydex 侧数据) */

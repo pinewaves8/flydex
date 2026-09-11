@@ -240,3 +240,15 @@ pub fn steer_turn(
     ThreadClient::steer(&app, &thread_id, &expected_turn_id, &text)
 }
 
+/// 文件名模糊搜索(codex `fuzzyFileSearch`),用于 @-mention 补全
+///
+/// `roots` 必须传绝对路径(实测传相对路径会被服务端拒绝)。
+#[tauri::command]
+pub fn fuzzy_file_search(
+    app: AppHandle,
+    query: String,
+    roots: Vec<String>,
+) -> Result<Vec<crate::models::thread::FuzzyFileHit>, String> {
+    ThreadClient::fuzzy_file_search(&app, &query, &roots)
+}
+
