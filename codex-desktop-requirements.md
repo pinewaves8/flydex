@@ -1,5 +1,10 @@
 # Codex 桌面版应用需求分析文档
 
+> ⚠️ **本文是 2026-08-25 的需求快照，部分内容已被后续决策取代**
+> （例如模型/供应商配置已改为按会话下发，不改写用户的 `~/.codex/config.toml`；
+> 会话与项目的状态所有权已整体交给 codex harness）。
+> 当前规范见 **`AGENTS.md`**；仍未处理的问题见 `docs/known-issues.md`。
+
 > 版本：v1.0  
 > 日期：2026-08-25  
 > 基于：OpenAI Codex CLI 开源源码 + Codex Desktop App 功能对标  
